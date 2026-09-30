@@ -55,7 +55,8 @@ export class PinnacleCollector {
  start(){this.tick();this.timer=setInterval(()=>this.tick(),1000);}
  tick(){if(this.running||Date.now()<this.nextAt)return this.running;this.nextAt=Date.now()+(this.liveState?this.liveInterval:this.interval);this.running=this.collect().catch(async error=>{if([401,403].includes(error.status)){this.client=null;await this.write('pinnacle-client.json',{});}if([401,403,429].includes(error.status))this.nextAt=Date.now()+Math.max(300000,error.retryAfterMs||0);await Promise.all([this.state,this.liveState].filter(Boolean).map(s=>s.failure(error)));}).finally(()=>this.running=null);return this.running;}
  async stop(){clearInterval(this.timer);await this.running;}
- startedIds(){return new Set([...(this.liveState?.history||[]),...(this.liveState?.events||[])].map(r=>r.sourceEventId));}
+ // Fixtures that have ever entered LIVE. History lives in SQLite, so this asks per id instead of copying every id.
+ startedIds(){const live=this.liveState;if(!live)return new Set();if(typeof live.hasHistoryId!=='function')return new Set([...(live.history||[]),...(live.events||[])].map(r=>r.sourceEventId));const current=new Set((live.events||[]).map(r=>r.sourceEventId));return {has:sid=>current.has(sid)||live.hasHistoryId('pinnacle-'+sid),get size(){return current.size;}};}
  async feed(mode){
   const started=Date.now(),live=mode==='live',state=live?this.liveState:this.state,suffix=live?'/live':'',matchups=await this.get('/sports/12/matchups'+suffix+'?withSpecials=false');
   if(!live){this.rawMatchups=matchups.length;this.catalog=[...new Map(matchups.filter(m=>m.league?.id).map(m=>[m.league.id,{source:'pinnacle',category:Games.resolve('Esports',m.league.name),league:pinnacleLeague(m.league.name),leagueId:String(m.league.id)}])).values()];}

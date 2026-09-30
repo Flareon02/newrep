@@ -19,6 +19,7 @@ const arg = (name, fallback) => { const i = process.argv.indexOf('--' + name); r
 const events = Number(arg('events', 20000)), states = Number(arg('states', 7)), phase = arg('phase', 'parent');
 const NAMES = ['live', 'prematch', 'fonbet-live', 'fonbet-prematch', 'ggbet-live', 'pinnacle-prematch', 'pinnacle-live'].slice(0, states);
 const mib = (n) => Math.round(n / 1048576);
+const STEP = Number(arg('step-minutes', 5)) * 60000; // spacing of synthetic rows: 5 min => 100 000 rows span ~347 days
 
 if (phase === 'generate') {
   const { parseLiveFeed } = await import(pathToFileURL(path.join(server, 'src/parsers.js')));
@@ -30,7 +31,7 @@ if (phase === 'generate') {
   for (const name of NAMES) {
     const history = Array.from({ length: events }, (_, i) => ({
       ...template, id: `${name}-${i}`, sourceEventId: String(i), team1: `Team ${i % 997} ${name}`, team2: `Team ${(i * 7) % 991} ${name}`,
-      league: `League ${i % 240}`, startAt: now - i * 60000, firstSeenAt: now - i * 60000 - 3600000, lastSeenAt: now - i * 60000, removedAt: now - i * 60000 + 1000,
+      league: `League ${i % 240}`, startAt: now - i * STEP, firstSeenAt: now - i * STEP - 3600000, lastSeenAt: now - i * STEP, removedAt: now - i * STEP + 1000,
     }));
     snapshotSave(name, { revision: 1, matchRevision: 1, events: [], history, seen: {} }, {});
   }
@@ -41,8 +42,8 @@ if (phase === 'generate') {
   const loaded = [];
   for (const name of NAMES) { const s = new SnapshotState(name, 60000); await s.load(); loaded.push(s); }
   globalThis.gc?.();
-  const m = process.memoryUsage(), ms = Number(process.hrtime.bigint() - t0) / 1e6, rows = loaded.reduce((n, s) => n + s.history.length, 0);
-  console.log(JSON.stringify({ rows, rssMiB: mib(m.rss), heapUsedMiB: mib(m.heapUsed), loadMs: Math.round(ms), bytesPerRow: Math.round(m.heapUsed / rows) }));
+  const m = process.memoryUsage(), ms = Number(process.hrtime.bigint() - t0) / 1e6, resident = loaded.reduce((n, s) => n + s.historyIndex.size, 0), rows = loaded.reduce((n, s) => n + s.historyTotal, 0);
+  console.log(JSON.stringify({ persistedRows: rows, residentRows: resident, rssMiB: mib(m.rss), heapUsedMiB: mib(m.heapUsed), loadMs: Math.round(ms), bytesPerResidentRow: resident ? Math.round(m.heapUsed / resident) : 0 }));
 } else {
   const dir = mkdtempSync(path.join(tmpdir(), 'bench-history-'));
   const env = { ...process.env, DATA_DIR: dir, NODE_OPTIONS: '--disable-warning=ExperimentalWarning --max-old-space-size=320 --expose-gc' };

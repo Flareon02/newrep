@@ -52,6 +52,8 @@ function schema(db){
     ) STRICT;
     CREATE INDEX IF NOT EXISTS snapshot_history_window ON snapshot_history(name,start_at,removed_at);
     CREATE INDEX IF NOT EXISTS snapshot_history_recent ON snapshot_history(name,last_seen_at DESC);
+    CREATE INDEX IF NOT EXISTS snapshot_history_first_seen ON snapshot_history(name,first_seen_at);
+    CREATE INDEX IF NOT EXISTS snapshot_history_removed ON snapshot_history(name,removed_at);
     CREATE TABLE IF NOT EXISTS score_meta(
       identity TEXT PRIMARY KEY,
       started_at INTEGER NOT NULL DEFAULT 0
@@ -114,13 +116,34 @@ function parseRows(statement,...params){
   else for(const row of statement.all(...params)){const value=parse(row.payload);if(value)out.push(value);}
   return out;
 }
-export function snapshotLoad(name){
+// `hotSince` > 0 loads only the History rows with activity (first seen, last seen or removed) at or after that
+// instant; older rows stay in SQLite and are read on demand (see the snapshotHistory* queries below).
+const ACTIVE = '(first_seen_at>=? OR last_seen_at>=? OR removed_at>=?)';
+export function snapshotLoad(name,{hotSince=0}={}){
   const {db}=sqlite(), meta=db.prepare('SELECT payload FROM snapshot_meta WHERE name=?').get(name);
   if(!meta)return null;
   const state=parse(meta.payload,{})||{};
   const events=parseRows(db.prepare('SELECT payload FROM snapshot_current WHERE name=? ORDER BY event_id'),name);
-  const history=parseRows(db.prepare('SELECT payload FROM snapshot_history WHERE name=? ORDER BY first_seen_at,event_id'),name);
-  return {...state,events,history};
+  const history=hotSince>0
+    ?parseRows(db.prepare(`SELECT payload FROM snapshot_history WHERE name=? AND ${ACTIVE} ORDER BY first_seen_at,event_id`),name,hotSince,hotSince,hotSince)
+    :parseRows(db.prepare('SELECT payload FROM snapshot_history WHERE name=? ORDER BY first_seen_at,event_id'),name);
+  return {...state,events,history,historyTotal:snapshotHistoryCount(name)};
+}
+
+// Prepared statements live on the handle, so they disappear when the database is closed or another data dir is opened.
+function cached(sql){const handle=sqlite();handle.statements??=new Map();let st=handle.statements.get(sql);if(!st){st=handle.db.prepare(sql);handle.statements.set(sql,st);}return st;}
+export function snapshotHistoryCount(name){return Number(cached('SELECT COUNT(*) AS n FROM snapshot_history WHERE name=?').get(name)?.n||0);}
+export function snapshotHistoryHas(name,id){return !!cached('SELECT 1 AS x FROM snapshot_history WHERE name=? AND event_id=?').get(name,String(id));}
+export function snapshotHistoryGet(name,id){const row=cached('SELECT payload FROM snapshot_history WHERE name=? AND event_id=?').get(name,String(id));return row?parse(row.payload):null;}
+// Rows with activity >= since, newest first-seen first. `limit` 0 = all.
+export function snapshotHistoryActive(name,since,limit=0){
+  const sql=`SELECT payload FROM snapshot_history WHERE name=? AND ${ACTIVE} ORDER BY first_seen_at DESC,event_id DESC${limit>0?' LIMIT ?':''}`;
+  const params=[name,since,since,since];if(limit>0)params.push(limit);
+  return parseRows(cached(sql),...params);
+}
+// Removed fixtures whose scheduled start lies in [from,to).
+export function snapshotHistoryByStart(name,from,to){
+  return parseRows(cached('SELECT payload FROM snapshot_history WHERE name=? AND start_at>=? AND start_at<? AND removed_at>0 ORDER BY first_seen_at,event_id'),name,from,to);
 }
 export function snapshotImport(name,saved){
   if(!saved||typeof saved!=='object')return;
@@ -141,6 +164,7 @@ export function snapshotSave(name,state,{dirtyIds=null,pruneBefore=0}={}){
   const {events=[],history=[],...meta}=state,{db}=sqlite();
   const byId=new Map((history||[]).map(e=>[String(e?.id||''),e]).filter(([id])=>id));
   const dirty=dirtyIds?new Set([...dirtyIds].map(String)):new Set(byId.keys());
+  let pruned=0;
   db.exec('BEGIN IMMEDIATE');
   try{
     db.prepare('INSERT INTO snapshot_meta(name,payload,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(name,json(meta),Date.now());
@@ -151,12 +175,13 @@ export function snapshotSave(name,state,{dirtyIds=null,pruneBefore=0}={}){
       ON CONFLICT(name,event_id) DO UPDATE SET start_at=excluded.start_at,first_seen_at=excluded.first_seen_at,last_seen_at=excluded.last_seen_at,removed_at=excluded.removed_at,payload=excluded.payload`);
     for(const id of dirty){const e=byId.get(id);if(e)hist.run(name,id,Number(e.startAt)||0,Number(e.firstSeenAt)||0,Number(e.lastSeenAt)||0,Number(e.removedAt)||0,json(e));}
     if(pruneBefore>0){
-      db.prepare('DELETE FROM snapshot_history WHERE name=? AND first_seen_at<?').run(name,Number(pruneBefore));
-      db.prepare(`DELETE FROM snapshot_history WHERE name=? AND event_id NOT IN (
+      pruned+=Number(db.prepare('DELETE FROM snapshot_history WHERE name=? AND first_seen_at<?').run(name,Number(pruneBefore)).changes);
+      pruned+=Number(db.prepare(`DELETE FROM snapshot_history WHERE name=? AND event_id NOT IN (
         SELECT event_id FROM snapshot_history WHERE name=? ORDER BY first_seen_at DESC LIMIT ?
-      )`).run(name,name,Number(config.historyMax)||100000);
+      )`).run(name,name,Number(config.historyMax)||100000).changes);
     }
     db.exec('COMMIT');
+    return {pruned};
   }catch(error){try{db.exec('ROLLBACK');}catch{}throw error;}
 }
 export function snapshotNames(){return sqlite().db.prepare('SELECT name FROM snapshot_meta ORDER BY name').all().map(r=>r.name);}

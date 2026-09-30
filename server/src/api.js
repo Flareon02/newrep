@@ -126,7 +126,7 @@ function snapshotResponse(req, res, snapshot) {
 }
 
 async function combinedHistory(mode,a,b,since,p,g){
- const key=mode+':'+pairs(a,b,p,g).map(([,state])=>matchStateRevision(state)+'.'+Number(state.history?.length||0)).join(':')+':'+matcherRevision()+':'+since;if(historyCache.has(key))return historyCache.get(key);
+ const key=mode+':'+pairs(a,b,p,g).map(([,state])=>matchStateRevision(state)+'.'+Number(state.historyTotal||state.history?.length||0)).join(':')+':'+matcherRevision()+':'+since;if(historyCache.has(key))return historyCache.get(key);
  const providers=Object.fromEntries(pairs(a,b,p,g).map(([source,state])=>{const events=state.publicHistory(since).map(mode==='live'?decorateLive:e=>e);return [source,{count:events.length,events,logicalEvents:events}];})),raw=Object.values(providers).flatMap(r=>r.events);
  const events=(await matchAsync('resolve',{events:raw,mode,scope:'history'})).sort((a,b)=>Number(b.firstSeenAt||0)-Number(a.firstSeenAt||0));
  const result={leagueRules:leagueStore.rules(),count:events.length,rawCount:raw.length,events,providers};historyCache.set(key,result);if(historyCache.size>2)historyCache.delete(historyCache.keys().next().value);return result;
@@ -268,7 +268,7 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
   const uiParams=url=>Object.fromEntries(url.searchParams.entries());
   const uiResultRows=async(payload)=>{
     const rules=uiRuleState(),since=Math.max(0,Number(payload.from||0)-14*86400000),statePairs=pairs(prematchState,fonbetPrematchState,pinnaclePrematchState,null);
-    const key=[payload.date,payload.updatedAt,payload.events?.length,statePairs.map(([,state])=>`${matchStateRevision(state)}.${state.history?.length||0}`).join(':'),rules.revision].join('|');
+    const key=[payload.date,payload.updatedAt,payload.events?.length,statePairs.map(([,state])=>`${matchStateRevision(state)}.${state.historyTotal||state.history?.length||0}`).join(':'),rules.revision].join('|');
     if(uiResultsCache.has(key))return uiResultsCache.get(key);
     // Recover the first line appearance by the same provider ID directly.
     // Cross-book history matching here was expensive and unnecessary because
@@ -291,7 +291,7 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
   const uiHistoryPage=async(since=0,params={})=>{
     const offset=Math.max(0,Number(params.offset)||0),limit=Math.max(1,Math.min(500,Number(params.limit)||100)),rules=uiRuleState();
     const cleanParams=Object.fromEntries(Object.entries(params).filter(([k])=>k!=='thin').sort(([a],[b])=>a.localeCompare(b)));
-    const stateKey=[...pairs(prematchState,fonbetPrematchState,pinnaclePrematchState,null),...pairs(liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState)].map(([,state])=>`${matchStateRevision(state)}.${state.history?.length||0}`).join(':');
+    const stateKey=[...pairs(prematchState,fonbetPrematchState,pinnaclePrematchState,null),...pairs(liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState)].map(([,state])=>`${matchStateRevision(state)}.${state.historyTotal||state.history?.length||0}`).join(':');
     const staleKey=[Math.floor(Number(since||0)/60000),JSON.stringify(cleanParams),rules.revision].join('|');
     const key=[staleKey,stateKey,matcherRevision()].join('|'),cached=historyPageCache.get(key);
     if(cached&&Date.now()-cached.at<config.historyPageCacheMs)return cached.value;
@@ -420,7 +420,7 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
           fonbetPrematch: config.fonbetPrematchIntervalMs,pinnaclePrematch:60000,pinnacleLive:15000,pinnacleLiveDetail:pinnacleCollector?.detailInterval||2000
         },
         language: "en",
-        runtime:{...memoryStatus(),history:(()=>{const capacity=historyCapacity(states.reduce((n,state)=>n+(state.history?.length||0),0));warnHistoryCapacity(capacity);return capacity;})(),eventLoopMaxMs:Math.round(lag.max/1e6),matcher:matcherStatus(),astekGate:astekRequestStatus(),priority:{order:['live','prematch','odds','results','history'],singleCore:true,historyMode:'paged-worker-idle-only',historyAutoWarm:false,historyPagesCached:historyPageCache.size,resultsYield:true},storage:await storageStatus()},upstreamRequests:upstreamStatus(),apiTraffic:apiTrafficStatus(),oddsWatch:oddsWatch.status(),sse:{open:sseTotal,limit:config.apiSseLimitTotal,feedClients:feedClients.size},
+        runtime:{...memoryStatus(),history:(()=>{const capacity=historyCapacity(states.reduce((n,state)=>n+(state.historyIndex?.size||state.history?.length||0),0),undefined,states.reduce((n,state)=>n+(state.historyTotal||0),0));warnHistoryCapacity(capacity);return capacity;})(),eventLoopMaxMs:Math.round(lag.max/1e6),matcher:matcherStatus(),astekGate:astekRequestStatus(),priority:{order:['live','prematch','odds','results','history'],singleCore:true,historyMode:'paged-worker-idle-only',historyAutoWarm:false,historyPagesCached:historyPageCache.size,resultsYield:true},storage:await storageStatus()},upstreamRequests:upstreamStatus(),apiTraffic:apiTrafficStatus(),oddsWatch:oddsWatch.status(),sse:{open:sseTotal,limit:config.apiSseLimitTotal,feedClients:feedClients.size},
         hltv:hltvService?.status(),
         statistics:{archivedMatches:Object.keys(statistics.store.index).length,lastError:statistics.lastError,providers:{dota2:statistics.providers.hawk||{},cs2:statistics.providers.crossbet||{}},sources:{dota2:hawkService.status(),cs2:crossbetService?.status?.()||{enabled:false,available:false}},running:statistics.running,lastSweepAt:statistics.lastSweepAt,currentAvailability:statistics.currentAvailability?.size||0},
         live: { astek: liveState.status(), fonbet: fonbetLiveState.status(),...(pinnacleLiveState?{pinnacle:{...pinnacleLiveState.status(),...pinnacleCollector?.status()}}:{}),...(ggbetLiveState?{ggbet:{...ggbetLiveState.status(),...ggbetCollector?.status()}}:{}) },

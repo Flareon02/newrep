@@ -97,6 +97,9 @@ services:
       DISK_CRITICAL_FREE_MIB: "512"
       HISTORY_TTL_MS: "${HISTORY_TTL_MS:-31537000000}"
       HISTORY_MAX: "${HISTORY_MAX:-100000}"
+      # Only History with activity in the last N days is kept in RAM; older rows stay in SQLite and are read on demand.
+      # 0 = keep everything in RAM (4.3.x behaviour; needs ~1.1 KB per row).
+      HISTORY_HOT_DAYS: "${HISTORY_HOT_DAYS:-7}"
       LOW_PRIORITY_IDLE_WAIT_MS: "4000"
       HISTORY_PAGE_CACHE_MS: "15000"
       RESULTS_CACHE_MS: "300000"

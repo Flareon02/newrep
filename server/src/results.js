@@ -184,7 +184,7 @@ export class ResultsService {
     this.inflight.set(key,run);try{return await run;}finally{this.inflight.delete(key);}
   }
   history(from,to){
-    return this.states.flatMap(s=>(s.history||s.publicHistory?.(from-DAY)||[])).filter(e=>Number(e.startAt)>=from&&Number(e.startAt)<to&&Number(e.removedAt)>0);
+    return this.states.flatMap(s=>typeof s.historyByStart==='function'?s.historyByStart(from,to):(s.history||s.publicHistory?.(from-DAY)||[])).filter(e=>Number(e.startAt)>=from&&Number(e.startAt)<to&&Number(e.removedAt)>0);
   }
   combine(games,from,to){
     const rows=unique(games.filter(r=>r.startAt>=from&&r.startAt<to)).map(r=>({...r}));

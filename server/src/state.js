@@ -5,7 +5,7 @@ import {scoreLog} from './score-log.js';
 import {oddsLog} from './odds-log.js';
 import { config } from "./config.js";
 import { pruneHistory, readJson, stableEventSignature, stableMatchEventSignature } from "./utils.js";
-import {snapshotImport,snapshotLoad,snapshotSave} from "./sqlite-storage.js";
+import {snapshotImport,snapshotLoad,snapshotSave,snapshotHistoryGet,snapshotHistoryHas,snapshotHistoryActive,snapshotHistoryByStart} from "./sqlite-storage.js";
 
 // Historical fixture identity/score data is kept in SnapshotState, while odds
 // have their own append-only journal under /data/odds. Keeping complete market
@@ -18,6 +18,12 @@ export function compactHistoryEvent(event) {
   return event;
 }
 
+const activityOf = (event) => Math.max(Number(event?.firstSeenAt || 0), Number(event?.lastSeenAt || 0), Number(event?.removedAt || 0));
+const byFirstSeen = (a, b) => Number(a.firstSeenAt || 0) - Number(b.firstSeenAt || 0) || String(a.id).localeCompare(String(b.id));
+
+// History model: SQLite (snapshot_history) is the source of truth for every fixture ever seen. RAM holds only the
+// "hot" window - rows with recent activity, plus anything not yet saved - so memory no longer grows with the
+// length of the retained history. Queries that reach back past `coldBefore` read SQLite and overlay the hot rows.
 export class SnapshotState {
   constructor(name, staleAfterMs) {
     this.name = name;
@@ -47,16 +53,25 @@ export class SnapshotState {
     this.listeners = new Set();
     this.dirtyHistoryIds = new Set();
     this.historyPruneBefore = 0;
+    // Rows with activity older than `coldBefore` may exist only in SQLite. 0 = everything is resident.
+    this.coldBefore = 0;
+    this.historyTotal = 0;
+    this.hotDays = config.historyHotDays;
+  }
+
+  hotCutoff(now = Date.now()) {
+    return this.hotDays > 0 ? now - this.hotDays * 86400000 : 0;
   }
 
   onChange(fn){if(typeof fn==='function')this.listeners.add(fn);return()=>this.listeners.delete(fn);}
   emitChange(change){for(const fn of this.listeners)try{fn(change);}catch(error){log.error('[state-listener]',error.message);}}
 
   async load() {
-    let saved = snapshotLoad(this.name);
+    const hotSince = this.hotCutoff();
+    let saved = snapshotLoad(this.name, { hotSince });
     if (!saved) {
       const legacy = await readJson(`${this.name}.json`, null);
-      if (legacy) { snapshotImport(this.name, legacy); saved = snapshotLoad(this.name); }
+      if (legacy) { snapshotImport(this.name, legacy); saved = snapshotLoad(this.name, { hotSince }); }
     }
     if (!saved) return;
     Object.assign(this, saved);
@@ -73,6 +88,10 @@ export class SnapshotState {
     this.lastHistoryPruneAt = Date.now();
     this.latestHistoryEvent = this.computeLatestNewEvent();
     this.seen = saved.seen && typeof saved.seen === "object" ? saved.seen : {};
+    // Cold fixtures resolve their first-seen time from their SQLite row, so their `seen` entries are redundant.
+    this.coldBefore = hotSince;
+    this.historyTotal = Number(saved.historyTotal) || this.history.length;
+    if (hotSince) for (const id of Object.keys(this.seen)) if (!this.historyIndex.has(id)) delete this.seen[id];
     this.signature = stableEventSignature(this.events);
     this.matchSignature = stableMatchEventSignature(this.events);
     this.matchRevision = Number(saved.matchRevision || 0);
@@ -80,7 +99,7 @@ export class SnapshotState {
   }
 
   async save() {
-    snapshotSave(this.name, {
+    const result = snapshotSave(this.name, {
       revision: this.revision,
       matchRevision: this.matchRevision,
       generatedAt: this.generatedAt,
@@ -95,6 +114,7 @@ export class SnapshotState {
       history: this.history,
       seen: this.seen
     }, {dirtyIds:this.dirtyHistoryIds,pruneBefore:this.historyPruneBefore});
+    if (result?.pruned) this.historyTotal = Math.max(0, this.historyTotal - result.pruned);
     this.dirtyHistoryIds.clear();
     this.historyPruneBefore = 0;
     this.lastPersistAt = Date.now();
@@ -165,6 +185,7 @@ export class SnapshotState {
       for (const event of this.history) { const id=String(event?.id||""); if(id) this.historyIndex.set(id,compactHistoryEvent(event)); }
     }
     const historyMap = this.historyIndex;
+    let created = 0;
     const incoming = [];
     const incomingIds = new Set();
 
@@ -173,21 +194,22 @@ export class SnapshotState {
       if (!id) continue;
       incomingIds.add(id);
       const previousSeen = this.seen[id];
-      const firstSeenAt = Number(previousSeen?.firstSeenAt || historyMap.get(id)?.firstSeenAt || 0) || now;
-      const old=historyMap.get(id);
+      const old = this.historyRow(id);
+      if (!old) created++;
+      const firstSeenAt = Number(previousSeen?.firstSeenAt || old?.firstSeenAt || 0) || now;
       const lifecycle=[...(old?.lifecycle||[])];
       if(!lifecycle.length&&old?.firstSeenAt){lifecycle.push({type:'entered',at:old.firstSeenAt});if(old.removedAt)lifecycle.push({type:'removed',at:old.removedAt});}
       if(!previousCurrent.has(id))lifecycle.push({type:'entered',at:now});
       const event = { ...teamLogos.decorate(raw), firstSeenAt, enteredLiveAt:firstSeenAt, lifecycle, lastSeenAt: now, removedAt: 0 };
       this.seen[id] = { firstSeenAt, lastSeenAt: now };
-      historyMap.set(id, compactHistoryEvent({ ...(historyMap.get(id) || {}), ...event }));
+      historyMap.set(id, compactHistoryEvent({ ...(old || {}), ...event }));
       this.dirtyHistoryIds.add(id);
       incoming.push(event);
     }
 
     for (const [id, previous] of previousCurrent) {
       if (!id || incomingIds.has(id)) continue;
-      const old = historyMap.get(id) || previous;
+      const old = this.historyRow(id) || previous;
       historyMap.set(id, compactHistoryEvent({
         ...old,
         lifecycle:[...(old.lifecycle||[{type:'entered',at:old.firstSeenAt}]),{type:'removed',at:now}],
@@ -216,7 +238,9 @@ export class SnapshotState {
       for (const [id, item] of Object.entries(this.seen)) {
         if (Number(item?.lastSeenAt || 0) < cutoff) delete this.seen[id];
       }
+      this.evictCold(now, incomingIds);
     }
+    this.historyTotal += created;
     this.history = [...historyMap.values()];
     // firstSeenAt never moves backwards for an existing fixture, so the newest
     // history item can be maintained incrementally instead of rescanning history
@@ -316,6 +340,46 @@ export class SnapshotState {
     };
   }
 
+  // One History row by id: resident, or read once from SQLite (and kept hot because it is about to be updated).
+  historyRow(id) {
+    const hot = this.historyIndex.get(id);
+    if (hot || !this.coldBefore) return hot;
+    const stored = snapshotHistoryGet(this.name, id);
+    if (!stored) return undefined;
+    compactHistoryEvent(stored);
+    this.historyIndex.set(id, stored);
+    return stored;
+  }
+
+  hasHistoryId(id) {
+    return this.historyIndex.has(id) || (this.coldBefore > 0 && snapshotHistoryHas(this.name, id));
+  }
+
+  // Drops rows that are old, saved and not currently listed. They remain in SQLite.
+  evictCold(now, keepIds = new Set()) {
+    const cutoff = this.hotCutoff(now);
+    if (!cutoff) return 0;
+    let evicted = 0;
+    for (const [id, row] of this.historyIndex) {
+      if (keepIds.has(id) || this.dirtyHistoryIds.has(id) || activityOf(row) >= cutoff) continue;
+      this.historyIndex.delete(id);
+      delete this.seen[id];
+      evicted++;
+    }
+    this.coldBefore = Math.max(this.coldBefore, cutoff);
+    return evicted;
+  }
+
+  // Stored rows (already filtered by SQL) + resident rows: a resident row is newer than its stored copy and decides
+  // whether the id matches; resident rows that are not stored yet are added.
+  mergeHistory(stored, matches) {
+    const rows = new Map(stored.map((row) => [String(row.id), row]));
+    for (const [id, row] of this.historyIndex) {
+      if (matches(row)) rows.set(id, row); else rows.delete(id);
+    }
+    return [...rows.values()];
+  }
+
   computeLatestNewEvent() {
     let newest = null;
     for (const event of this.history) {
@@ -331,27 +395,27 @@ export class SnapshotState {
   }
 
   publicHistory(since = 0) {
-    const cursor = Number(since || 0);
-    return this.history.filter((event) => Math.max(
-      Number(event.firstSeenAt || 0),
-      Number(event.lastSeenAt || 0),
-      Number(event.removedAt || 0)
-    ) >= cursor);
+    const cursor = Number(since || 0), matches = (event) => activityOf(event) >= cursor;
+    const stored = cursor < this.coldBefore ? snapshotHistoryActive(this.name, cursor) : [];
+    return this.mergeHistory(stored, matches).sort(byFirstSeen);
   }
 
+  // The newest `limit` rows (by first-seen time, returned oldest to newest) with activity at or after `since`.
   recentHistory(since = 0, limit = 2000) {
-    const cursor=Number(since||0),take=Math.max(1,Math.min(Number(limit)||2000,this.history.length||1)),rows=[];
-    // History preserves first-seen insertion order. Scan from the tail instead
-    // of filtering/copying the complete long-lived ledger for every UI page.
-    let reachedStart=true;
-    for(let i=this.history.length-1;i>=0;i--){
-      const event=this.history[i];
-      if(Math.max(Number(event.firstSeenAt||0),Number(event.lastSeenAt||0),Number(event.removedAt||0))<cursor)continue;
-      if(rows.length>=take){reachedStart=false;break;}
-      rows.push(event);
-    }
-    rows.reverse();
-    return {events:rows,total:this.history.length,exhausted:reachedStart};
+    const cursor = Number(since || 0), take = Math.max(1, Math.min(Number(limit) || 2000, this.historyTotal || this.historyIndex.size || 1));
+    const matches = (event) => activityOf(event) >= cursor;
+    const stored = cursor < this.coldBefore ? snapshotHistoryActive(this.name, cursor, take + 1) : [];
+    const newestFirst = this.mergeHistory(stored, matches).sort((a, b) => byFirstSeen(b, a));
+    const exhausted = newestFirst.length <= take;
+    const rows = newestFirst.slice(0, take).reverse();
+    return { events: rows, total: this.historyTotal, exhausted };
+  }
+
+  // Removed fixtures that were scheduled to start in [from, to) (Results archive).
+  historyByStart(from, to) {
+    const matches = (event) => Number(event.startAt) >= from && Number(event.startAt) < to && Number(event.removedAt) > 0;
+    const stored = this.coldBefore > 0 ? snapshotHistoryByStart(this.name, from, to) : [];
+    return this.mergeHistory(stored, matches).sort(byFirstSeen);
   }
 
   status() {
@@ -361,7 +425,8 @@ export class SnapshotState {
       revision: this.revision,
       matchRevision: this.matchRevision,
       count: this.events.length,
-      historyCount: this.history.length,
+      historyCount: this.historyTotal || this.history.length,
+      historyResident: this.historyIndex.size || this.history.length,
       stale: !Math.max(this.lastSuccessfulUpdateAt || 0, this.updating ? this.lastProgressAt || 0 : 0) || now - Math.max(this.lastSuccessfulUpdateAt || 0, this.updating ? this.lastProgressAt || 0 : 0) > this.staleAfterMs,
       updating: this.updating,
       partial: this.partial,

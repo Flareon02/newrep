@@ -25,3 +25,21 @@ Every new behaviour is either additive or off by default. See `docs/AUDIT.md` fo
 
 API routes and payloads, collectors, matching, SQLite schema, container hardening, 1 vCPU / 1 GiB tuning
 (`PREMATCH_CONCURRENCY=1`, 320 MiB heap, worker heap limits), updater/rollback logic (only version strings changed).
+
+## History no longer lives entirely in RAM
+
+Every History row used to be resident (~1.1 KB each, seven snapshots, up to 100 000 rows per snapshot), so memory grew
+with the retention period and ~280 000 rows no longer fit the 320 MiB heap at startup. SQLite was already storing every
+row with indexed time columns, so it is now the source of truth and RAM keeps only a hot window:
+
+- `HISTORY_HOT_DAYS` (default 7; 0 = old behaviour) rows with recent activity stay resident; older rows are read from
+  SQLite on demand (`publicHistory`, `recentHistory`, new `historyByStart`, `hasHistoryId`) and overlaid with resident rows,
+  so answers are identical to the fully-resident model (differential test with random data).
+- Re-entering an old fixture reads its row by primary key, so first-seen time and lifecycle are preserved.
+- Results' day archive and Pinnacle's "already started" check query SQLite instead of scanning/copying every row.
+- Two additive indexes (`snapshot_history(name,first_seen_at)` and `(name,removed_at)`) are created on first start; no
+  migration of data. Older servers ignore them.
+- Fixes an ordering bug: after the periodic prune the resident list was newest-first, so `recentHistory` could return
+  the oldest rows instead of the newest ones.
+- Measured (synthetic, heap cap 320 MiB): 7 x 100 000 persisted rows -> 14 112 resident, RSS 101 MiB, load 0.6 s
+  (before: 7 x 40 000 rows crashed the heap).

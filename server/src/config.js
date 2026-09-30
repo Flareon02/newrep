@@ -79,6 +79,9 @@ export const config = {
   statisticsRetentionDays: intEnv("STATISTICS_RETENTION_DAYS", 0, 0),
   diskWarnFreeMiB: intEnv("DISK_WARN_FREE_MIB", 1024, 64),
   diskCriticalFreeMiB: intEnv("DISK_CRITICAL_FREE_MIB", 512, 32),
+  // History older than this many days stays in SQLite and is read on demand; only the recent "hot" window is resident
+  // in RAM. 0 = keep the whole History in memory (the 4.3.x behaviour).
+  historyHotDays: intEnv("HISTORY_HOT_DAYS", 7, 0),
   historyTtlMs: intEnv("HISTORY_TTL_MS", 365 * 24 * 60 * 60 * 1000, 60 * 60 * 1000),
   historyMax: intEnv("HISTORY_MAX", 100000, 100),
   defaultPrematchChampId: process.env.PREMATCH_SEED_CHAMP || "2900972",
