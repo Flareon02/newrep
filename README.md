@@ -23,7 +23,7 @@
 ## Быстрые команды
 
 ```sh
-cd server && npm ci --omit=dev && npm test     # 210 тестов сервера
+cd server && npm ci --omit=dev && npm test     # 219 тестов сервера
 node --test extension/test/*.test.mjs           # тесты расширения
 npm install && npm run lint                     # линтер (только реальные дефекты)
 node tools/compare-with-original.mjs            # ORIGINAL vs NEW
