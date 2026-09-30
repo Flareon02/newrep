@@ -19,67 +19,89 @@ const DAY = 86_400_000;
 const BATCH_ROWS = 2000;
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-export async function pruneOdds({ cutoff, budgetMs, startedAt = Date.now() }) {
+const PAGE = 200;
+const noSignal = { stopped: false };
+const over = (startedAt, budgetMs) => Date.now() - startedAt > budgetMs;
+
+// Fixtures that are still present in any live/prematch feed are never pruned, however quiet their odds
+// are: `active` is a Set of "source:id" keys taken from the current feeds at the start of the pass.
+export async function pruneOdds({ cutoff, budgetMs, startedAt = Date.now(), active = new Set(), signal = noSignal }) {
   const { db } = sqlite();
-  let events = 0, rows = 0;
-  const candidates = db.prepare("SELECT source, event_id FROM odds_state WHERE updated_at < ? ORDER BY updated_at LIMIT 50").all(cutoff);
+  let events = 0, rows = 0, skipped = 0, cursor = 0;
+  const page = db.prepare("SELECT rowid AS rid, source, event_id FROM odds_state WHERE updated_at < ? AND rowid > ? ORDER BY rowid LIMIT ?");
   const delBatch = db.prepare("DELETE FROM odds_entries_v3 WHERE seq IN (SELECT seq FROM odds_entries_v3 WHERE source = ? AND event_id = ? LIMIT ?)");
   const delState = db.prepare("DELETE FROM odds_state WHERE source = ? AND event_id = ? AND updated_at < ?");
-  for (const { source, event_id: id } of candidates) {
-    for (;;) {
-      const changes = Number(delBatch.run(source, id, BATCH_ROWS).changes);
-      rows += changes;
-      if (changes < BATCH_ROWS) break;
+  for (;;) {
+    const batch = page.all(cutoff, cursor, PAGE);
+    if (!batch.length) return { events, rows, skipped, more: false };
+    for (const { rid, source, event_id: id } of batch) {
+      cursor = rid;
+      if (signal.stopped) return { events, rows, skipped, more: true };
+      if (active.has(`${source}:${id}`)) { skipped++; continue; }
+      for (;;) {
+        const changes = Number(delBatch.run(source, id, BATCH_ROWS).changes);
+        rows += changes;
+        if (changes < BATCH_ROWS) break;
+        await tick();
+        if (signal.stopped || over(startedAt, budgetMs)) return { events, rows, skipped, more: true };
+      }
+      delState.run(source, id, cutoff);
+      events++;
       await tick();
-      if (Date.now() - startedAt > budgetMs) return { events, rows, more: true };
+      if (signal.stopped || over(startedAt, budgetMs)) return { events, rows, skipped, more: true };
     }
-    delState.run(source, id, cutoff);
-    events++;
-    if (Date.now() - startedAt > budgetMs) return { events, rows, more: candidates.length > events };
-    await tick();
   }
-  return { events, rows, more: candidates.length === 50 };
 }
 
-export async function pruneScores({ cutoff, budgetMs, startedAt = Date.now() }) {
+export async function pruneScores({ cutoff, budgetMs, startedAt = Date.now(), active = new Set(), signal = noSignal }) {
   const { db } = sqlite();
-  let events = 0, rows = 0, after = "";
-  const page = db.prepare("SELECT identity FROM score_meta WHERE identity > ? ORDER BY identity LIMIT 200");
+  let events = 0, rows = 0, skipped = 0, after = "";
+  const page = db.prepare("SELECT identity FROM score_meta WHERE identity > ? ORDER BY identity LIMIT ?");
   const newest = db.prepare("SELECT MAX(at) AS at FROM score_entries WHERE identity = ?");
   const delBatch = db.prepare("DELETE FROM score_entries WHERE seq IN (SELECT seq FROM score_entries WHERE identity = ? LIMIT ?)");
   const delMeta = db.prepare("DELETE FROM score_meta WHERE identity = ?");
   for (;;) {
-    const identities = page.all(after).map((row) => row.identity);
-    if (!identities.length) return { events, rows, more: false };
+    const identities = page.all(after, PAGE).map((row) => row.identity);
+    if (!identities.length) return { events, rows, skipped, more: false };
     for (const identity of identities) {
       after = identity;
+      if (signal.stopped) return { events, rows, skipped, more: true };
       const last = Number(newest.get(identity)?.at) || 0;
       if (last && last >= cutoff) continue;
+      if (active.has(identity)) { skipped++; continue; }
       for (;;) {
         const changes = Number(delBatch.run(identity, BATCH_ROWS).changes);
         rows += changes;
         if (changes < BATCH_ROWS) break;
         await tick();
+        if (signal.stopped || over(startedAt, budgetMs)) return { events, rows, skipped, more: true };
       }
       delMeta.run(identity);
       events++;
     }
     await tick();
-    if (Date.now() - startedAt > budgetMs) return { events, rows, more: true };
+    if (signal.stopped || over(startedAt, budgetMs)) return { events, rows, skipped, more: true };
   }
 }
 
+// Statistics files are written by StatisticsStore.flush(). Wait for an in-flight flush, then select, detach
+// and persist the index without yielding in between, so a flush can never resurrect a pruned entry.
 export async function pruneStatistics(store, { cutoff }) {
   await store.ready;
+  await store.writing?.catch(() => {});
   const safeId = /^(?:crossbet|hawk)-[\w-]{1,80}$/;
   const old = Object.values(store.index).filter((row) => Number(row?.at) > 0 && row.at < cutoff && safeId.test(String(row.id)) && !store.dirty.has(row.id));
   for (const row of old) {
     delete store.index[row.id];
     store.cache.delete(row.id);
+  }
+  if (!old.length) return { events: 0 };
+  const indexWrite = writeJson("statistics/index.json", store.index);
+  for (const row of old) {
     const file = path.join(config.dataDir, "statistics", `${row.id}.json`);
     for (const target of [file, `${file}.bak`]) await fs.rm(target, { force: true });
   }
-  if (old.length) await writeJson("statistics/index.json", store.index);
+  await indexWrite;
   return { events: old.length };
 }
 
@@ -87,31 +109,31 @@ export function retentionEnabled(settings = config) {
   return [settings.oddsRetentionDays, settings.scoreRetentionDays, settings.statisticsRetentionDays].some((days) => days > 0);
 }
 
-// Scheduler used by index.js. Runs shortly after start, then every 6 hours,
-// re-running sooner while a pass reports that more work remains.
-export function startRetention({ statistics, settings = config, now = Date.now } = {}) {
-  if (!retentionEnabled(settings)) return { stop() {} };
-  let timer = null, stopped = false, running = false;
-  const schedule = (ms) => { if (stopped) return; clearTimeout(timer); timer = setTimeout(run, ms); timer.unref?.(); };
+// Scheduler used by index.js. Runs shortly after start, then every 6 hours, re-running sooner while a
+// pass reports that more work remains. `stop()` is awaitable: it lets the current batch finish and
+// guarantees nothing touches the database afterwards, so shutdown can close SQLite safely.
+export function startRetention({ statistics, settings = config, now = Date.now, activeKeys = () => new Set() } = {}) {
+  if (!retentionEnabled(settings)) return { async stop() {} };
+  const signal = { stopped: false };
+  let timer = null, current = null;
+  const schedule = (ms) => { if (signal.stopped) return; clearTimeout(timer); timer = setTimeout(() => { current = run(); }, ms); timer.unref?.(); };
   async function run() {
-    if (running || stopped) return;
-    running = true;
     let more = false;
     try {
-      const startedAt = Date.now(), budgetMs = 2000, summary = {};
-      if (settings.oddsRetentionDays > 0) { const r = await pruneOdds({ cutoff: now() - settings.oddsRetentionDays * DAY, budgetMs, startedAt }); summary.odds = r; more ||= r.more; }
-      if (settings.scoreRetentionDays > 0 && Date.now() - startedAt < budgetMs) { const r = await pruneScores({ cutoff: now() - settings.scoreRetentionDays * DAY, budgetMs, startedAt }); summary.scores = r; more ||= r.more; }
-      if (settings.statisticsRetentionDays > 0 && statistics?.store) summary.statistics = await pruneStatistics(statistics.store, { cutoff: now() - settings.statisticsRetentionDays * DAY });
+      const startedAt = Date.now(), budgetMs = 2000, summary = {}, active = activeKeys();
+      if (settings.oddsRetentionDays > 0) { const r = await pruneOdds({ cutoff: now() - settings.oddsRetentionDays * DAY, budgetMs, startedAt, active, signal }); summary.odds = r; more ||= r.more; }
+      if (settings.scoreRetentionDays > 0 && !signal.stopped && !over(startedAt, budgetMs)) { const r = await pruneScores({ cutoff: now() - settings.scoreRetentionDays * DAY, budgetMs, startedAt, active, signal }); summary.scores = r; more ||= r.more; }
+      if (settings.statisticsRetentionDays > 0 && statistics?.store && !signal.stopped) summary.statistics = await pruneStatistics(statistics.store, { cutoff: now() - settings.statisticsRetentionDays * DAY });
       const removed = Object.values(summary).reduce((n, r) => n + (r.events || 0), 0);
       if (removed) log.info(`[retention] removed ${removed} old events ${JSON.stringify(summary)}`);
       else log.debug("[retention] nothing to remove");
     } catch (error) {
       log.error(`[retention] ${error.message}`);
     } finally {
-      running = false;
+      current = null;
       schedule(more ? 30_000 : 6 * 3_600_000);
     }
   }
   schedule(60_000);
-  return { stop() { stopped = true; clearTimeout(timer); } };
+  return { async stop() { signal.stopped = true; clearTimeout(timer); await current; } };
 }

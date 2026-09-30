@@ -104,3 +104,47 @@ test('a disabled scheduler never schedules anything', () => {
     handle.stop();
   });
 });
+
+test('fixtures still present in a feed are never pruned, however quiet their odds are', async () => {
+  seedOdds('quiet-active', 400);
+  const kept = await pruneOdds({ cutoff: NOW - 180 * DAY, budgetMs: 5000, active: new Set(['astek:quiet-active']) });
+  assert.equal(kept.skipped >= 1, true);
+  assert.equal(oddsEntries('astek', 'quiet-active').length, 3);
+  const removed = await pruneOdds({ cutoff: NOW - 180 * DAY, budgetMs: 5000, active: new Set() });
+  assert.equal(removed.events >= 1, true);
+  assert.equal(oddsEntries('astek', 'quiet-active').length, 0);
+});
+
+test('score pruning also respects active fixtures', async () => {
+  scoreAppend('astek:quiet-score', NOW - 300 * DAY, { at: NOW - 300 * DAY, scoreText: '0:0' });
+  await pruneScores({ cutoff: NOW - 180 * DAY, budgetMs: 5000, active: new Set(['astek:quiet-score']) });
+  assert.ok(scoreLoad('astek:quiet-score'));
+  await pruneScores({ cutoff: NOW - 180 * DAY, budgetMs: 5000 });
+  assert.equal(scoreLoad('astek:quiet-score'), null);
+});
+
+test('stop() is awaitable: nothing touches the database after it resolves, and it never runs again', async (t) => {
+  const { startRetention } = await import('../src/retention.js');
+  seedOdds('stop-old', 400, 6000);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const handle = startRetention({ statistics: null, settings: { oddsRetentionDays: 180, scoreRetentionDays: 0, statisticsRetentionDays: 0 }, now: () => NOW });
+  t.mock.timers.tick(60_000);
+  await handle.stop();
+  const left = oddsEntries('astek', 'stop-old').length;
+  t.mock.timers.tick(7 * 3_600_000);
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(oddsEntries('astek', 'stop-old').length, left, 'no pass runs after stop()');
+});
+
+test('statistics pruning waits for an in-flight flush before touching the index', async () => {
+  const order = [];
+  await fs.mkdir(path.join(tmp, 'statistics'), { recursive: true });
+  await fs.writeFile(path.join(tmp, 'statistics', 'hawk-9.json'), '{}');
+  const store = { ready: Promise.resolve(), dirty: new Set(), cache: new Map(), index: { 'hawk-9': { id: 'hawk-9', at: NOW - 400 * DAY } } };
+  store.writing = new Promise((resolve) => setTimeout(() => { order.push('flush-finished'); resolve(); }, 30));
+  const pruned = pruneStatistics(store, { cutoff: NOW - 180 * DAY }).then(() => order.push('pruned'));
+  assert.ok('hawk-9' in store.index, 'index untouched while the flush is running');
+  await pruned;
+  assert.deepEqual(order, ['flush-finished', 'pruned']);
+  assert.ok(!('hawk-9' in store.index));
+});

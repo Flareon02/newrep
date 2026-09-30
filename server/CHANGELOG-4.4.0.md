@@ -17,7 +17,7 @@ Every new behaviour is either additive or off by default. See `docs/AUDIT.md` fo
 - **SSE protection**: global cap (`API_SSE_LIMIT_TOTAL`), `server.maxConnections` (`API_MAX_CONNECTIONS`), and slow
   readers are dropped once their buffer exceeds `API_SSE_MAX_BUFFER_BYTES`.
 - **Opt-in retention** (`ODDS_RETENTION_DAYS`, `SCORE_RETENTION_DAYS`, `STATISTICS_RETENTION_DAYS`; default 0 = keep
-  everything) and `/health` `storage.diskLevel` with throttled low-disk warnings.
+  everything; fixtures still in a feed are never pruned; shutdown waits for a running pass) and `/health` `storage.diskLevel` with throttled low-disk warnings.
 - `package-lock.json` and `npm ci` in the Dockerfile; `.dockerignore` keeps `.env`/`secrets`/`test` out of the build context.
 - `prune-old-releases.sh`: dry-run-by-default cleanup of old backups, failed containers and unused images.
 

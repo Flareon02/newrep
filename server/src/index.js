@@ -59,7 +59,7 @@ server.listen(config.port, "0.0.0.0", () => {
   prematchCollector.start();
   fonbetCollector.start();ggbetCollector.start();pinnacleCollector.start();
   resultsService.start();
-  retention=startRetention({statistics:server.statistics});
+  retention=startRetention({statistics:server.statistics,activeKeys:server.activeEventKeys});
 });
 
 let shuttingDown=false,retention=null;
@@ -69,7 +69,7 @@ async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   const deadline=setTimeout(() => process.exit(exitCode||1), persist?30000:5000);deadline.unref();
   const closed=new Promise(resolve=>server.close(()=>resolve()));
   await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);
-  retention?.stop();
+  await retention?.stop();
   await Promise.allSettled([server.stopStatistics(),oddsService.stop()]);
   if(persist){
     await Promise.allSettled([liveState.save(),prematchState.save(),fonbetLiveState.save(),fonbetPrematchState.save(),ggbetLiveState.save(),pinnaclePrematchState.save(),pinnacleLiveState.save(),flushMatcherAliases()]);

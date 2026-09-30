@@ -681,5 +681,7 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
   });
   server.stopStatistics=()=>statistics.stop();
   server.statistics=statistics;
+  // Keys ("source:id") of every fixture currently present in any feed; retention never prunes these.
+  server.activeEventKeys=()=>{const keys=new Set();for(const state of states)for(const event of state.events||[]){const source=event.source,id=String(event.sourceEventId||event.id||'');if(!source||!id)continue;keys.add(source+':'+id);keys.add(source+':'+id.replace(/[^\w-]/g,'').slice(0,80));}return keys;};
   server.on("close",()=>{clearInterval(snapshotTimer);clearInterval(catalogTimer);clearInterval(lagTimer);clearInterval(rateTimer);for(const fn of feedUnsub)try{fn();}catch{}for(const client of feedClients)try{client.res.end();}catch{}feedClients.clear();lag.disable();});server.maxConnections=config.apiMaxConnections;server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;server.maxRequestsPerSocket=500;return server;
 }
