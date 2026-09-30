@@ -54,7 +54,7 @@ python3 tools/package-release.py     # dist/Esports-Monitor-server-4.4.0.zip и 
 
 | Переменная | По умолчанию | Назначение |
 |---|---|---|
-| `API_TOKEN` | пусто (открыто, как в 4.3.5) | Общий секрет ≥ 16 символов для POST‑ручек, публикации связей лиг и поиска HLTV. Сгенерировать: `openssl rand -hex 24` |
+| `API_TOKEN` | пусто (открыто, как в 4.3.5) | Общий секрет ≥ 16 символов для POST‑ручек, публикации связей лиг и поиска HLTV. Сгенерировать: `openssl rand -hex 24`. Если задан, но короче 16 символов, сервер **не падает**, а отказывает всем защищённым запросам (503 с пояснением; `/health → security.writeAuth = misconfigured`) |
 | `LOG_LEVEL` | `info` | `error` · `warn` · `info` · `debug` (debug пишет каждый опрос — только для диагностики) |
 | `ODDS_RETENTION_DAYS` / `SCORE_RETENTION_DAYS` / `STATISTICS_RETENTION_DAYS` | `0` (хранить всё) | Удалять целиком события, последняя запись которых старше N дней |
 | `HISTORY_MAX` / `HISTORY_TTL_MS` | 100000 / 1 год | Размер History в памяти (≈1,1 КБ на строку, 7 снимков) |

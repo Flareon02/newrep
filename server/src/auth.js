@@ -28,22 +28,22 @@ export function extractToken(headers = {}) {
   return bearer ? bearer[1] : String(headers["x-api-token"] || "").trim();
 }
 
-// Processes inside the container (deploy probes via `docker exec`) reach the
-// API over loopback. Published ports arrive through the Docker bridge, never
-// from the container's own loopback.
-export const isLoopback = (address) => /^(?:::1|127\.\d+\.\d+\.\d+|::ffff:127\.\d+\.\d+\.\d+)$/.test(String(address || ""));
-
-export function createAuthorizer(token, { trustLoopback = true } = {}) {
+// A token that is set but too short is a configuration mistake. Refusing to start would turn it into a
+// crash loop, and silently running open would hide it, so the server stays up, protected endpoints are
+// refused (fail closed) with an explicit message, and /health reports `misconfigured`.
+export function createAuthorizer(token) {
   const value = String(token || "").trim();
-  if (value && value.length < MIN_TOKEN_LENGTH) throw new Error(`API_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`);
-  const expected = value ? digest(value) : null;
+  const misconfigured = !!value && value.length < MIN_TOKEN_LENGTH;
+  const expected = value && !misconfigured ? digest(value) : null;
   return {
-    enabled: !!expected,
+    enabled: !!value,
+    misconfigured,
+    mode: !value ? "open" : misconfigured ? "misconfigured" : "token",
     // Returns true when the request may proceed.
     allows(req, pathname) {
-      if (!expected) return true;
+      if (!value) return true;
       if (!requiresToken(req.method, pathname)) return true;
-      if (trustLoopback && isLoopback(req.socket?.remoteAddress)) return true;
+      if (misconfigured) return false;
       const given = extractToken(req.headers);
       return !!given && timingSafeEqual(digest(given), expected);
     },

@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startApi, postJson } from './helpers/api-harness.js';
-import { createAuthorizer, isLoopback, requiresToken, extractToken } from '../src/auth.js';
+import { createAuthorizer, requiresToken, extractToken } from '../src/auth.js';
 import { setLogSink } from '../src/logger.js';
 
 setLogSink(() => {});
 
 test('with API_TOKEN set, write/compute endpoints need the token; reads and health stay open', async () => {
   const token = 'unit-test-token-0123456789';
-  const api = await startApi({ api: { authToken: token, authTrustLoopback: false } });
+  const api = await startApi({ api: { authToken: token } });
   try {
     const manual = { names: ['A', 'B'] };
     let res = await postJson(api.base, '/api/odds/manual', manual);
@@ -52,19 +52,31 @@ test('without API_TOKEN behaviour is unchanged (open)', async () => {
   } finally { await api.close(); }
 });
 
-test('authorizer unit rules: short tokens refused, loopback trusted, header forms', () => {
-  assert.throws(() => createAuthorizer('short'), /at least/);
+test('a too-short API_TOKEN fails closed: server stays up, protected endpoints are refused with a clear message', async () => {
+  const api = await startApi({ api: { authToken: 'short' } });
+  try {
+    const res = await postJson(api.base, '/api/odds/manual', {}, { Authorization: 'Bearer short' });
+    assert.equal(res.status, 503);
+    assert.match((await res.json()).error, /API_TOKEN/);
+    assert.equal((await fetch(api.base + '/api/hltv/data')).status, 200);
+    const health = await (await fetch(api.base + '/health')).json();
+    assert.equal(health.security.writeAuth, 'misconfigured');
+  } finally { await api.close(); }
+});
+
+test('authorizer unit rules: header forms, read paths open, no loopback bypass', () => {
   assert.equal(createAuthorizer('').enabled, false);
+  assert.equal(createAuthorizer('').mode, 'open');
+  assert.equal(createAuthorizer('short').mode, 'misconfigured');
   const auth = createAuthorizer('unit-test-token-0123456789');
+  assert.equal(auth.mode, 'token');
   const req = (method, address, headers = {}) => ({ method, headers, socket: { remoteAddress: address } });
   assert.equal(auth.allows(req('POST', '172.17.0.1'), '/api/odds/manual'), false);
-  assert.equal(auth.allows(req('POST', '127.0.0.1'), '/api/odds/manual'), true);
-  assert.equal(auth.allows(req('POST', '::ffff:127.0.0.1'), '/api/odds/manual'), true);
+  assert.equal(auth.allows(req('POST', '127.0.0.1'), '/api/odds/manual'), false, 'loopback gets no special treatment');
   assert.equal(auth.allows(req('GET', '172.17.0.1'), '/api/live'), true);
   assert.equal(auth.allows(req('OPTIONS', '172.17.0.1'), '/api/odds/manual'), true);
   assert.equal(auth.allows(req('POST', '172.17.0.1', { authorization: 'bearer unit-test-token-0123456789' }), '/x'), true);
   assert.equal(extractToken({ 'x-api-token': ' abc ' }), 'abc');
-  assert.equal(isLoopback('10.0.0.5'), false);
   assert.equal(requiresToken('GET', '/api/hltv/team'), true);
   assert.equal(requiresToken('GET', '/api/hltv/data'), false);
 });
