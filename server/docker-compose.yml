@@ -1,0 +1,111 @@
+services:
+  astek-monitor:
+    build: .
+    image: astek-monitor-server:4.3.5
+    container_name: astek-monitor
+    restart: unless-stopped
+    init: true
+    # Harden the container: the application only needs network access and the
+    # writable /data mount. The image filesystem stays immutable and Linux
+    # capabilities are dropped so an upstream parser bug has a much smaller
+    # blast radius.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    pids_limit: 128
+    mem_limit: 768m
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Built-in bridge avoids consuming a new Docker subnet on every release.
+    network_mode: bridge
+    stop_grace_period: 45s
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      # Node 22 still labels the built-in SQLite module experimental even though
+      # it is the bundled driver used here; suppress only that one noisy warning.
+      NODE_OPTIONS: "--disable-warning=ExperimentalWarning --max-old-space-size=320"
+      UV_THREADPOOL_SIZE: "2"
+      DATA_DIR: "/data"
+      ASTEK_ORIGINS: "https://astekbet.com,https://astekbet-0021.pro"
+      FONBET_URLS: "https://line04w.bk6bba-resources.com/events/listBase?lang=en&scopeMarket=1600,https://line-lb51.bk6bba-resources.com/events/listBase?lang=en&scopeMarket=1600"
+      # HAR-confirmed incremental feed. A failed delta automatically falls back
+      # to listBase and periodic full resync prevents long-term drift.
+      FONBET_DELTA_URLS: "https://line-lb54-w.bk6bba-resources.com/ma/events/list?lang=en&scopeMarket=1600,https://line-lb61-w.bk6bba-resources.com/ma/events/list?lang=en&scopeMarket=1600,https://line-vk-w.bk6bba-resources.ru/events/list?lang=en&scopeMarket=1600"
+      LIVE_INTERVAL_MS: "5000"
+      ASTEK_MAX_BACKOFF_MS: "60000"
+      FONBET_LIVE_INTERVAL_MS: "15000"
+      FONBET_DELTA_INTERVAL_MS: "5000"
+      FONBET_FULL_FALLBACK_INTERVAL_MS: "15000"
+      FONBET_FULL_RESYNC_MS: "900000"
+      FONBET_MAX_BACKOFF_MS: "60000"
+      FONBET_PREMATCH_INTERVAL_MS: "60000"
+      # GGBET LIVE is a guest GraphQL-WebSocket feed. The collector refreshes
+      # the guest session proactively and rotates mirrors on bootstrap failure.
+      GGBET_LIVE_ENABLED: "1"
+      # Optional Warsaw bootstrap relay. When configured, only the anonymous
+      # guest-token bootstrap goes through Warsaw; the GGBET websocket itself
+      # stays connected directly from this main server.
+      GGBET_BOOTSTRAP_RELAY_URL: "${GGBET_BOOTSTRAP_RELAY_URL:-}"
+      GGBET_BOOTSTRAP_RELAY_SECRET_FILE: "/run/secrets/ggbet-relay-secret"
+      GGBET_BOOTSTRAP_RELAY_CA_FILE: "/run/secrets/ggbet-relay-ca.pem"
+      GGBET_ORIGINS: "https://gg.bet,https://gg397.bet,https://gg253.bet,https://gg284.bet,https://ggbets.co,https://ggbet242.com,https://ggbet24.com"
+      GGBET_SNAPSHOT_INTERVAL_MS: "30000"
+      GGBET_DEGRADED_SNAPSHOT_MS: "7000"
+      GGBET_SESSION_REFRESH_MS: "480000"
+      GGBET_BOOTSTRAP_CACHE_MS: "240010"
+      GGBET_WATCHDOG_MS: "90000"
+      GGBET_MAX_BACKOFF_MS: "60000"
+      PREMATCH_CATALOG_INTERVAL_MS: "60000"
+      PREMATCH_STALE_CHAMP_MS: "600000"
+      PREMATCH_CONCURRENCY: "1"
+      # Bulk line endpoint from the browser HAR. If it becomes incomplete,
+      # the collector automatically falls back to individual leagues.
+      PREMATCH_BULK_RETRY_MS: "600000"
+      PREMATCH_BULK_COUNT: "50"
+      # Safety limits for changed/broken upstream payloads and public API use.
+      UPSTREAM_MAX_BYTES: "33554432"
+      API_RATE_LIMIT_PER_MINUTE: "900"
+      API_POST_RATE_LIMIT_PER_MINUTE: "180"
+      API_SSE_LIMIT_PER_IP: "24"
+      REQUEST_TIMEOUT_MS: "20000"
+      LIVE_REQUEST_TIMEOUT_MS: "8000"
+      PREMATCH_FORMAT_TIMEOUT_MS: "8000"
+      RESULTS_DAY_CONCURRENCY: "1"
+      RESULTS_WARMUP_DELAY_MS: "180000"
+      HISTORY_TTL_MS: "31537000000"
+      HISTORY_MAX: "100000"
+      LOW_PRIORITY_IDLE_WAIT_MS: "4000"
+      HISTORY_PAGE_CACHE_MS: "15000"
+      RESULTS_CACHE_MS: "300000"
+      RESULTS_CONCURRENCY: "1"
+      RESULTS_MIN_REQUEST_GAP_MS: "1000"
+      RESULTS_CURRENT_CACHE_MS: "120000"
+      RESULTS_PAST_CACHE_MS: "86400100"
+      RESULTS_WARM_DAYS: "7"
+      RESULTS_DAY_MEMORY_CACHE: "4"
+      RESULTS_RAW_MEMORY_CACHE: "8"
+      RESULTS_VIEW_MEMORY_CACHE: "8"
+      RESULTS_WARM_INTERVAL_MS: "10000"
+      RESULTS_TIMEZONE_OFFSET_MINUTES: "240"
+      FONBET_RESULTS_URLS: "https://clientsapi-lb61-w.bk6bba-resources.com/results/v2/getByDate?lang=en&packetVersion=0&scopeMarket=1600"
+    volumes:
+      # upgrade.sh writes HOST_DATA_DIR to the exact directory mounted by the
+      # current server. New code and rollback container therefore share data.
+      - ${HOST_DATA_DIR:-./data}:/data
+      - ${GGBET_RELAY_SECRET_FILE:-./secrets/ggbet-relay-secret}:/run/secrets/ggbet-relay-secret:ro
+      - ${GGBET_RELAY_CA_FILE:-./secrets/ggbet-relay-ca.pem}:/run/secrets/ggbet-relay-ca.pem:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1);return r.json()}).then(x=>{if(!x.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

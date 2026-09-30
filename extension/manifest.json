@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Esports Monitor",
+  "version": "8.1.2",
+  "description": "Esports Monitor realtime thin shell: LIVE-first scheduling, bounded warm odds, incremental Results and progressive History.",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "unlimitedStorage",
+    "tabs",
+    "clipboardWrite",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://87.199.202.237/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Открыть Esports Monitor",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "128": "icons/icon128.png"
+  }
+}

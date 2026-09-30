@@ -1,0 +1,20 @@
+{
+  "name": "astek-monitor-server",
+  "version": "4.3.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "storage:status": "node src/storage-cli.js status",
+    "storage:migrate": "node src/storage-cli.js migrate-legacy",
+    "storage:compact": "node src/storage-cli.js migrate-legacy --compact",
+    "storage:export": "node src/storage-cli.js export-legacy"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
+  }
+}

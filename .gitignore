@@ -1,0 +1,52 @@
+# --- Secrets (never commit real values) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.bundle
+ggbet-relay-client.bundle
+server/secrets/*
+!server/secrets/.gitkeep
+.ggbet-relay-url.tmp
+
+# --- Runtime data (local databases, exports, backups) ---
+server/data/
+data/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+*.bak
+backups/
+
+# --- Dependencies, build artifacts, caches ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.npm/
+.cache/
+coverage/
+dist/
+build/
+*.zip
+*.tgz
+
+# --- Logs and temp ---
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
