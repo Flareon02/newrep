@@ -19,7 +19,8 @@ import { leagueStore } from './league-store.js';
 import { compareSchedule } from './comparison.js';
 import {queryUiEvents,queryLeagueCatalog,enrichResultsWithPrematch,mergeUiLedger,decorateUiEvent,buildUiPrematchEvents,compactUiEvent,compactUiPayload} from './ui-service.js';
 import {enrichEventMarketSemantics} from './market-semantics.js';
-import {normalizeErrorBody} from './http-errors.js';
+import {normalizeErrorBody,publicMessage} from './http-errors.js';
+import {safeWrite} from './sse.js';
 import {createAuthorizer} from './auth.js';
 import {randomUUID} from 'node:crypto';
 
@@ -202,7 +203,7 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
   const clientIp=req=>String(req.socket?.remoteAddress||'unknown').replace(/^::ffff:/,'');
   const allowRequest=(req,limit)=>{const ip=clientIp(req),now=Date.now(),old=rateState.get(ip),row=old&&now-old.at<60000?old:{at:now,get:0,post:0};const field=req.method==='POST'?'post':'get';row[field]++;rateState.set(ip,row);return row[field]<=limit;};
   const rateTimer=setInterval(()=>{const now=Date.now();for(const [ip,row] of rateState)if(now-row.at>120000)rateState.delete(ip);},60000);rateTimer.unref?.();
-  const acquireSse=req=>{const ip=clientIp(req),n=sseState.get(ip)||0;if(n>=config.apiSseLimitPerIp)return null;sseState.set(ip,n+1);let released=false;return()=>{if(released)return;released=true;const left=Math.max(0,(sseState.get(ip)||1)-1);if(left)sseState.set(ip,left);else sseState.delete(ip);};};
+  let sseTotal=0;const acquireSse=req=>{const ip=clientIp(req),n=sseState.get(ip)||0;if(n>=config.apiSseLimitPerIp||sseTotal>=config.apiSseLimitTotal)return null;sseState.set(ip,n+1);sseTotal++;let released=false;return()=>{if(released)return;released=true;sseTotal=Math.max(0,sseTotal-1);const left=Math.max(0,(sseState.get(ip)||1)-1);if(left)sseState.set(ip,left);else sseState.delete(ip);};};
   const oddsWatch=(()=>{const TTL=45000,MAX_CLIENTS=64,rows=new Map();
     const prune=now=>{for(const [ip,row] of rows)if(now-row.at>TTL)rows.delete(ip);};
     return {
@@ -212,7 +213,7 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
   const feedClients=new Set();
   const feedStates={live:[liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState],prematch:[prematchState,fonbetPrematchState,pinnaclePrematchState]};
   const feedMeta=mode=>mode==='live'?feedMetaSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState):feedMetaSnapshot('prematch',prematchState,fonbetPrematchState,pinnaclePrematchState);
-  const writeSse=(res,wire)=>{if(!res.writableEnded)res.write(wire);};
+  const writeSse=(res,wire)=>{safeWrite(res,wire);};
 
   // Thin-client views are revisioned separately from raw provider feeds. The
   // same SSE connection carries small invalidations so Results/History/Leagues
@@ -419,7 +420,7 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
           fonbetPrematch: config.fonbetPrematchIntervalMs,pinnaclePrematch:60000,pinnacleLive:15000,pinnacleLiveDetail:pinnacleCollector?.detailInterval||2000
         },
         language: "en",
-        runtime:{...memoryStatus(),eventLoopMaxMs:Math.round(lag.max/1e6),matcher:matcherStatus(),astekGate:astekRequestStatus(),priority:{order:['live','prematch','odds','results','history'],singleCore:true,historyMode:'paged-worker-idle-only',historyAutoWarm:false,historyPagesCached:historyPageCache.size,resultsYield:true},storage:await storageStatus()},upstreamRequests:upstreamStatus(),apiTraffic:apiTrafficStatus(),oddsWatch:oddsWatch.status(),
+        runtime:{...memoryStatus(),eventLoopMaxMs:Math.round(lag.max/1e6),matcher:matcherStatus(),astekGate:astekRequestStatus(),priority:{order:['live','prematch','odds','results','history'],singleCore:true,historyMode:'paged-worker-idle-only',historyAutoWarm:false,historyPagesCached:historyPageCache.size,resultsYield:true},storage:await storageStatus()},upstreamRequests:upstreamStatus(),apiTraffic:apiTrafficStatus(),oddsWatch:oddsWatch.status(),sse:{open:sseTotal,limit:config.apiSseLimitTotal,feedClients:feedClients.size},
         hltv:hltvService?.status(),
         statistics:{archivedMatches:Object.keys(statistics.store.index).length,lastError:statistics.lastError,providers:{dota2:statistics.providers.hawk||{},cs2:statistics.providers.crossbet||{}},sources:{dota2:hawkService.status(),cs2:crossbetService?.status?.()||{enabled:false,available:false}},running:statistics.running,lastSweepAt:statistics.lastSweepAt,currentAvailability:statistics.currentAvailability?.size||0},
         live: { astek: liveState.status(), fonbet: fonbetLiveState.status(),...(pinnacleLiveState?{pinnacle:{...pinnacleLiveState.status(),...pinnacleCollector?.status()}}:{}),...(ggbetLiveState?{ggbet:{...ggbetLiveState.status(),...ggbetCollector?.status()}}:{}) },
@@ -439,7 +440,7 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
       const client={res,modes:requested,thin:url.searchParams.get('thin')==='1'},hello={serverVersion:config.version,features:{feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,realtimePriority:1,pagedHistoryWorker:1},feeds:{},ui:{},thin:client.thin};
       for(const mode of requested){if(mode==='live'||mode==='prematch')hello.feeds[mode]=feedMeta(mode);else hello.ui[mode]={revision:uiRevisions[mode]||0};}
       feedClients.add(client);writeSse(res,sseEventWire('hello',hello));
-      const heartbeat=setInterval(()=>{if(!res.writableEnded)res.write(`: ping ${Date.now()}\n\n`);},15000);heartbeat.unref?.();let closed=false;const close=()=>{if(closed)return;closed=true;clearInterval(heartbeat);feedClients.delete(client);releaseSse();};req.on('close',close);res.on('close',close);return;
+      const heartbeat=setInterval(()=>{safeWrite(res,`: ping ${Date.now()}\n\n`);},15000);heartbeat.unref?.();let closed=false;const close=()=>{if(closed)return;closed=true;clearInterval(heartbeat);feedClients.delete(client);releaseSse();};req.on('close',close);res.on('close',close);return;
     }
 
     if(url.pathname==='/api/pinnacle/live-markets'){
@@ -461,7 +462,7 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
       res.flushHeaders?.();
       pinnacleCollector.detailStreams++;
       let closed=false,timer=null,lastSignature='';
-      const heartbeat=setInterval(()=>{if(!closed)res.write(': ping\n\n');},15000);heartbeat.unref?.();
+      const heartbeat=setInterval(()=>{if(!closed)safeWrite(res,': ping\n\n');},15000);heartbeat.unref?.();
       const cleanup=()=>{if(closed)return;closed=true;releaseSse();clearTimeout(timer);clearInterval(heartbeat);pinnacleCollector.detailStreams=Math.max(0,pinnacleCollector.detailStreams-1);};
       req.on('close',cleanup);res.on('close',cleanup);
       const pump=async()=>{
@@ -470,8 +471,8 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
           const payload=await pinnacleCollector.liveDetail(id);
           const markets=payload?.event?.odds?.markets||[];
           const signature=JSON.stringify([payload.live,payload.upstreamEventId,payload.event?.seriesScore,payload.event?.mapScores,markets.map(m=>[m.key,m.type,m.period,m.side,m.isAlternate,m.status,m.version,m.closedAt||0,m.prices])]);
-          if(signature!==lastSignature){lastSignature=signature;res.write(`data: ${JSON.stringify(payload)}\n\n`);}
-        }catch(error){res.write(`event: warning\ndata: ${JSON.stringify({error:error.message})}\n\n`);}
+          if(signature!==lastSignature){lastSignature=signature;safeWrite(res,`data: ${JSON.stringify(payload)}\n\n`);}
+        }catch(error){safeWrite(res,`event: warning\ndata: ${JSON.stringify({error:publicMessage(error.message,502).message})}\n\n`);}
         if(!closed){timer=setTimeout(pump,pinnacleCollector.detailInterval);timer.unref?.();}
       };
       pump();return;
@@ -487,8 +488,8 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
       if(url.pathname.endsWith('/match'))return sendJson(req,res,200,value);
       const releaseSse=acquireSse(req);if(!releaseSse)return sendJson(req,res,429,{error:'Слишком много потоковых соединений'});
       res.statusCode=200;res.setHeader('Content-Type','text/event-stream');res.setHeader('Cache-Control','no-cache');res.setHeader('Connection','keep-alive');res.setHeader('X-Accel-Buffering','no');applyCommonHeaders(req,res);res.flushHeaders?.();
-      const send=d=>{if(!res.writableEnded)res.write('data: '+JSON.stringify({...d,serverNow:Date.now()})+'\n\n');};send(value);
-      statistics.store.on(statistics.store.channel(id),send);const heartbeat=setInterval(()=>{if(!res.writableEnded)res.write(': keep-alive\n\n');},20000);heartbeat.unref();
+      const send=d=>{safeWrite(res,'data: '+JSON.stringify({...d,serverNow:Date.now()})+'\n\n');};send(value);
+      statistics.store.on(statistics.store.channel(id),send);const heartbeat=setInterval(()=>{safeWrite(res,': keep-alive\n\n');},20000);heartbeat.unref();
       let closed=false;const close=()=>{if(closed)return;closed=true;releaseSse();clearInterval(heartbeat);statistics.store.off(statistics.store.channel(id),send);};req.on('close',close);res.on('close',close);return;
     }
     if(req.method==='GET'&&url.pathname==='/api/cs2/match'){
@@ -679,5 +680,5 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
     }catch(error){log.error('[api]',error.message);if(!res.headersSent)sendJson(req,res,Number(error?.status)||503,{error:error.message});else res.end();}
   });
   server.stopStatistics=()=>statistics.stop();
-  server.on("close",()=>{clearInterval(snapshotTimer);clearInterval(catalogTimer);clearInterval(lagTimer);clearInterval(rateTimer);for(const fn of feedUnsub)try{fn();}catch{}for(const client of feedClients)try{client.res.end();}catch{}feedClients.clear();lag.disable();});server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;server.maxRequestsPerSocket=500;return server;
+  server.on("close",()=>{clearInterval(snapshotTimer);clearInterval(catalogTimer);clearInterval(lagTimer);clearInterval(rateTimer);for(const fn of feedUnsub)try{fn();}catch{}for(const client of feedClients)try{client.res.end();}catch{}feedClients.clear();lag.disable();});server.maxConnections=config.apiMaxConnections;server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;server.maxRequestsPerSocket=500;return server;
 }

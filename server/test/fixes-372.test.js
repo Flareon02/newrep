@@ -30,7 +30,7 @@ test('API uses structural refresh plus a low-frequency snapshot watchdog',()=>{
 
 test('Pinnacle detail SSE suppresses unchanged payloads',()=>{
   const api=fs.readFileSync(new URL('../src/api.js',import.meta.url),'utf8');
-  assert.match(api,/if\(signature!==lastSignature\)\{lastSignature=signature;res\.write/);
+  assert.match(api,/if\(signature!==lastSignature\)\{lastSignature=signature;(?:res\.write|safeWrite\(res,)/);
   assert.doesNotMatch(api,/signature!==lastSignature\|\|payload\.event\?\.odds/);
 });
 
