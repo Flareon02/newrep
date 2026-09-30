@@ -105,12 +105,21 @@ export function integrityCheck(){const {db}=sqlite();const row=db.prepare('PRAGM
 export function metaGet(key){const row=sqlite().db.prepare('SELECT value FROM meta WHERE key=?').get(String(key));return row?.value??null;}
 export function metaSet(key,value){sqlite().db.prepare('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(String(key),String(value));}
 
+// Parse rows one at a time. `.all()` first materialises every JSON string of the
+// table (a year of History is hundreds of thousands of rows), doubling the peak
+// RSS at startup on a 1 GiB host; iterating keeps only the parsed objects alive.
+function parseRows(statement,...params){
+  const out=[];
+  if(typeof statement.iterate==='function'){for(const row of statement.iterate(...params)){const value=parse(row.payload);if(value)out.push(value);}}
+  else for(const row of statement.all(...params)){const value=parse(row.payload);if(value)out.push(value);}
+  return out;
+}
 export function snapshotLoad(name){
   const {db}=sqlite(), meta=db.prepare('SELECT payload FROM snapshot_meta WHERE name=?').get(name);
   if(!meta)return null;
   const state=parse(meta.payload,{})||{};
-  const events=db.prepare('SELECT payload FROM snapshot_current WHERE name=? ORDER BY event_id').all(name).map(r=>parse(r.payload)).filter(Boolean);
-  const history=db.prepare('SELECT payload FROM snapshot_history WHERE name=? ORDER BY first_seen_at,event_id').all(name).map(r=>parse(r.payload)).filter(Boolean);
+  const events=parseRows(db.prepare('SELECT payload FROM snapshot_current WHERE name=? ORDER BY event_id'),name);
+  const history=parseRows(db.prepare('SELECT payload FROM snapshot_history WHERE name=? ORDER BY first_seen_at,event_id'),name);
   return {...state,events,history};
 }
 export function snapshotImport(name,saved){
