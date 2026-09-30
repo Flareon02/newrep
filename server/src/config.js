@@ -13,7 +13,7 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.3.5",
+  version: "4.4.0",
   port: intEnv("PORT", 8080),
   dataDir: process.env.DATA_DIR || "/data",
   // Optional shared secret for write/compute endpoints (see src/auth.js). Empty = unauthenticated (legacy behaviour).

@@ -5,7 +5,7 @@ import http from 'node:http';
 import {spawnSync} from 'node:child_process';
 import {assessHealth, probeHealth, RETRY, LAG} from '../src/deploy-health-probe.js';
 
-const health = () => ({ok: true, version: '4.3.5', runtime: {
+const health = () => ({ok: true, version: '4.4.0', runtime: {
   eventLoopMaxMs: 1687, rssMiB: 245, heapUsedMiB: 79,
   storage: {engine: 'sqlite', schemaVersion: 3, integrity: 'ok'}
 }});

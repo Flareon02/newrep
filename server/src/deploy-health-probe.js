@@ -11,7 +11,7 @@ export function assessHealth(data, elapsed) {
   const rss = runtime?.rssMiB;
   const heap = runtime?.heapUsedMiB;
   const metrics = {elapsed, loop, rss, heap};
-  if (data?.ok !== true || data?.version !== '4.3.5' ||
+  if (data?.ok !== true || data?.version !== '4.4.0' ||
       runtime?.storage?.engine !== 'sqlite' || runtime?.storage?.schemaVersion !== 3 ||
       runtime?.storage?.integrity !== 'ok' ||
       ![loop, rss, heap].every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0)) {
