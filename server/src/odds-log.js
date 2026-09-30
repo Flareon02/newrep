@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import {scoreLog} from './score-log.js';
 import {readJson} from './utils.js';
 import {oddsAppend,oddsEntries,oddsStateLoad,oddsStateSave} from './sqlite-storage.js';
@@ -62,7 +63,7 @@ export class OddsLog{
       const saved={last:next,lastAt:at,team1:entry.team1,team2:entry.team2,scoreText:entry.scoreText};
       oddsStateSave(source,id,saved);this.cache.set(key,saved);
       if(this.cache.size>60)this.cache.delete(this.cache.keys().next().value);
-    });this.pending.set(key,run);run.finally(()=>{if(this.pending.get(key)===run)this.pending.delete(key);}).catch(error=>console.error('[odds-log]',error.message));return run;
+    });this.pending.set(key,run);run.finally(()=>{if(this.pending.get(key)===run)this.pending.delete(key);}).catch(error=>log.error('[odds-log]',error.message));return run;
   }
   async readAll(source,id){
     const legacy=await this.legacy(source,id),entries=oddsEntries(source,id,{ascending:true});

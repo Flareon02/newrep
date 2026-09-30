@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import {EventEmitter} from 'node:events';
 import {readJson,writeJson} from './utils.js';
 import {teamLogos} from './team-logos.js';
@@ -10,7 +11,7 @@ export class StatisticsStore extends EventEmitter{
  publicId(id=''){const value=String(id);if(value.startsWith('hawk-'))return 'stats-dota2-'+value.slice(5);if(value.startsWith('crossbet-'))return 'stats-cs2-'+value.slice(9);return value;}
  internalId(id=''){const value=String(id);if(value.startsWith('stats-dota2-'))return 'hawk-'+value.slice(12);if(value.startsWith('stats-cs2-'))return 'crossbet-'+value.slice(10);return value;}
  channel(id=''){return this.internalId(id);}
- constructor(){super();this.index={};this.cache=new Map();this.dirty=new Set();this.ready=readJson('statistics/index.json',{}).then(index=>{this.index=index;});this.writing=null;this.timer=setInterval(()=>this.flush().catch(e=>console.error('[statistics]',e.message)),5000);this.timer.unref?.();}
+ constructor(){super();this.index={};this.cache=new Map();this.dirty=new Set();this.ready=readJson('statistics/index.json',{}).then(index=>{this.index=index;});this.writing=null;this.timer=setInterval(()=>this.flush().catch(e=>log.error('[statistics]',e.message)),5000);this.timer.unref?.();}
  async record(provider,e,payload){await this.ready;if(!payload?.matched)return;const d=provider==='hawk'?payload.event:payload;if(!d?.id)return;const id=provider+'-'+String(d.id).replace(/[^\w-]/g,''),old=this.index[id],category=provider==='hawk'?'Dota 2':'Counter Strike 2';
   const decorated=teamLogos.decorate({...d,category});delete decorated.url;if(provider==='crossbet'&&decorated.maps)decorated.maps=decorated.maps.map(m=>teamLogos.decorate({...m,category}));payload=provider==='hawk'?{...payload,event:decorated}:{...payload,...decorated,provider:'Статистика'};
   const refs=[...new Set([...(old?.refs||[]),...referenceKeys(e||{})])];this.index[id]={id,provider,refs,pair:pair(e||d),team1:e?.team1||d.team1,team2:e?.team2||d.team2,leagueKey:String(e?.leagueKey||old?.leagueKey||''),league:leagueNorm(e?.league||old?.league||d.league||''),startAt:Number(e?.startAt||old?.startAt||d.startAt)||Date.now(),at:Date.now()};

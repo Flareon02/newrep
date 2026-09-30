@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import { config } from "./config.js";
 import { fetchJson } from "./utils.js";
 import { parseFonbetLive, parseFonbetPrematch } from "./fonbet-parser.js";
@@ -105,7 +106,7 @@ export class FonbetCollector {
     if(fullDue)return this.fetchFull();
     try{return await this.fetchDelta();}
     catch(error){
-      this.deltaFallbacks++;console.error(`[fonbet] delta failed, full resync: ${error.message}`);
+      this.deltaFallbacks++;log.warn(`[fonbet] delta failed, full resync: ${error.message}`);
       // Discard materialized state only after a full snapshot succeeds; until
       // then callers keep the last-known-good public SnapshotState.
       return this.fetchFull();
@@ -137,17 +138,17 @@ export class FonbetCollector {
           // LIVE and line are independent public states even though Fonbet sends
           // them in one packet. A line parser failure must not mark fresh LIVE stale.
           await this.prematchState.failure(error);
-          console.error(`[fonbet:prematch] ${error.message}`);
+          log.warn(`[fonbet:prematch] ${error.message}`);
         }
       }
       this.failures=0;
-      console.log(`[fonbet] ${this.lastTransport} LIVE ${live.events.length}, prematch ${prematchCount}${prematchDueAtStart ? " checked" : " cached"}, raw ${live.rawEventCount}, ${result.bytes||0} bytes, ${Date.now()-started} ms`);
+      log.debug(`[fonbet] ${this.lastTransport} LIVE ${live.events.length}, prematch ${prematchCount}${prematchDueAtStart ? " checked" : " cached"}, raw ${live.rawEventCount}, ${result.bytes||0} bytes, ${Date.now()-started} ms`);
       return true;
     } catch (error) {
       this.failures++;
       await this.liveState.failure(error);
       if (prematchDueAtStart) await this.prematchState.failure(error);
-      console.error(`[fonbet] ${error.message}`);
+      log.warn(`[fonbet] ${error.message}`);
       return false;
     } finally { this.running = false; }
   }

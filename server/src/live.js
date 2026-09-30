@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import { config, urls } from "./config.js";
 import { fetchJson, withAstekRequest } from "./utils.js";
 import { parseLiveFeed } from "./parsers.js";
@@ -28,19 +29,19 @@ export class LiveCollector {
       if(result.fingerprint&&result.fingerprint===this.lastFingerprint){
         await this.state.unchanged(result);
         this.failures=0;
-        console.log(`[live] unchanged, HTTP ${result.status}, ${result.elapsedMs} ms, ${usedOrigin}`);
+        log.debug(`[live] unchanged, HTTP ${result.status}, ${result.elapsedMs} ms, ${usedOrigin}`);
         return true;
       }
       let events = parseLiveFeed(result.payload, usedOrigin);
       await this.state.success(events, result);
       this.lastFingerprint=result.fingerprint||"";
       this.failures=0;
-      console.log(`[live] ${events.length} events, HTTP ${result.status}, ${result.elapsedMs} ms, ${usedOrigin}`);
+      log.debug(`[live] ${events.length} events, HTTP ${result.status}, ${result.elapsedMs} ms, ${usedOrigin}`);
       return true;
     } catch (error) {
       this.failures++;
       await this.state.failure(error);
-      console.error(`[live] ${error.message}`);
+      log.warn(`[live] ${error.message}`);
       return false;
     } finally {
       this.running = false;

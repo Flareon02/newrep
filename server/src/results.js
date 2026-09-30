@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import {scoreLog} from './score-log.js';
 import {coalesce} from './identity.js';
 import {matchAsync} from './matcher-client.js';
@@ -88,7 +89,7 @@ export class ResultsService {
   }
   onChange(listener){if(typeof listener!=='function')return()=>{};this.listeners.add(listener);return()=>this.listeners.delete(listener);}
   setPriorityProbe(fn){this.priorityProbe=typeof fn==='function'?fn:()=>false;}
-  emitChange(change={}){for(const listener of this.listeners)try{listener({...change,at:Number(change.at)||Date.now()});}catch(error){console.error('[results-listener]',error?.message||error);}}
+  emitChange(change={}){for(const listener of this.listeners)try{listener({...change,at:Number(change.at)||Date.now()});}catch(error){log.error('[results-listener]',error?.message||error);}}
   async load(){
     const saved=archiveRead('results/index.json',{});this.index=[3,SCHEMA].includes(saved.schemaVersion)?saved.days||{}:{};
     // Retain the legacy file unchanged. Previously requested old days are rebuilt
@@ -275,7 +276,7 @@ export class ResultsService {
       events=previous?.events||[];
     }
     const complete=errors.length===0,attempts=complete?0:Number(this.index[day]?.attempts||0)+1;
-    await scoreLog.record(events.flatMap(e=>(e.sourceRefs||[e]).filter(r=>r.resultVerified)),{phase:'results',at:now}).catch(error=>console.error('[score-log]',error.message));
+    await scoreLog.record(events.flatMap(e=>(e.sourceRefs||[e]).filter(r=>r.resultVerified)),{phase:'results',at:now}).catch(error=>log.error('[score-log]',error.message));
     const pendingFinals=events.flatMap(e=>(e.sourceRefs||[]).filter(r=>!r.resultVerified&&r.removedAt).map(r=>({source:r.source,id:r.sourceEventId||r.id,removedAt:r.removedAt})));
     const row={schemaVersion:SCHEMA,date:day,from,to,timezoneOffsetMinutes:config.resultsTimezoneOffsetMinutes,updatedAt:now,complete,providerGames,providers,events,pendingFinals,observedThrough};
     // Each date is an atomic independent file. A failed/missing upstream never
@@ -285,8 +286,8 @@ export class ResultsService {
     this.index[day]={complete,pendingFinals,observedThrough,updatedAt:now,timezoneOffsetMinutes:config.resultsTimezoneOffsetMinutes,count:events.length,providers,attempts,nextRetryAt:complete?0:now+this.ttl(day),error:errors.map(e=>e.error).join('; ')};
     await this.persistIndex();
     // Build a view only when requested.
-    if(errors.length)console.error(`[results:${day}] ${errors.map(e=>`${e.source}: ${e.error}`).join('; ')}`);
-    else console.log(`[results:${day}] ready: ${events.length} matches`);
+    if(errors.length)log.error(`[results:${day}] ${errors.map(e=>`${e.source}: ${e.error}`).join('; ')}`);
+    else log.debug(`[results:${day}] ready: ${events.length} matches`);
     this.emitChange({type:'day-updated',date:day,updatedAt:now,complete,count:events.length,pendingFinals:pendingFinals.length});
     return row;
   }
@@ -313,7 +314,7 @@ export class ResultsService {
     this.queue.delete(day);
     const run=this.buildDay(day).catch(async error=>{
       const now=Date.now();this.index[day]={...this.index[day],updatedAt:now,complete:false,nextRetryAt:now+this.ttl(day),error:error.message};
-      console.error(`[results:${day}] ${error.message}`);await this.persistIndex().catch(()=>{});
+      log.error(`[results:${day}] ${error.message}`);await this.persistIndex().catch(()=>{});
     }).finally(()=>{this.running.delete(day);this.scheduleDrain(priority>0?config.resultsWarmIntervalMs:750);});
     this.running.set(day,run);
   }

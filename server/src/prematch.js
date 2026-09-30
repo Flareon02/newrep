@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import {config,urls} from './config.js';
 import {parseLiveFeed,inferCategoryFromLeague} from './parsers.js';
 import {fetchJson,withAstekRequest,readJson,writeJson} from './utils.js';
@@ -65,7 +66,7 @@ export class PrematchCollector {
       let fallback=active;
       if(active.length&&this.now()>=this.batchRetryAt){
         try{const bulk=await this.bulkGames(active,origin);fallback=bulk.missing;}
-        catch(error){this.batchSupported=false;this.batchRetryAt=this.now()+config.prematchBulkRetryMs;console.warn('[prematch] bulk fallback:',error.message);}
+        catch(error){this.batchSupported=false;this.batchRetryAt=this.now()+config.prematchBulkRetryMs;log.warn('[prematch] bulk fallback:',error.message);}
       }
       const queue=fallback.map(c=>[c]);
       for(let i=0;i<queue.length;i++){
@@ -83,8 +84,8 @@ export class PrematchCollector {
       const events=[...new Map(active.flatMap(c=>this.champCache[c.champId]?.events||this.state.events.filter(e=>e.leagueId===c.champId)).map(e=>[e.id,e])).values()];
       await this.state.success(events,catalogResult);
       if(this.failures.length){await this.state.partialFailure?.(new Error('Прематч частично обновлён: '+this.failures.length+' лиг; '+this.failures[0].error));await this.state.persist?.(true);this.originIndex=(this.originIndex+1)%config.origins.length;}
-      console.log('[prematch]',events.length,'events,',active.length,'leagues,',this.requestsInCycle,'requests, bulk',this.batchSupported===true?'on':this.batchSupported===false?'fallback':'unknown');
-    }catch(error){this.originIndex=(this.originIndex+1)%config.origins.length;await this.state.failure(error);console.error('[prematch]',error.message);}
+      log.debug('[prematch]',events.length,'events,',active.length,'leagues,',this.requestsInCycle,'requests, bulk',this.batchSupported===true?'on':this.batchSupported===false?'fallback':'unknown');
+    }catch(error){this.originIndex=(this.originIndex+1)%config.origins.length;await this.state.failure(error);log.warn('[prematch]',error.message);}
     finally{this.lastCycleMs=this.now()-this.lastAttemptAt;this.running=false;}
   }
   start(){this.poll();this.timer=setInterval(()=>this.poll(),config.prematchCatalogIntervalMs);this.timer.unref?.();}

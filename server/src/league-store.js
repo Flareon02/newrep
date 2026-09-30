@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import { createHash, randomBytes } from 'node:crypto';
 import { readJson, writeJson } from './utils.js';
 import Model from './league-model.cjs';
@@ -7,7 +8,7 @@ import path from 'node:path';
 import { config } from './config.js';
 
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
-async function strictRead(filename,fallback){const target=path.join(config.dataDir,filename),backup=target+'.bak';try{return JSON.parse(await fs.readFile(target,'utf8'));}catch(error){try{const recovered=JSON.parse(await fs.readFile(backup,'utf8'));console.error('[storage] recovered '+filename+' from .bak: '+error.message);try{const temp=target+'.'+process.pid+'.'+Date.now()+'.recover.tmp';await fs.copyFile(backup,temp);await fs.rename(temp,target);}catch(healError){console.error('[storage] could not self-heal '+filename+': '+healError.message);}return recovered;}catch{if(error.code==='ENOENT')return fallback;throw error;}}}
+async function strictRead(filename,fallback){const target=path.join(config.dataDir,filename),backup=target+'.bak';try{return JSON.parse(await fs.readFile(target,'utf8'));}catch(error){try{const recovered=JSON.parse(await fs.readFile(backup,'utf8'));log.error('[storage] recovered '+filename+' from .bak: '+error.message);try{const temp=target+'.'+process.pid+'.'+Date.now()+'.recover.tmp';await fs.copyFile(backup,temp);await fs.rename(temp,target);}catch(healError){log.error('[storage] could not self-heal '+filename+': '+healError.message);}return recovered;}catch{if(error.code==='ENOENT')return fallback;throw error;}}}
 export class LeagueStore {
   constructor({read=strictRead,write=writeJson}={}){
     this.read=read;this.write=write;this.state={schemaVersion:1,revision:0,visibilityRevision:0,links:[],visibility:{excludedLeagueKeys:[],excludedCategoryKeys:[]},audit:[]};

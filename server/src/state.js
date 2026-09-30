@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import {teamLogos} from './team-logos.js';
 import {coalesce} from './identity.js';
 import {scoreLog} from './score-log.js';
@@ -49,7 +50,7 @@ export class SnapshotState {
   }
 
   onChange(fn){if(typeof fn==='function')this.listeners.add(fn);return()=>this.listeners.delete(fn);}
-  emitChange(change){for(const fn of this.listeners)try{fn(change);}catch(error){console.error('[state-listener]',error.message);}}
+  emitChange(change){for(const fn of this.listeners)try{fn(change);}catch(error){log.error('[state-listener]',error.message);}}
 
   async load() {
     let saved = snapshotLoad(this.name);
@@ -258,12 +259,12 @@ export class SnapshotState {
     // market changes without waiting for disk I/O.
     if(changed||structuralChanged)this.emitChange({type:'snapshot',name:this.name,revision:this.revision,matchRevision:this.matchRevision,structuralChanged,patches,at:now});
     else this.emitChange({type:'status',name:this.name,at:now});
-    try{await Promise.all(incoming.filter(e=>e.odds?.markets?.length).map(e=>oddsLog.record(e)));}catch(error){console.error('[odds-log]',error.message);}
+    try{await Promise.all(incoming.filter(e=>e.odds?.markets?.length).map(e=>oddsLog.record(e)));}catch(error){log.error('[odds-log]',error.message);}
     if(!this.name.includes('prematch'))try{
       await scoreLog.record(incoming.filter(e=>!previousCurrent.has(e.id)),{phase:'live',at:now,event:'entered'});
       await scoreLog.record(incoming,{phase:'live',at:now});
       await scoreLog.record([...previousCurrent.values()].filter(e=>!incomingIds.has(e.id)),{phase:'live',at:now,event:'removed'});
-    }catch(error){console.error('[score-log]',error.message);}
+    }catch(error){log.error('[score-log]',error.message);}
     await this.persist(false);
   }
 

@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import {StatisticsService} from './statistics-service.js';
 import {teamLogos} from './team-logos.js';
 import {HawkService} from './hawk.js';
@@ -91,7 +92,7 @@ async function cachedCombinedSnapshot(mode,a,b,p,g){
  // matcher only when the structural key changed; score/odds pushes still use
  // the cheap volatile overlay path below.
  if(!combinedCache.has(mode)||combinedCache.get(mode)?.key!==wantedKey)await refreshSnapshot(mode,a,b,p,g);
- else refreshSnapshot(mode,a,b,p,g).catch(e=>console.error('[snapshot]',e.message));
+ else refreshSnapshot(mode,a,b,p,g).catch(e=>log.error('[snapshot]',e.message));
  const cached=combinedCache.get(mode).value,providers={...cached.providers};
  for(const [source,state] of statePairs){const fresh=state.publicSnapshot(),events=fresh.events||[];providers[source]={...providers[source],...fresh,...state.status(),events,logicalEvents:events};}
  // Matching can legitimately take longer than one feed tick. Overlay the
@@ -171,7 +172,7 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
   const snapshotErrorLog=new Map();
   const prepare=()=>{for(const [mode,a,b] of [['live',liveState,fonbetLiveState],['prematch',prematchState,fonbetPrematchState]]){
     if(pendingSnapshots.has(mode))continue;
-    refreshSnapshot(mode,a,b,mode==='prematch'?pinnaclePrematchState:pinnacleLiveState,mode==='live'?ggbetLiveState:null).catch(e=>{const now=Date.now(),last=snapshotErrorLog.get(mode)||0;if(now-last>=10000){snapshotErrorLog.set(mode,now);console.error('[snapshot '+mode+']',e.message);}});
+    refreshSnapshot(mode,a,b,mode==='prematch'?pinnaclePrematchState:pinnacleLiveState,mode==='live'?ggbetLiveState:null).catch(e=>{const now=Date.now(),last=snapshotErrorLog.get(mode)||0;if(now-last>=10000){snapshotErrorLog.set(mode,now);log.error('[snapshot '+mode+']',e.message);}});
   }};
   // Structural changes also trigger an immediate refresh below. The timer is a
   // low-frequency watchdog now; polling the matcher every second added CPU/GC
@@ -183,7 +184,7 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
     ...(pinnacleCollector?.catalog||[]),
     ...(prematchCollector.catalog||[]).map(r=>({...r,source:'astek'})),
     ...[...(resultsService.days?.values?.()||[])].flatMap(day=>Object.values(day.providerGames||{}).flat())
-  ].map(r=>({...r,category:canonicalCategory(r.category||r.sportName),family:leagueFamily(r.league,canonicalCategory(r.category||r.sportName))}))).catch(e=>console.error('[league-catalog]',e.message));
+  ].map(r=>({...r,category:canonicalCategory(r.category||r.sportName),family:leagueFamily(r.league,canonicalCategory(r.category||r.sportName))}))).catch(e=>log.error('[league-catalog]',e.message));
   const catalogReady=rememberCatalog(),catalogTimer=setInterval(rememberCatalog,120000);catalogTimer.unref();
   const hawkService=new HawkService();
   const statistics=new StatisticsService(crossbetService,hawkService,()=>combinedCache.get('live')?.value?.events||[]);
@@ -214,7 +215,7 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
     const wire=sseEventWire('ui-invalidate',payload);
     for(const client of feedClients)if(client.modes.has(view))try{writeSse(client.res,wire);}catch{}
   };
-  const refreshMode=mode=>refreshSnapshot(mode,mode==='live'?liveState:prematchState,mode==='live'?fonbetLiveState:fonbetPrematchState,mode==='live'?pinnacleLiveState:pinnaclePrematchState,mode==='live'?ggbetLiveState:null).catch(e=>{const now=Date.now(),last=snapshotErrorLog.get(mode)||0;if(now-last>=10000){snapshotErrorLog.set(mode,now);console.error('[snapshot '+mode+']',e.message);}});
+  const refreshMode=mode=>refreshSnapshot(mode,mode==='live'?liveState:prematchState,mode==='live'?fonbetLiveState:fonbetPrematchState,mode==='live'?pinnacleLiveState:pinnaclePrematchState,mode==='live'?ggbetLiveState:null).catch(e=>{const now=Date.now(),last=snapshotErrorLog.get(mode)||0;if(now-last>=10000){snapshotErrorLog.set(mode,now);log.error('[snapshot '+mode+']',e.message);}});
   const broadcastModeInvalidate=(mode,reason='server')=>{
     refreshMode(mode);
     if(!feedClients.size)return;
@@ -516,13 +517,13 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
               try{
                 const odds=await astekAllMarkets(ref);
                 if(odds){await oddsLog.record(ref,odds);return {...ref,odds:{...(ref.odds||{}),...odds,markets:odds.markets||[]}};}
-              }catch(error){marketDetailErrors.astek=error?.message||String(error);console.warn('[astek-detail]',marketDetailErrors.astek);}
+              }catch(error){marketDetailErrors.astek=error?.message||String(error);log.warn('[astek-detail]',marketDetailErrors.astek);}
             }
             if(ref?.source==='ggbet'&&ggbetCollector?.detail){
               try{
                 const fresh=await ggbetCollector.detail(ref.sourceEventId||ref.id,{timeoutMs:6500});
                 if(fresh)return {...ref,...fresh,scoreReversed:ref.scoreReversed||false,aliases:ref.aliases||fresh.aliases,lifecycle:ref.lifecycle||fresh.lifecycle,firstSeenAt:ref.firstSeenAt||fresh.firstSeenAt,enteredLiveAt:ref.enteredLiveAt||fresh.enteredLiveAt};
-              }catch(error){marketDetailErrors.ggbet=error?.message||String(error);console.warn('[ggbet-detail]',marketDetailErrors.ggbet);}
+              }catch(error){marketDetailErrors.ggbet=error?.message||String(error);log.warn('[ggbet-detail]',marketDetailErrors.ggbet);}
             }
             return ref;
           }));
@@ -648,7 +649,7 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
       });
     }
     sendJson(req, res, 404, { error: "Not found" });
-    }catch(error){console.error('[api]',error.message);if(!res.headersSent)sendJson(req,res,Number(error?.status)||503,{error:error.message});else res.end();}
+    }catch(error){log.error('[api]',error.message);if(!res.headersSent)sendJson(req,res,Number(error?.status)||503,{error:error.message});else res.end();}
   });
   server.stopStatistics=()=>statistics.stop();
   server.on("close",()=>{clearInterval(snapshotTimer);clearInterval(catalogTimer);clearInterval(lagTimer);clearInterval(rateTimer);for(const fn of feedUnsub)try{fn();}catch{}for(const client of feedClients)try{client.res.end();}catch{}feedClients.clear();lag.disable();});server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;server.maxRequestsPerSocket=500;return server;

@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -103,7 +104,7 @@ export async function readJson(filename, fallback) {
   } catch (primaryError) {
     try {
       const recovered = await parseJsonFile(backup);
-      if (primaryError?.code !== "ENOENT") console.error(`[storage] recovered ${filename} from .bak: ${primaryError.message}`);
+      if (primaryError?.code !== "ENOENT") log.error(`[storage] recovered ${filename} from .bak: ${primaryError.message}`);
       // Self-heal the primary generation from the already-validated backup.
       // Copy to a temporary file first, then atomically replace the damaged
       // primary. The backup itself is never modified by recovery.
@@ -113,7 +114,7 @@ export async function readJson(filename, fallback) {
         await fs.copyFile(backup, temp);
         await fs.rename(temp, target);
       } catch (healError) {
-        console.error(`[storage] could not self-heal ${filename}: ${healError.message}`);
+        log.error(`[storage] could not self-heal ${filename}: ${healError.message}`);
       }
       return recovered;
     } catch {

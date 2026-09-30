@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import {stopMatcher} from './matcher-client.js';
 import { config } from "./config.js";
 import { createApi } from "./api.js";
@@ -20,7 +21,7 @@ const pinnacleLiveState=new SnapshotState('pinnacle-live',60000);
 const pinnaclePrematchState=new SnapshotState('pinnacle-prematch',300000);
 const startedAt = Date.now();
 await ensureDataDir();
-console.log(`[storage] ${JSON.stringify(storageMetrics({checkIntegrity:false}))}`);
+log.info(`[storage] ${JSON.stringify(storageMetrics({checkIntegrity:false}))}`);
 await loadMatcherAliases();
 
 const liveState = new SnapshotState("live", Math.max(config.liveIntervalMs * 4, 60000));
@@ -49,10 +50,10 @@ const oddsService=new OddsService(hltvService);
 const crossbetService=new CrossbetService();
 const server = createApi({ liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt });
 server.listen(config.port, "0.0.0.0", () => {
-  console.log(`[api] listening on 0.0.0.0:${config.port}`);
-  console.log(`[api] AstekBet upstream ${config.origins.join(", ")}`);
-  console.log(`[api] Fonbet upstream ${config.fonbetUrls.join(", ")}`);
-  console.log(`[api] GGBET LIVE bootstrap ${config.ggbetBootstrapRelayUrl?`relay ${config.ggbetBootstrapRelayUrl}`:config.ggbetOrigins.join(", ")}`);
+  log.info(`[api] listening on 0.0.0.0:${config.port}`);
+  log.info(`[api] AstekBet upstream ${config.origins.join(", ")}`);
+  log.info(`[api] Fonbet upstream ${config.fonbetUrls.join(", ")}`);
+  log.info(`[api] GGBET LIVE bootstrap ${config.ggbetBootstrapRelayUrl?`relay ${config.ggbetBootstrapRelayUrl}`:config.ggbetOrigins.join(", ")}`);
   liveCollector.start();
   prematchCollector.start();
   fonbetCollector.start();ggbetCollector.start();pinnacleCollector.start();
@@ -62,7 +63,7 @@ server.listen(config.port, "0.0.0.0", () => {
 let shuttingDown=false;
 async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   if(shuttingDown)return;shuttingDown=true;
-  console.log(`[api] shutting down (${reason}${persist?'':' / no-persist'})`);
+  log.info(`[api] shutting down (${reason}${persist?'':' / no-persist'})`);
   const deadline=setTimeout(() => process.exit(exitCode||1), persist?30000:5000);deadline.unref();
   const closed=new Promise(resolve=>server.close(()=>resolve()));
   await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);
@@ -85,6 +86,6 @@ process.on("SIGINT",()=>shutdown(0,'SIGINT',{persist:true}));
 // isolate malformed upstream packets locally; if something escapes those
 // boundaries, Docker restarts the process from the last durable generation
 // instead of saving potentially inconsistent in-memory state over good data.
-process.on('uncaughtException',error=>{console.error('[fatal] uncaughtException',error?.stack||error);shutdown(1,'uncaughtException',{persist:false}).catch(()=>process.exit(1));});
-process.on('unhandledRejection',reason=>{console.error('[fatal] unhandledRejection',reason?.stack||reason);shutdown(1,'unhandledRejection',{persist:false}).catch(()=>process.exit(1));});
-server.on('error',error=>{console.error('[api] server error',error?.stack||error);if(error?.code==='EADDRINUSE'||error?.code==='EACCES')shutdown(1,'server error',{persist:false}).catch(()=>process.exit(1));});
+process.on('uncaughtException',error=>{log.error('[fatal] uncaughtException',error?.stack||error);shutdown(1,'uncaughtException',{persist:false}).catch(()=>process.exit(1));});
+process.on('unhandledRejection',reason=>{log.error('[fatal] unhandledRejection',reason?.stack||reason);shutdown(1,'unhandledRejection',{persist:false}).catch(()=>process.exit(1));});
+server.on('error',error=>{log.error('[api] server error',error?.stack||error);if(error?.code==='EADDRINUSE'||error?.code==='EACCES')shutdown(1,'server error',{persist:false}).catch(()=>process.exit(1));});

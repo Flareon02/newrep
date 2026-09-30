@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import GameCategories from './game-categories.cjs';
 import {coalesce} from './identity.js';
 import { clean, normalizeKey, readJson, writeJson } from './utils.js';
@@ -18,7 +19,7 @@ function learnLeague(key,pair){
   if(!leagueEvidence.has(key))leagueEvidence.set(key,new Set());const evidence=leagueEvidence.get(key),before=evidence.size;
   if(before<8)evidence.add(pair);if(before<2&&evidence.size>=2)aliasRevision++;
   if(leagueEvidence.size>5000)leagueEvidence.delete(leagueEvidence.keys().next().value);
-  if(persistAliases&&before!==evidence.size&&!aliasTimer){aliasTimer=setTimeout(()=>flushMatcherAliases().catch(e=>console.error('[matcher]',e.message)),1000);aliasTimer.unref?.();}
+  if(persistAliases&&before!==evidence.size&&!aliasTimer){aliasTimer=setTimeout(()=>flushMatcherAliases().catch(e=>log.error('[matcher]',e.message)),1000);aliasTimer.unref?.();}
 }
 
 const CYR_MAP = {
