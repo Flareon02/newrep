@@ -56,7 +56,6 @@ if command -v "$DOCKER" >/dev/null 2>&1; then
     if [ -n "$($DOCKER ps -a --filter "ancestor=$image" --format '{{.Names}}' 2>/dev/null)" ]; then continue; fi
     act "image $image" $DOCKER image rm "$image"
   done
-  [ "$APPLY" -eq 1 ] && $DOCKER image prune -f >/dev/null 2>&1 || true
   say "--- docker disk usage"; $DOCKER system df 2>/dev/null || true
 else
   say "docker not found: skipped containers and images"

@@ -57,6 +57,7 @@ test('apply keeps the newest backups, the rollback target, the live container an
   assert.doesNotMatch(log, /astek-monitor-stale-2/, 'rollback target must be protected');
   assert.doesNotMatch(log, /docker rm astek-monitor$/m, 'the live container must never be removed');
   assert.doesNotMatch(log, /image rm astek-monitor-server:4.4.0/, 'the image in use must be kept');
+  assert.doesNotMatch(log, /prune/, 'never prunes images that belong to other projects');
   fs.rmSync(box.dir, { recursive: true, force: true });
 });
 
