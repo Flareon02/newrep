@@ -29,14 +29,14 @@ export class LiveCollector {
       if(result.fingerprint&&result.fingerprint===this.lastFingerprint){
         await this.state.unchanged(result);
         this.failures=0;
-        log.debug(`[live] unchanged, HTTP ${result.status}, ${result.elapsedMs} ms, ${usedOrigin}`);
+        log.enabled('debug')&&log.debug(`[live] unchanged, HTTP ${result.status}, ${result.elapsedMs} ms, ${usedOrigin}`);
         return true;
       }
       let events = parseLiveFeed(result.payload, usedOrigin);
       await this.state.success(events, result);
       this.lastFingerprint=result.fingerprint||"";
       this.failures=0;
-      log.debug(`[live] ${events.length} events, HTTP ${result.status}, ${result.elapsedMs} ms, ${usedOrigin}`);
+      log.enabled('debug')&&log.debug(`[live] ${events.length} events, HTTP ${result.status}, ${result.elapsedMs} ms, ${usedOrigin}`);
       return true;
     } catch (error) {
       this.failures++;

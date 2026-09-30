@@ -84,7 +84,7 @@ export class PrematchCollector {
       const events=[...new Map(active.flatMap(c=>this.champCache[c.champId]?.events||this.state.events.filter(e=>e.leagueId===c.champId)).map(e=>[e.id,e])).values()];
       await this.state.success(events,catalogResult);
       if(this.failures.length){await this.state.partialFailure?.(new Error('Прематч частично обновлён: '+this.failures.length+' лиг; '+this.failures[0].error));await this.state.persist?.(true);this.originIndex=(this.originIndex+1)%config.origins.length;}
-      log.debug('[prematch]',events.length,'events,',active.length,'leagues,',this.requestsInCycle,'requests, bulk',this.batchSupported===true?'on':this.batchSupported===false?'fallback':'unknown');
+      log.enabled('debug')&&log.debug('[prematch]',events.length,'events,',active.length,'leagues,',this.requestsInCycle,'requests, bulk',this.batchSupported===true?'on':this.batchSupported===false?'fallback':'unknown');
     }catch(error){this.originIndex=(this.originIndex+1)%config.origins.length;await this.state.failure(error);log.warn('[prematch]',error.message);}
     finally{this.lastCycleMs=this.now()-this.lastAttemptAt;this.running=false;}
   }

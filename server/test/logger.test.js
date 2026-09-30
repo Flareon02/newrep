@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { log, redact, setLogLevel, setLogSink } from '../src/logger.js';
+import { log, redact, setLogLevel, setLogSink, flushSuppressed } from '../src/logger.js';
 
 function capture(level = 'info') {
   const lines = [];
@@ -53,4 +53,25 @@ test('very long lines are truncated', () => {
 
 test('redact handles plain text', () => {
   assert.equal(redact('no secrets here'), 'no secrets here');
+});
+
+test('a burst that stops is still reported once, with its suppressed count', () => {
+  const lines = capture('info');
+  for (let i = 0; i < 12; i++) log.warn('[fonbet] HTTP 503');
+  assert.equal(lines.length, 1);
+  flushSuppressed(Date.now() + 30_000);
+  assert.equal(lines.length, 1, 'nothing is reported before the dedupe window has passed');
+  flushSuppressed(Date.now() + 120_000);
+  assert.equal(lines.length, 2);
+  assert.match(lines[1].line, /\+11 identical suppressed/);
+  flushSuppressed(Date.now() + 240_000);
+  assert.equal(lines.length, 2, 'reported only once');
+});
+
+test('log.enabled lets hot paths skip building debug strings', () => {
+  capture('info');
+  assert.equal(log.enabled('debug'), false);
+  assert.equal(log.enabled('warn'), true);
+  capture('debug');
+  assert.equal(log.enabled('debug'), true);
 });

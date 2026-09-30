@@ -287,7 +287,7 @@ export class ResultsService {
     await this.persistIndex();
     // Build a view only when requested.
     if(errors.length)log.error(`[results:${day}] ${errors.map(e=>`${e.source}: ${e.error}`).join('; ')}`);
-    else log.debug(`[results:${day}] ready: ${events.length} matches`);
+    else log.enabled('debug')&&log.debug(`[results:${day}] ready: ${events.length} matches`);
     this.emitChange({type:'day-updated',date:day,updatedAt:now,complete,count:events.length,pendingFinals:pendingFinals.length});
     return row;
   }

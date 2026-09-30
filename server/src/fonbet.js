@@ -142,7 +142,7 @@ export class FonbetCollector {
         }
       }
       this.failures=0;
-      log.debug(`[fonbet] ${this.lastTransport} LIVE ${live.events.length}, prematch ${prematchCount}${prematchDueAtStart ? " checked" : " cached"}, raw ${live.rawEventCount}, ${result.bytes||0} bytes, ${Date.now()-started} ms`);
+      log.enabled('debug')&&log.debug(`[fonbet] ${this.lastTransport} LIVE ${live.events.length}, prematch ${prematchCount}${prematchDueAtStart ? " checked" : " cached"}, raw ${live.rawEventCount}, ${result.bytes||0} bytes, ${Date.now()-started} ms`);
       return true;
     } catch (error) {
       this.failures++;

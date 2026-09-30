@@ -41,11 +41,23 @@ function emit(level, args) {
     if (entry && now - entry.at < DEDUPE_WINDOW_MS) { entry.suppressed++; return; }
     if (entry?.suppressed) line += ` (+${entry.suppressed} identical suppressed)`;
     recent.delete(key);
-    recent.set(key, { at: now, suppressed: 0 });
+    recent.set(key, { at: now, level, line: render(args), suppressed: 0 });
     while (recent.size > DEDUPE_MAX_KEYS) recent.delete(recent.keys().next().value);
   }
   sink(level, `${level.padEnd(5)} ${line}`);
 }
+
+// A burst that stops is never followed by another identical line, so its suppressed count would be lost.
+// Report it once the window has passed.
+export function flushSuppressed(now = Date.now()) {
+  for (const [key, entry] of recent) {
+    if (!entry.suppressed || now - entry.at < DEDUPE_WINDOW_MS) continue;
+    sink(entry.level, `${entry.level.padEnd(5)} ${entry.line} (+${entry.suppressed} identical suppressed, last seen ${Math.round((now - entry.at) / 1000)}s ago)`);
+    entry.suppressed = 0;
+    recent.delete(key);
+  }
+}
+setInterval(() => flushSuppressed(), DEDUPE_WINDOW_MS).unref();
 
 export const log = {
   error: (...args) => emit("error", args),
