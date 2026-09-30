@@ -7,7 +7,7 @@
 // The other books (Fonbet, GGBET, Pinnacle) are not mocked and fail fast, so this measures a
 // LOWER bound for a full production feed. Use it to compare before/after a change, not as an absolute budget.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, readFileSync as read, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -36,11 +36,11 @@ const child = spawn('node', ['src/index.js'], { cwd: root, stdio: 'ignore', env:
 const base = `http://127.0.0.1:${port}`;
 const clk = 100; // USER_HZ on Linux
 const cpuTicks = () => { const f = readFileSync(`/proc/${child.pid}/stat`, 'utf8').split(') ')[1].split(' '); return Number(f[11]) + Number(f[12]); };
-const rssMiB = () => { const m = /VmRSS:\s+(\d+) kB/.exec(read(`/proc/${child.pid}/status`, 'utf8')); return Math.round(Number(m[1]) / 1024); };
-const peakMiB = () => { const m = /VmHWM:\s+(\d+) kB/.exec(read(`/proc/${child.pid}/status`, 'utf8')); return Math.round(Number(m[1]) / 1024); };
+const rssMiB = () => { const m = /VmRSS:\s+(\d+) kB/.exec(readFileSync(`/proc/${child.pid}/status`, 'utf8')); return Math.round(Number(m[1]) / 1024); };
+const peakMiB = () => { const m = /VmHWM:\s+(\d+) kB/.exec(readFileSync(`/proc/${child.pid}/status`, 'utf8')); return Math.round(Number(m[1]) / 1024); };
 for (let i = 0; i < 60; i++) { try { if ((await fetch(base + '/health')).ok) break; } catch {} await new Promise((r) => setTimeout(r, 250)); }
 const sse = new AbortController();
-fetch(base + '/api/feed-stream?modes=live,prematch,results,history,leagues&thin=1', { signal: sse.signal }).then(async (r) => { for await (const _ of r.body); }).catch(() => {});
+fetch(base + '/api/feed-stream?modes=live,prematch,results,history,leagues&thin=1', { signal: sse.signal }).then(async (r) => { for await (const chunk of r.body) void chunk; }).catch(() => {});
 const poll = setInterval(() => { for (const p of ['/api/ui/live?meta=1&thin=1', '/api/ui/prematch?meta=1&thin=1']) fetch(base + p).catch(() => {}); }, 5000);
 const idle = { rss: rssMiB(), cpu: cpuTicks() }, samples = []; let last = idle.cpu;
 for (let t = 10; t <= seconds; t += 10) {

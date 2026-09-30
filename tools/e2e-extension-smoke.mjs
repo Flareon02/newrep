@@ -6,10 +6,12 @@
 //   cd server && npm install --omit=dev && cd ..
 //   node tools/e2e-extension-smoke.mjs        (needs Playwright + Chromium; see docs/DEPLOYMENT.md)
 //
-// The server is started with an empty temporary data directory and cannot reach the real
-// bookmakers from CI, so no feed content is asserted - only transport, config and auth.
+// The server runs with an empty temporary data directory against a local mock of the AstekBet
+// API built from test fixtures (the real bookmakers are never contacted), so it asserts the whole
+// path: upstream feed -> server -> SSE/HTTP -> service worker -> rendered cards, plus config and auth.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import http from 'node:http';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,9 +27,19 @@ const profile = mkdtempSync(path.join(tmpdir(), 'monitor-e2e-profile-'));
 const failures = [];
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' - ' + detail : ''}`); if (!ok) failures.push(name); };
 
+const fixtures = path.join(root, 'server', 'test', 'fixtures');
+const routes = [[/LiveFeed\/Get1x2_VZip/, 'astek-live.json'], [/LineFeed\/GetChampsZip/, 'astek-champs.json'], [/LineFeed\/Get1x2_VZip/, 'astek-prematch-games.json']];
+const mock = http.createServer((req, res) => {
+  const hit = routes.find(([re]) => re.test(req.url));
+  if (!hit) { res.writeHead(404).end('{}'); return; }
+  res.writeHead(200, { 'content-type': 'application/json' }).end(readFileSync(path.join(fixtures, hit[1])));
+}).listen(0, '127.0.0.1');
+await new Promise((resolve) => mock.once('listening', resolve));
+const upstream = `http://127.0.0.1:${mock.address().port}`;
+
 const server = spawn('node', ['src/index.js'], {
   cwd: path.join(root, 'server'),
-  env: { ...process.env, DATA_DIR: dataDir, PORT: String(PORT), API_TOKEN: TOKEN, NODE_OPTIONS: '--disable-warning=ExperimentalWarning' },
+  env: { ...process.env, DATA_DIR: dataDir, PORT: String(PORT), API_TOKEN: TOKEN, ASTEK_ORIGINS: upstream, FONBET_URLS: upstream + '/none', FONBET_DELTA_URLS: upstream + '/none', FONBET_RESULTS_URLS: upstream + '/none', GGBET_LIVE_ENABLED: '0', NODE_OPTIONS: '--disable-warning=ExperimentalWarning' },
   stdio: 'ignore',
 });
 const base = `http://${host}:${PORT}`;
@@ -50,9 +62,24 @@ try {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   await page.goto(`chrome-extension://${extensionId}/app.html`);
-  await page.waitForTimeout(4000);
+  await page.waitForSelector('article.card', { timeout: 20000 }).catch(() => {});
+  check('LIVE cards from the server feed are rendered', (await page.locator('article.card').count()) > 0, `${await page.locator('article.card').count()} cards`);
+  await page.waitForTimeout(1500);
+  const health = await (await fetch(base + '/health')).json();
+  check('extension registered its visible LIVE fixtures (odds-watch accepted)', (health.oddsWatch?.clients ?? 0) >= 1, JSON.stringify(health.oddsWatch));
   check('app page uses the configured server', (await page.evaluate(() => BASE)) === base);
   check('no script errors on load', errors.length === 0, errors.slice(0, 3).join(' | '));
+
+  // Secondary pages must also load without script errors (they share globals across many files).
+  for (const name of ['odds.html', 'score-history.html']) {
+    const extra = await context.newPage();
+    const problems = [];
+    extra.on('pageerror', (e) => problems.push(e.message));
+    await extra.goto(`chrome-extension://${extensionId}/${name}`);
+    await extra.waitForTimeout(1500);
+    check(`${name} loads without script errors`, problems.length === 0, problems.slice(0, 3).join(' | '));
+    await extra.close();
+  }
 
   await page.click('#settingsButton');
   check('settings show the server section', (await page.inputValue('#serverBase')) === base);
@@ -70,6 +97,7 @@ try {
 } finally {
   await context?.close().catch(() => {});
   server.kill('SIGTERM');
+  mock.close();
   rmSync(dataDir, { recursive: true, force: true });
   rmSync(profile, { recursive: true, force: true });
 }

@@ -1,0 +1,22 @@
+{
+  "name": "esports-monitor",
+  "private": true,
+  "description": "Esports Monitor: server (server/) and Chrome extension (extension/). Runtime needs nothing installed here; this file only drives tests, lint and packaging.",
+  "scripts": {
+    "test": "npm run test:server && npm run test:extension",
+    "test:server": "cd server && npm test",
+    "test:extension": "node --test extension/test/*.test.mjs",
+    "lint": "eslint .",
+    "e2e": "node tools/e2e-extension-smoke.mjs",
+    "compare": "node tools/compare-with-original.mjs --original main",
+    "package": "python3 tools/package-release.py"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "eslint": "^10.1.0",
+    "globals": "^17.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
