@@ -20,6 +20,7 @@ import { compareSchedule } from './comparison.js';
 import {queryUiEvents,queryLeagueCatalog,enrichResultsWithPrematch,mergeUiLedger,decorateUiEvent,buildUiPrematchEvents,compactUiEvent,compactUiPayload} from './ui-service.js';
 import {enrichEventMarketSemantics} from './market-semantics.js';
 import {normalizeErrorBody} from './http-errors.js';
+import {createAuthorizer} from './auth.js';
 import {randomUUID} from 'node:crypto';
 
 function memoryStatus(){try{const m=process.memoryUsage();return {rssMiB:Math.round(m.rss/1048576),heapUsedMiB:Math.round(m.heapUsed/1048576),heapTotalMiB:Math.round(m.heapTotal/1048576),externalMiB:Math.round(m.external/1048576)};}catch{return {rssMiB:null};}}
@@ -172,7 +173,9 @@ export function sseEventWire(event,payload){
   return `event: ${String(event||'message')}\ndata: ${JSON.stringify(payload??{})}\n\n`;
 }
 
-export function createApi({ liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
+export function createApi({ authToken=config.apiToken, authTrustLoopback=true, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
+  const authorizer=createAuthorizer(authToken,{trustLoopback:authTrustLoopback});
+  if(!authorizer.enabled)log.warn('[api] API_TOKEN is not set: write and compute endpoints are open to any client that can reach this port');
   const lag=monitorEventLoopDelay({resolution:20});lag.enable();
   const lagTimer=setInterval(()=>lag.reset(),60000);lagTimer.unref();
   // Build current views in the background; GET reads the prepared snapshot.
@@ -326,10 +329,11 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
     if (req.method === "OPTIONS") {
       res.statusCode = 204;applyCommonHeaders(req,res);
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, If-None-Match");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, If-None-Match, Authorization, X-API-Token");
       res.setHeader("Access-Control-Max-Age", "86400");
       return res.end();
     }
+    if(!authorizer.allows(req,url.pathname)){res.setHeader('WWW-Authenticate','Bearer realm="esports-monitor"');return sendJson(req,res,401,{error:'Требуется токен доступа. Укажите токен сервера в настройках расширения.'});}
     if(req.method==='POST'&&url.pathname==='/api/league-links')return sendJson(req,res,410,{error:'Прямое редактирование отключено. Обновите расширение и используйте защищённую публикацию.'});
     if(req.method==='POST'&&url.pathname==='/api/league-links/publish'){
       try{
@@ -423,7 +427,7 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
         fonbetCollector: fonbetCollector?.status?.()||{enabled:false},
         ggbetCollector: ggbetCollector?.status?.()||{enabled:false},
         results: resultsService?.status?.()||{enabled:false}
-        ,leagueRules:{revision:leagueStore.revision(),groups:leagueStore.state.links.length,catalogLeagues:leagueStore.catalog.size,hiddenLeagueKeys:leagueStore.state.visibility.excludedLeagueKeys.length,publishAuth:'one-time-challenge'},security:{cors:'extension-only',getRateLimitPerMinute:config.apiRateLimitPerMinute,postRateLimitPerMinute:config.apiPostRateLimitPerMinute,sseLimitPerIp:config.apiSseLimitPerIp,upstreamMaxBytes:config.upstreamMaxBytes}
+        ,leagueRules:{revision:leagueStore.revision(),groups:leagueStore.state.links.length,catalogLeagues:leagueStore.catalog.size,hiddenLeagueKeys:leagueStore.state.visibility.excludedLeagueKeys.length,publishAuth:'one-time-challenge'},security:{cors:'extension-only',writeAuth:authorizer.enabled?'token':'open',getRateLimitPerMinute:config.apiRateLimitPerMinute,postRateLimitPerMinute:config.apiPostRateLimitPerMinute,sseLimitPerIp:config.apiSseLimitPerIp,upstreamMaxBytes:config.upstreamMaxBytes}
       });
     }
 

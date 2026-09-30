@@ -37,6 +37,9 @@ services:
       DATA_DIR: "/data"
       # error | warn | info (default) | debug. Debug logs every poll; enable only while diagnosing.
       LOG_LEVEL: "${LOG_LEVEL:-info}"
+      # Optional shared secret (>= 16 chars) required for POST endpoints, league publishing and HLTV lookups.
+      # Empty = open, as in 4.3.5. Put the real value in .env (never in Git) and in the extension settings.
+      API_TOKEN: "${API_TOKEN:-}"
       ASTEK_ORIGINS: "https://astekbet.com,https://astekbet-0021.pro"
       FONBET_URLS: "https://line04w.bk6bba-resources.com/events/listBase?lang=en&scopeMarket=1600,https://line-lb51.bk6bba-resources.com/events/listBase?lang=en&scopeMarket=1600"
       # HAR-confirmed incremental feed. A failed delta automatically falls back

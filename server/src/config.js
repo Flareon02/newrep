@@ -16,6 +16,8 @@ export const config = {
   version: "4.3.5",
   port: intEnv("PORT", 8080),
   dataDir: process.env.DATA_DIR || "/data",
+  // Optional shared secret for write/compute endpoints (see src/auth.js). Empty = unauthenticated (legacy behaviour).
+  apiToken: String(process.env.API_TOKEN || "").trim(),
   origins: originList.length ? originList : ["https://astekbet.com"],
   origin: originList[0] || "https://astekbet.com",
   ggbetLiveEnabled: !/^(?:0|false|off|no)$/i.test(String(process.env.GGBET_LIVE_ENABLED || "1")),
