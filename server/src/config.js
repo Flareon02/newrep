@@ -73,6 +73,12 @@ export const config = {
   apiSseLimitPerIp: intEnv("API_SSE_LIMIT_PER_IP", 24, 2),
   prematchBulkRetryMs: intEnv("PREMATCH_BULK_RETRY_MS", 600000, 60000),
   prematchBulkCount: intEnv("PREMATCH_BULK_COUNT", 50, 20),
+  // 0 = keep forever (default). See src/retention.js.
+  oddsRetentionDays: intEnv("ODDS_RETENTION_DAYS", 0, 0),
+  scoreRetentionDays: intEnv("SCORE_RETENTION_DAYS", 0, 0),
+  statisticsRetentionDays: intEnv("STATISTICS_RETENTION_DAYS", 0, 0),
+  diskWarnFreeMiB: intEnv("DISK_WARN_FREE_MIB", 1024, 64),
+  diskCriticalFreeMiB: intEnv("DISK_CRITICAL_FREE_MIB", 512, 32),
   historyTtlMs: intEnv("HISTORY_TTL_MS", 365 * 24 * 60 * 60 * 1000, 60 * 60 * 1000),
   historyMax: intEnv("HISTORY_MAX", 100000, 100),
   defaultPrematchChampId: process.env.PREMATCH_SEED_CHAMP || "2900972",

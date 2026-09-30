@@ -88,6 +88,13 @@ services:
       PREMATCH_FORMAT_TIMEOUT_MS: "8000"
       RESULTS_DAY_CONCURRENCY: "1"
       RESULTS_WARMUP_DELAY_MS: "180000"
+      # Optional retention in days (0 = keep forever, the default). Only whole events whose newest
+      # record is older than the limit are removed. See docs/DEPLOYMENT.md before enabling.
+      ODDS_RETENTION_DAYS: "${ODDS_RETENTION_DAYS:-0}"
+      SCORE_RETENTION_DAYS: "${SCORE_RETENTION_DAYS:-0}"
+      STATISTICS_RETENTION_DAYS: "${STATISTICS_RETENTION_DAYS:-0}"
+      DISK_WARN_FREE_MIB: "1024"
+      DISK_CRITICAL_FREE_MIB: "512"
       HISTORY_TTL_MS: "31537000000"
       HISTORY_MAX: "100000"
       LOW_PRIORITY_IDLE_WAIT_MS: "4000"

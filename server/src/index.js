@@ -17,6 +17,7 @@ import {PinnacleCollector} from './pinnacle.js';
 import {HltvService} from './hltv-service.js';
 import {OddsService} from './odds-service.js';
 import {CrossbetService} from './crossbet.js';
+import {startRetention} from './retention.js';
 const pinnacleLiveState=new SnapshotState('pinnacle-live',60000);
 const pinnaclePrematchState=new SnapshotState('pinnacle-prematch',300000);
 const startedAt = Date.now();
@@ -58,15 +59,17 @@ server.listen(config.port, "0.0.0.0", () => {
   prematchCollector.start();
   fonbetCollector.start();ggbetCollector.start();pinnacleCollector.start();
   resultsService.start();
+  retention=startRetention({statistics:server.statistics});
 });
 
-let shuttingDown=false;
+let shuttingDown=false,retention=null;
 async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   if(shuttingDown)return;shuttingDown=true;
   log.info(`[api] shutting down (${reason}${persist?'':' / no-persist'})`);
   const deadline=setTimeout(() => process.exit(exitCode||1), persist?30000:5000);deadline.unref();
   const closed=new Promise(resolve=>server.close(()=>resolve()));
   await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);
+  retention?.stop();
   await Promise.allSettled([server.stopStatistics(),oddsService.stop()]);
   if(persist){
     await Promise.allSettled([liveState.save(),prematchState.save(),fonbetLiveState.save(),fonbetPrematchState.save(),ggbetLiveState.save(),pinnaclePrematchState.save(),pinnacleLiveState.save(),flushMatcherAliases()]);

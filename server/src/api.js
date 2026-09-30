@@ -680,5 +680,6 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
     }catch(error){log.error('[api]',error.message);if(!res.headersSent)sendJson(req,res,Number(error?.status)||503,{error:error.message});else res.end();}
   });
   server.stopStatistics=()=>statistics.stop();
+  server.statistics=statistics;
   server.on("close",()=>{clearInterval(snapshotTimer);clearInterval(catalogTimer);clearInterval(lagTimer);clearInterval(rateTimer);for(const fn of feedUnsub)try{fn();}catch{}for(const client of feedClients)try{client.res.end();}catch{}feedClients.clear();lag.disable();});server.maxConnections=config.apiMaxConnections;server.headersTimeout=15000;server.requestTimeout=30000;server.keepAliveTimeout=5000;server.maxRequestsPerSocket=500;return server;
 }

@@ -284,9 +284,21 @@ export async function fetchJson(url, referer, options = {}) {
   }
 }
 
+// "ok" | "low" | "critical" | "unknown". /health reports it and a throttled log
+// line warns before the 10 GB disk fills up (a full disk corrupts nothing in
+// SQLite/WAL but stops every write).
+export function diskLevel(freeMiB){
+  if(!Number.isFinite(freeMiB))return 'unknown';
+  return freeMiB<config.diskCriticalFreeMiB?'critical':freeMiB<config.diskWarnFreeMiB?'low':'ok';
+}
+let lastDiskWarnAt=0;
+function warnDisk(level,freeMiB){
+  const now=Date.now();if(level==='ok'||level==='unknown'||now-lastDiskWarnAt<3600000)return;
+  lastDiskWarnAt=now;log.warn(`[storage] disk space ${level}: ${freeMiB} MiB free in ${config.dataDir}. Consider ODDS_RETENTION_DAYS / STATISTICS_RETENTION_DAYS and removing old backups/images.`);
+}
 export async function storageStatus(){
-  try{const stat=await fs.statfs(config.dataDir);const block=Number(stat.bsize||stat.frsize||4096);return {freeMiB:Math.round(Number(stat.bavail||0)*block/1048576),totalMiB:Math.round(Number(stat.blocks||0)*block/1048576),pendingWrites:pendingWrites.size,...sqliteMetrics({checkIntegrity:false})};}
-  catch{return {freeMiB:null,totalMiB:null,pendingWrites:pendingWrites.size,...sqliteMetrics({checkIntegrity:false})};}
+  try{const stat=await fs.statfs(config.dataDir);const block=Number(stat.bsize||stat.frsize||4096);const freeMiB=Math.round(Number(stat.bavail||0)*block/1048576),level=diskLevel(freeMiB);warnDisk(level,freeMiB);return {freeMiB,totalMiB:Math.round(Number(stat.blocks||0)*block/1048576),diskLevel:level,pendingWrites:pendingWrites.size,...sqliteMetrics({checkIntegrity:false})};}
+  catch{return {freeMiB:null,totalMiB:null,diskLevel:'unknown',pendingWrites:pendingWrites.size,...sqliteMetrics({checkIntegrity:false})};}
 }
 
 export async function mapLimit(items, limit, worker) {
