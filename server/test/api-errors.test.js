@@ -42,6 +42,11 @@ test('user-facing validation messages pass through untouched', () => {
   assert.equal(publicMessage('Выберите две команды', 400).message, 'Выберите две команды');
   assert.equal(publicMessage('HTTP 403', 502).message, 'HTTP 403');
   assert.equal(publicMessage('fetch failed', 502).message, 'Источник данных временно недоступен');
+  // A client error that merely mentions these words, or a path, is our own text and is left alone.
+  assert.equal(publicMessage('Invalid network id', 400).message, 'Invalid network id');
+  assert.equal(publicMessage('Запрос превысил time out клиента', 504).message, 'Запрос превысил time out клиента');
+  assert.equal(publicMessage('Нет файла /data/teams/x', 404).message, 'Нет файла /data/teams/x');
+  assert.equal(publicMessage('boom at /app/src/results.js:12:3', 500).message, 'Внутренняя ошибка сервера');
   assert.equal(publicMessage('The operation was aborted due to timeout', 504).message, 'Превышено время ожидания');
   assert.equal(normalizeErrorBody({ matched: false, error: 'x' }, 404).body.matched, false);
   assert.equal(errorCode(413), 'payload_too_large');

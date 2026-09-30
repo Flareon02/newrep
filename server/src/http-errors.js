@@ -14,16 +14,21 @@ export function errorCode(status) {
 
 // Messages produced by JavaScript/Node/SQLite internals describe our code, not
 // the user's request. They are logged server-side and replaced for the client.
-const INTERNAL = /Cannot (?:read|set|destructure) propert|is not a function|is not defined|is not iterable|is not a constructor|Unexpected (?:token|end of JSON)|in JSON at position|Invalid (?:array|string|typed array) length|Maximum call stack|\bSQLITE|\bERR_[A-Z_]+\b|\bE(?:NOENT|ACCES|PERM|EXIST|CONNRESET|CONNREFUSED|PIPE|ADDRINUSE|MFILE|NOTFOUND|AI_AGAIN)\b|node_modules|\/(?:app|home|root|data)\/|\.js:\d+/;
-const UNREACHABLE = /fetch failed|ETIMEDOUT|socket hang up|network/i;
-const TIMEOUT = /aborted|timed? ?out/i;
+const INTERNAL = /Cannot (?:read|set|destructure) propert|is not a function|is not defined|is not iterable|is not a constructor|Unexpected (?:token|end of JSON)|in JSON at position|Invalid (?:array|string|typed array) length|Maximum call stack|\bSQLITE|\bERR_[A-Z_]+\b|\bE(?:NOENT|ACCES|PERM|EXIST|CONNRESET|CONNREFUSED|PIPE|ADDRINUSE|MFILE|NOTFOUND|AI_AGAIN)\b|node_modules|\/(?:app|home|root)\/\S*\.[cm]?js\b|\.[cm]?js:\d+/;
+// Upstream/transport failures are only recognised on 5xx (a 4xx is the client's own mistake and its text is
+// ours) and only in English: our own user-facing messages are Russian and must never be rewritten.
+const UNREACHABLE = /fetch failed|ETIMEDOUT|socket hang up/i;
+const TIMEOUT = /operation was aborted|timed? ?out/i;
+const russian = (text) => /[А-Яа-яЁё]/.test(text);
 
 export function publicMessage(message, status = 500) {
   const text = String(message ?? "").slice(0, 500);
   if (!text) return { message: status >= 500 ? "Внутренняя ошибка сервера" : "Некорректный запрос", internal: status >= 500 };
   if (INTERNAL.test(text)) return { message: "Внутренняя ошибка сервера", internal: true };
-  if (UNREACHABLE.test(text) && !/[А-Яа-яЁё]/.test(text)) return { message: "Источник данных временно недоступен", internal: true };
-  if (TIMEOUT.test(text) && !/[А-Яа-яЁё]/.test(text)) return { message: "Превышено время ожидания", internal: true };
+  if (status >= 500 && !russian(text)) {
+    if (UNREACHABLE.test(text)) return { message: "Источник данных временно недоступен", internal: true };
+    if (TIMEOUT.test(text)) return { message: "Превышено время ожидания", internal: true };
+  }
   return { message: text, internal: false };
 }
 

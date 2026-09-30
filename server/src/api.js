@@ -39,7 +39,7 @@ function sendJson(req, res, status, data, etag = "") {
   if(status>=400){
     const normalized=normalizeErrorBody(data,status,req?.requestId);
     data=normalized.body;
-    if(normalized.internal)log.error(`[api] ${req?.method||''} ${String(req?.url||'').split('?')[0]} -> ${status} (${req?.requestId||'-'}): ${normalized.original}`);
+    if(normalized.internal)log[status>=500?'error':'warn'](`[api] ${req?.method||''} ${String(req?.url||'').split('?')[0]} -> ${status} (${req?.requestId||'-'}): ${normalized.original}`);
   }
   const body=Buffer.from(JSON.stringify(data));
   res.statusCode = status;
