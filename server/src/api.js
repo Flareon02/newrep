@@ -19,6 +19,8 @@ import { leagueStore } from './league-store.js';
 import { compareSchedule } from './comparison.js';
 import {queryUiEvents,queryLeagueCatalog,enrichResultsWithPrematch,mergeUiLedger,decorateUiEvent,buildUiPrematchEvents,compactUiEvent,compactUiPayload} from './ui-service.js';
 import {enrichEventMarketSemantics} from './market-semantics.js';
+import {normalizeErrorBody} from './http-errors.js';
+import {randomUUID} from 'node:crypto';
 
 function memoryStatus(){try{const m=process.memoryUsage();return {rssMiB:Math.round(m.rss/1048576),heapUsedMiB:Math.round(m.heapUsed/1048576),heapTotalMiB:Math.round(m.heapTotal/1048576),externalMiB:Math.round(m.external/1048576)};}catch{return {rssMiB:null};}}
 
@@ -32,6 +34,11 @@ function applyCommonHeaders(req,res){
   if(/^chrome-extension:\/\/[a-p]{32}$/.test(origin)){res.setHeader('Access-Control-Allow-Origin',origin);res.setHeader('Vary','Origin');}
 }
 function sendJson(req, res, status, data, etag = "") {
+  if(status>=400){
+    const normalized=normalizeErrorBody(data,status,req?.requestId);
+    data=normalized.body;
+    if(normalized.internal)log.error(`[api] ${req?.method||''} ${String(req?.url||'').split('?')[0]} -> ${status} (${req?.requestId||'-'}): ${normalized.original}`);
+  }
   const body=Buffer.from(JSON.stringify(data));
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -303,6 +310,7 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
   };
   const server=http.createServer(async (req, res) => {
     try {
+    req.requestId=randomUUID().slice(0,8);res.setHeader('X-Request-Id',req.requestId);
     apiTraffic.requests++;apiTraffic.requestRecent.push(Date.now());if(apiTraffic.requestRecent.length>5000)apiTraffic.requestRecent.splice(0,apiTraffic.requestRecent.length-5000);
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     if(req.method!=='OPTIONS'){
