@@ -1,5 +1,5 @@
 importScripts('server-config.js','league-model.js','feed-push.js');
-const PUSH_CHECKPOINT_MS=120000;
+const PUSH_CHECKPOINT_MS=120000,STREAM_STALL_MS=50000;
 const inflight=new Map(),lastAttempt={},ports=new Set(),portActivity=new WeakMap(),seenSets=new Map(),failures={},retryAfter={};let cache={},prefs={},seen={},lastPersistAt=0,schedulerTimer=null,streamAbort=null,streamRetryTimer=null,streamHealthy=false,streamRunning=false,streamFailures=0,streamLastAt=0;
 const boot=Promise.all([chrome.storage.local.get(['prefs','seenEvents']),ServerConfig.ready]).then(([data])=>{cache={};prefs=data.prefs||{};seen=data.seenEvents||{};chrome.storage.local.remove(['historyCache','snapshots']).catch(()=>{});});
 function wantsBackgroundFeeds(){return !!(prefs.notifications?.live||prefs.notifications?.prematch);}
@@ -133,15 +133,20 @@ async function handleStreamEvent(type,data){
  }
 }
 async function streamLoop(){
- if(streamRunning||!ports.size)return;await boot;if(streamRunning||!ports.size)return;streamRunning=true;clearTimeout(streamRetryTimer);streamRetryTimer=null;const controller=new AbortController();streamAbort=controller;
+ if(streamRunning||!ports.size)return;await boot;if(streamRunning||!ports.size)return;streamRunning=true;clearTimeout(streamRetryTimer);streamRetryTimer=null;const controller=new AbortController();streamAbort=controller;let stalled=false,lastByteAt=Date.now();
+ // The server pings every 15 s. Nothing received for STREAM_STALL_MS - before the response headers or after them - means a
+ // half-dead connection (frozen server, vanished NAT entry): abort it so the normal reconnect-with-backoff path runs.
+ const stallTimer=setInterval(()=>{if(Date.now()-lastByteAt>STREAM_STALL_MS){stalled=true;controller.abort();}},5000);
  try{
   const response=await fetch(`${ServerConfig.base}/api/feed-stream?modes=live,prematch,results,history,leagues&thin=1`,{cache:'no-store',headers:ServerConfig.headers({Accept:'text/event-stream'}),signal:controller.signal});if(!response.ok||!response.body)throw Error(`HTTP ${response.status}`);
   const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';streamHealthy=true;streamFailures=0;
-  while(ports.size&&!controller.signal.aborted){const {value,done}=await reader.read();if(done)throw Error('Поток закрыт сервером');buffer+=decoder.decode(value,{stream:true});let index;while((index=buffer.search(/\r?\n\r?\n/))>=0){const block=buffer.slice(0,index),sep=buffer.match(/\r?\n\r?\n/)?.[0]?.length||2;buffer=buffer.slice(index+sep);const event=FeedPush.parseSseBlock(block);if(event)await handleStreamEvent(event.type,event.data);}}
- }catch(error){if(!controller.signal.aborted){streamHealthy=false;streamFailures++;}}
+  lastByteAt=Date.now();
+  while(ports.size&&!controller.signal.aborted){const {value,done}=await reader.read();lastByteAt=Date.now();if(done)throw Error('Поток закрыт сервером');buffer+=decoder.decode(value,{stream:true});let index;while((index=buffer.search(/\r?\n\r?\n/))>=0){const block=buffer.slice(0,index),sep=buffer.match(/\r?\n\r?\n/)?.[0]?.length||2;buffer=buffer.slice(index+sep);const event=FeedPush.parseSseBlock(block);if(event)await handleStreamEvent(event.type,event.data);}}
+ }catch(error){if(!controller.signal.aborted||stalled){streamHealthy=false;streamFailures++;}}
  finally{
+  clearInterval(stallTimer);
   if(streamAbort===controller)streamAbort=null;streamRunning=false;
-  if(ports.size&&!controller.signal.aborted){
+  if(ports.size&&(!controller.signal.aborted||stalled)){
    // Do not wait for the long reconciliation interval after a stream loss.
    // Resume normal polling immediately while SSE reconnects independently.
    scheduleFeeds(0);
