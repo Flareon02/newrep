@@ -200,6 +200,12 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
   const allowRequest=(req,limit)=>{const ip=clientIp(req),now=Date.now(),old=rateState.get(ip),row=old&&now-old.at<60000?old:{at:now,get:0,post:0};const field=req.method==='POST'?'post':'get';row[field]++;rateState.set(ip,row);return row[field]<=limit;};
   const rateTimer=setInterval(()=>{const now=Date.now();for(const [ip,row] of rateState)if(now-row.at>120000)rateState.delete(ip);},60000);rateTimer.unref?.();
   const acquireSse=req=>{const ip=clientIp(req),n=sseState.get(ip)||0;if(n>=config.apiSseLimitPerIp)return null;sseState.set(ip,n+1);let released=false;return()=>{if(released)return;released=true;const left=Math.max(0,(sseState.get(ip)||1)-1);if(left)sseState.set(ip,left);else sseState.delete(ip);};};
+  const oddsWatch=(()=>{const TTL=45000,MAX_CLIENTS=64,rows=new Map();
+    const prune=now=>{for(const [ip,row] of rows)if(now-row.at>TTL)rows.delete(ip);};
+    return {
+      set(ip,ids){const now=Date.now();prune(now);if(ids.length){rows.delete(ip);rows.set(ip,{ids,at:now});while(rows.size>MAX_CLIENTS)rows.delete(rows.keys().next().value);}else rows.delete(ip);return {ok:true,accepted:ids.length,ttlMs:TTL,warming:false};},
+      status(){prune(Date.now());return {clients:rows.size,ids:new Set([...rows.values()].flatMap(r=>r.ids)).size,warming:false};}
+    };})();
   const feedClients=new Set();
   const feedStates={live:[liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState],prematch:[prematchState,fonbetPrematchState,pinnaclePrematchState]};
   const feedMeta=mode=>mode==='live'?feedMetaSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState):feedMetaSnapshot('prematch',prematchState,fonbetPrematchState,pinnaclePrematchState);
@@ -375,6 +381,15 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
       const body=await readBody(req,512000);if(!Array.isArray(body.events)||body.events.length>500)return sendJson(req,res,400,{error:'Слишком много матчей'});
       return sendJson(req,res,200,await statistics.availability(body.events));
     }
+    if(req.method==='POST'&&url.pathname==='/api/ui/odds-watch'){
+      // Extension 8.1.x reports up to 8 visible LIVE fixtures here. Server 4.3.3+
+      // deliberately no longer keeps their full odds "warm" (that path caused the
+      // 4.3.2 CPU/RAM regression), so the list is only validated, remembered for
+      // a short TTL and exposed in /health. Answering 200 keeps the contract whole.
+      const body=await readBody(req,8192),ids=body?.ids;
+      if(!Array.isArray(ids)||ids.length>8||ids.some(id=>!['string','number'].includes(typeof id)||String(id).length>300))return sendJson(req,res,400,{error:'Неверный список матчей'});
+      return sendJson(req,res,200,oddsWatch.set(clientIp(req),ids.map(String)));
+    }
     if (req.method !== "GET") return sendJson(req, res, 405, { error: "Method not allowed" });
     if(url.pathname==='/api/odds/job'){
       const job=oddsService?.get(url.searchParams.get('id'));return sendJson(req,res,job?200:404,job||{error:'Расчёт не найден. Запустите генерацию ещё раз.'});
@@ -400,7 +415,7 @@ export function createApi({ liveCollector,crossbetService,hltvService,oddsServic
           fonbetPrematch: config.fonbetPrematchIntervalMs,pinnaclePrematch:60000,pinnacleLive:15000,pinnacleLiveDetail:pinnacleCollector?.detailInterval||2000
         },
         language: "en",
-        runtime:{...memoryStatus(),eventLoopMaxMs:Math.round(lag.max/1e6),matcher:matcherStatus(),astekGate:astekRequestStatus(),priority:{order:['live','prematch','odds','results','history'],singleCore:true,historyMode:'paged-worker-idle-only',historyAutoWarm:false,historyPagesCached:historyPageCache.size,resultsYield:true},storage:await storageStatus()},upstreamRequests:upstreamStatus(),apiTraffic:apiTrafficStatus(),
+        runtime:{...memoryStatus(),eventLoopMaxMs:Math.round(lag.max/1e6),matcher:matcherStatus(),astekGate:astekRequestStatus(),priority:{order:['live','prematch','odds','results','history'],singleCore:true,historyMode:'paged-worker-idle-only',historyAutoWarm:false,historyPagesCached:historyPageCache.size,resultsYield:true},storage:await storageStatus()},upstreamRequests:upstreamStatus(),apiTraffic:apiTrafficStatus(),oddsWatch:oddsWatch.status(),
         hltv:hltvService?.status(),
         statistics:{archivedMatches:Object.keys(statistics.store.index).length,lastError:statistics.lastError,providers:{dota2:statistics.providers.hawk||{},cs2:statistics.providers.crossbet||{}},sources:{dota2:hawkService.status(),cs2:crossbetService?.status?.()||{enabled:false,available:false}},running:statistics.running,lastSweepAt:statistics.lastSweepAt,currentAvailability:statistics.currentAvailability?.size||0},
         live: { astek: liveState.status(), fonbet: fonbetLiveState.status(),...(pinnacleLiveState?{pinnacle:{...pinnacleLiveState.status(),...pinnacleCollector?.status()}}:{}),...(ggbetLiveState?{ggbet:{...ggbetLiveState.status(),...ggbetCollector?.status()}}:{}) },
