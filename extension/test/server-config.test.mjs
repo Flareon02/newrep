@@ -55,6 +55,17 @@ test('invalid addresses fall back to the default instead of breaking requests', 
   }
 });
 
+test('a reverse-proxy path prefix is kept, credentials are refused, permission patterns carry no port', async () => {
+  const { ServerConfig } = load({ stored: { base: 'https://host.example/monitor/?x=1#y' } });
+  await ServerConfig.ready;
+  assert.equal(ServerConfig.base, 'https://host.example/monitor');
+  assert.equal(ServerConfig.normalize('http://user:pass@host:8080'), '');
+  assert.equal(ServerConfig.normalize('http://host:8080/'), 'http://host:8080');
+  assert.equal(ServerConfig.permissionPattern('http://10.0.0.5:8080/api'), 'http://10.0.0.5/*');
+  assert.equal(ServerConfig.permissionPattern('https://host.example/monitor'), 'https://host.example/*');
+  assert.equal(ServerConfig.permissionPattern('http://[::1]:8080'), 'http://[::1]/*');
+});
+
 test('a page whose mirror is stale reloads exactly once', async () => {
   const { ServerConfig, reloads, local } = load({ stored: { base: 'http://10.0.0.5:8080', token: '' } });
   const changed = await ServerConfig.ready;
@@ -79,7 +90,7 @@ test('save() persists sanitized values and storage changes propagate', async () 
   const { ServerConfig, store, listeners } = load();
   await ServerConfig.ready;
   await ServerConfig.save({ base: 'http://host:9000/some/path', token: 'tok' });
-  assert.equal(JSON.stringify(store.server), JSON.stringify({ base: 'http://host:9000', token: 'tok' }));
+  assert.equal(JSON.stringify(store.server), JSON.stringify({ base: 'http://host:9000/some/path', token: 'tok' }));
   listeners[0]({ server: { newValue: { base: 'http://other:1', token: '' } } }, 'local');
   assert.equal(ServerConfig.base, 'http://other:1');
   await ServerConfig.reset();
