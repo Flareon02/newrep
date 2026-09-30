@@ -1,4 +1,10 @@
-# Esports Monitor Server 4.3.5 — realtime stability
+# Esports Monitor Server 4.4.0 — production hardening
+
+4.4.0 adds operational safety on top of the 4.3.5 runtime without changing its data model or API routes:
+leveled logging, a unified error envelope, an optional API token, SSE limits, opt-in retention and low-disk/History-memory
+warnings. See `CHANGELOG-4.4.0.md`; repository-level notes are in `../docs/` (audit, API contract, deployment, performance budget).
+
+## 4.3.5 — realtime stability (still the runtime baseline)
 
 Server 4.3.5 is a single-core stability release for the current Esports Monitor thin client. It keeps the server-authoritative GGBET market semantics from 4.3.0/4.3.1 and SQLite schema 3.
 
