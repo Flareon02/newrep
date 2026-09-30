@@ -21,6 +21,7 @@ import {queryUiEvents,queryLeagueCatalog,enrichResultsWithPrematch,mergeUiLedger
 import {enrichEventMarketSemantics} from './market-semantics.js';
 import {normalizeErrorBody,publicMessage} from './http-errors.js';
 import {safeWrite} from './sse.js';
+import {historyCapacity,warnHistoryCapacity} from './capacity.js';
 import {createAuthorizer} from './auth.js';
 import {randomUUID} from 'node:crypto';
 
@@ -420,7 +421,7 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
           fonbetPrematch: config.fonbetPrematchIntervalMs,pinnaclePrematch:60000,pinnacleLive:15000,pinnacleLiveDetail:pinnacleCollector?.detailInterval||2000
         },
         language: "en",
-        runtime:{...memoryStatus(),eventLoopMaxMs:Math.round(lag.max/1e6),matcher:matcherStatus(),astekGate:astekRequestStatus(),priority:{order:['live','prematch','odds','results','history'],singleCore:true,historyMode:'paged-worker-idle-only',historyAutoWarm:false,historyPagesCached:historyPageCache.size,resultsYield:true},storage:await storageStatus()},upstreamRequests:upstreamStatus(),apiTraffic:apiTrafficStatus(),oddsWatch:oddsWatch.status(),sse:{open:sseTotal,limit:config.apiSseLimitTotal,feedClients:feedClients.size},
+        runtime:{...memoryStatus(),history:(()=>{const capacity=historyCapacity(states.reduce((n,state)=>n+(state.history?.length||0),0));warnHistoryCapacity(capacity);return capacity;})(),eventLoopMaxMs:Math.round(lag.max/1e6),matcher:matcherStatus(),astekGate:astekRequestStatus(),priority:{order:['live','prematch','odds','results','history'],singleCore:true,historyMode:'paged-worker-idle-only',historyAutoWarm:false,historyPagesCached:historyPageCache.size,resultsYield:true},storage:await storageStatus()},upstreamRequests:upstreamStatus(),apiTraffic:apiTrafficStatus(),oddsWatch:oddsWatch.status(),sse:{open:sseTotal,limit:config.apiSseLimitTotal,feedClients:feedClients.size},
         hltv:hltvService?.status(),
         statistics:{archivedMatches:Object.keys(statistics.store.index).length,lastError:statistics.lastError,providers:{dota2:statistics.providers.hawk||{},cs2:statistics.providers.crossbet||{}},sources:{dota2:hawkService.status(),cs2:crossbetService?.status?.()||{enabled:false,available:false}},running:statistics.running,lastSweepAt:statistics.lastSweepAt,currentAvailability:statistics.currentAvailability?.size||0},
         live: { astek: liveState.status(), fonbet: fonbetLiveState.status(),...(pinnacleLiveState?{pinnacle:{...pinnacleLiveState.status(),...pinnacleCollector?.status()}}:{}),...(ggbetLiveState?{ggbet:{...ggbetLiveState.status(),...ggbetCollector?.status()}}:{}) },
