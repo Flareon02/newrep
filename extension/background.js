@@ -1,12 +1,15 @@
 importScripts('server-config.js','league-model.js','feed-push.js');
 const PUSH_CHECKPOINT_MS=120000,STREAM_STALL_MS=50000;
+// Bumped whenever the server address/token changes; a response that belongs to an older epoch is discarded instead of
+// polluting the cache of the new server with the old server's data or failure.
+let epoch=0;
 const inflight=new Map(),lastAttempt={},ports=new Set(),portActivity=new WeakMap(),seenSets=new Map(),failures={},retryAfter={};let cache={},prefs={},seen={},lastPersistAt=0,schedulerTimer=null,streamAbort=null,streamRetryTimer=null,streamHealthy=false,streamRunning=false,streamFailures=0,streamLastAt=0;
 const boot=Promise.all([chrome.storage.local.get(['prefs','seenEvents']),ServerConfig.ready]).then(([data])=>{cache={};prefs=data.prefs||{};seen=data.seenEvents||{};chrome.storage.local.remove(['historyCache','snapshots']).catch(()=>{});});
 function wantsBackgroundFeeds(){return !!(prefs.notifications?.live||prefs.notifications?.prematch);}
 async function configureBackgroundAlarm(){if(wantsBackgroundFeeds()){const alarm=await chrome.alarms.get('feeds');if(!alarm)chrome.alarms.create('feeds',{periodInMinutes:0.5});}else await chrome.alarms.clear('feeds');}
 chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.prefs){prefs=changes.prefs.newValue||{};configureBackgroundAlarm().catch(()=>{});if((changes.prefs.oldValue?.generatorEnabled===true||!changes.prefs.oldValue?.features630)&&(prefs.hideOdds!==false||prefs.generatorEnabled!==true))chrome.tabs.query({url:chrome.runtime.getURL('odds.html')+'*'}).then(tabs=>Promise.all(tabs.map(t=>chrome.tabs.remove(t.id)))).catch(()=>{});}});
 // A changed server address or token invalidates everything received so far: drop the cache and reconnect.
-chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local'||!changes.server)return;cache={};for(const key of Object.keys(failures))delete failures[key];for(const key of Object.keys(retryAfter))delete retryAfter[key];if(ports.size){stopFeedStream();setTimeout(()=>{startFeedStream();scheduleFeeds(0);},300);}});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local'||!changes.server)return;epoch++;inflight.clear();cache={};for(const key of Object.keys(failures))delete failures[key];for(const key of Object.keys(retryAfter))delete retryAfter[key];if(ports.size){stopFeedStream();setTimeout(()=>{startFeedStream();scheduleFeeds(0);},300);}});
 async function open(){await boot;const url=chrome.runtime.getURL('app.html'),tabs=await chrome.tabs.query({url}),type=prefs.openMode==='tab'?'normal':'popup';for(const tab of tabs){const win=await chrome.windows.get(tab.windowId);if(win.type===type){await chrome.tabs.update(tab.id,{active:true});await chrome.windows.update(win.id,{focused:true});return;}}if(type==='popup')await loadedWindow(url,1060,850);else await chrome.tabs.create({url});}
 chrome.action.onClicked.addListener(open);
 chrome.notifications.onClicked.addListener(open);
@@ -51,6 +54,7 @@ async function poll(kind,force=false){
  if(!force&&now-(lastAttempt[kind]||0)<interval)return cache[kind];
  lastAttempt[kind]=now;
  const run=(async()=>{
+  const myEpoch=epoch;
   try{
    // LIVE is already server-resolved. The line uses the thin-client endpoint,
    // where the server also removes fixtures that have already entered LIVE.
@@ -73,6 +77,7 @@ async function poll(kind,force=false){
      next={...data,_etag:response.headers.get('etag')||'',receivedAt:Date.now(),transportError:''};changed=true;
     }
    }else next={...previous,...meta,events:previous.events,_etag:previous._etag||'',receivedAt:Date.now(),transportError:''};
+   if(myEpoch!==epoch)return cache[kind];
    const previousStructure=previous?.structureRevision;
    failures[kind]=0;retryAfter[kind]=0;cache[kind]=next;
    let seenChanged=false;if(changed)seenChanged=await notifyNew(kind,next).catch(error=>{console.warn('[notification]',error.message);return false;});
@@ -82,6 +87,7 @@ async function poll(kind,force=false){
    const freshness={revision:next.revision,receivedAt:next.receivedAt,transportError:'',stale:next.stale,updating:next.updating,providers:next.providers};
    for(const port of ports)try{port.postMessage(changed?{kind,snapshot:next}:{kind:'freshness',feed:kind,freshness});}catch{}
   }catch(error){
+   if(myEpoch!==epoch)return cache[kind];
    const message=error?.message||String(error),before=cache[kind]?.transportError,count=(failures[kind]||0)+1;failures[kind]=count;retryAfter[kind]=Date.now()+retryDelay(kind,count);
    cache[kind]={...cache[kind],transportError:message,failedAt:Date.now()};
    const freshness={receivedAt:cache[kind]?.receivedAt,transportError:message,failedAt:cache[kind]?.failedAt,stale:cache[kind]?.stale,providers:cache[kind]?.providers};
