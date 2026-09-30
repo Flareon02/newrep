@@ -16,7 +16,7 @@ export class ScoreLog {
         saved=scoreLoad(key);
         if(!saved){const legacy=await this.read(this.filename(key),null);if(legacy){scoreImport(key,legacy);saved=scoreLoad(key);}}
       }else saved=await this.read(this.filename(key),null);
-      const value=saved||{key,entries:[]};if(!this.cache.has(key))this.cache.set(key,value);return this.cache.get(key);
+      const value=saved||{key,entries:[]};if(!this.cache.has(key))this.cache.set(key,value);while(this.cache.size>160)this.cache.delete(this.cache.keys().next().value);return this.cache.get(key)||value;
     })().finally(()=>this.loading.delete(key)));
     return this.loading.get(key);
   }

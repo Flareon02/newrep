@@ -29,7 +29,7 @@ export class HltvService{
   }).catch(error=>{this.lastError=error.message;if(this.blockedUntil<Date.now())this.blockedUntil=Date.now()+60000;throw error;}).finally(()=>this.pending.delete(path));
   this.pending.set(path,run);this.queue=run;return run;
  }
- async search(q){await this.ready;q=name(q);if(q.length<2)return {teams:[],players:[],status:this.status()};const key=HltvData.norm(q),cached=this.searchCache.get(key);if(!cached||Date.now()-cached>HOUR){try{await this.fetchPage('/search?term='+encodeURIComponent(q));}catch{}this.searchCache.set(key,Date.now());}
+ async search(q){await this.ready;q=name(q);if(q.length<2)return {teams:[],players:[],status:this.status()};const key=HltvData.norm(q),cached=this.searchCache.get(key);if(!cached||Date.now()-cached>HOUR){try{await this.fetchPage('/search?term='+encodeURIComponent(q));}catch{}this.searchCache.set(key,Date.now());while(this.searchCache.size>500)this.searchCache.delete(this.searchCache.keys().next().value);}
   return {teams:this.data.teams.filter(t=>HltvData.norm(t.name).includes(key)).slice(0,30),players:this.data.players.filter(p=>HltvData.norm(p.name).includes(key)).slice(0,30),status:this.status()};
  }
  async team(id,refresh=false){await this.ready;id=positive(id);if(!id)throw Error('Неверный ID команды');let value=this.data.teams.find(t=>t.id===id);if(!value?.at||refresh){try{await this.fetchPage('/team/'+id+'/'+HltvData.slug(value?.slug||value?.name));}catch(error){if(!value?.at)throw error;}value=this.data.teams.find(t=>t.id===id);}

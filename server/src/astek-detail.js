@@ -38,7 +38,7 @@ export async function astekLiveDetail(ref){
     const root=await read(id);
     if(number(root.I)!==id)throw Error('Не совпал ID игры в ответе');
     const childId=mapId(root,period)||mapIds.get(id)?.[period],child=childId?await read(childId):null;
-    if(root.BIG)mapIds.set(id,Object.fromEntries(root.BIG.filter(x=>number(x.I)&&Number(x.P)>0).map(x=>[Number(x.P),number(x.I)])));
+    if(root.BIG){mapIds.set(id,Object.fromEntries(root.BIG.filter(x=>number(x.I)&&Number(x.P)>0).map(x=>[Number(x.P),number(x.I)])));while(mapIds.size>200)mapIds.delete(mapIds.keys().next().value);}
     if(!matchScore(child||root,period,ref))return null;
     const context={category:ref?.category||root.SSN||root.LE||root.L};const rootOdds=astekOdds(root,[],'live',context),childOdds=child?astekOdds(child,[],'live',context):null;
     const markets=[...(rootOdds?.markets||[]).filter(m=>Number(m.period)===0),...(childOdds?.markets||[]).filter(m=>Number(m.period)===period),...(rootOdds?.markets||[]).filter(m=>Number(m.period)===period&&!childOdds?.markets?.some(c=>c.key===m.key))];
