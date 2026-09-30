@@ -1,0 +1,6 @@
+[Unit]
+Description=Esports Monitor health watchdog (restarts the service after repeated failed /health checks)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/esports-monitor-health-watch

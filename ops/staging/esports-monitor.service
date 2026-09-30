@@ -1,0 +1,43 @@
+[Unit]
+Description=Esports Monitor server (STAGING)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=monitor
+Group=monitor
+WorkingDirectory=/opt/esports-monitor/current/server
+# Settings derived from the release's docker-compose.yml (same as production), then staging overrides and secrets.
+EnvironmentFile=-/etc/esports-monitor/compose.env
+EnvironmentFile=/etc/esports-monitor/server.env
+ExecStart=/usr/local/bin/node src/index.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=45
+KillSignal=SIGTERM
+SyslogIdentifier=esports-monitor
+
+# Mirrors the container hardening in docker-compose.yml (read-only image, no capabilities, no new privileges).
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/esports-monitor
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+LimitNOFILE=4096
+TasksMax=128
+
+# Accounting is always on; limits come from the profile drop-in (see profile.sh).
+MemoryAccounting=true
+CPUAccounting=true
+IOAccounting=true
+TasksAccounting=true
+
+[Install]
+WantedBy=multi-user.target

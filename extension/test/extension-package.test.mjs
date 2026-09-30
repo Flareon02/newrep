@@ -49,3 +49,8 @@ test('the two optional-permission rules hold: default host stays, arbitrary host
   assert.deepEqual(manifest.host_permissions, ['http://87.199.202.237/*']);
   assert.deepEqual(manifest.optional_host_permissions, ['http://*/*', 'https://*/*']);
 });
+
+test('no access token is committed: DEFAULT_TOKEN in server-config.js is empty', () => {
+  const code = fs.readFileSync(path.join(root, 'server-config.js'), 'utf8');
+  assert.match(code, /DEFAULT_TOKEN=''/);
+});

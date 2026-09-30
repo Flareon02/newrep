@@ -6,12 +6,13 @@
    synchronously; the service worker has no localStorage and reads chrome.storage.local, which
    is the source of truth. A page reloads itself once if the mirror was stale. */
 const ServerConfig=(()=>{
-  const DEFAULT_BASE='http://87.199.202.237:8080',KEY='server',MIRROR='monitor-server',inPage=typeof localStorage!=='undefined';
+  // DEFAULT_TOKEN stays empty in the repository; tools/build-staging-extension.mjs fills it in for a private STAGING build only.
+  const DEFAULT_BASE='http://87.199.202.237:8080',DEFAULT_TOKEN='',KEY='server',MIRROR='monitor-server',inPage=typeof localStorage!=='undefined';
   // Keeps scheme, host, port and a reverse-proxy path prefix (https://host/monitor); drops trailing slashes, query and hash.
   function normalize(raw){try{const url=new URL(String(raw||'').trim());if(!['http:','https:'].includes(url.protocol)||!url.hostname||url.username||url.password)return '';return url.origin+url.pathname.replace(/\/+$/,'');}catch{return '';}}
   // Chrome match patterns carry no port, so the optional host permission is requested for scheme + host.
   function permissionPattern(base){try{const url=new URL(base);return url.protocol+'//'+url.hostname+'/*';}catch{return '';}}
-  function sanitize(value){return {base:normalize(value?.base)||DEFAULT_BASE,token:typeof value?.token==='string'?value.token.trim().slice(0,256):''};}
+  function sanitize(value){return {base:normalize(value?.base)||DEFAULT_BASE,token:(typeof value?.token==='string'?value.token.trim().slice(0,256):'')||DEFAULT_TOKEN};}
   function readMirror(){if(!inPage)return {};try{return JSON.parse(localStorage.getItem(MIRROR)||'null')||{};}catch{return {};}}
   function writeMirror(value){if(!inPage)return true;try{localStorage.setItem(MIRROR,JSON.stringify(value));return true;}catch{return false;}}
   let current=sanitize(readMirror());

@@ -1,0 +1,15 @@
+[Unit]
+Description=Esports Monitor soak-test sampler (read-only measurements, one JSON line per minute)
+After=esports-monitor.service
+
+[Service]
+Type=simple
+User=root
+Nice=10
+ExecStart=/usr/local/bin/node /opt/esports-monitor/current/tools/soak-sampler.mjs --url http://127.0.0.1:8080 --service esports-monitor --data-dir /var/lib/esports-monitor/data --out /var/lib/esports-monitor-soak/samples.jsonl --interval 60
+Restart=always
+RestartSec=10
+MemoryMax=96M
+
+[Install]
+WantedBy=multi-user.target
