@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Esports Monitor",
-  "version": "8.1.2",
+  "version": "8.2.0",
   "description": "Esports Monitor realtime thin shell: LIVE-first scheduling, bounded warm odds, incremental Results and progressive History.",
   "minimum_chrome_version": "120",
   "permissions": [
@@ -15,6 +15,10 @@
   ],
   "host_permissions": [
     "http://87.199.202.237/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background.js"

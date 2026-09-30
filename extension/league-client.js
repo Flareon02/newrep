@@ -1,8 +1,8 @@
 /* Server publication is explicit. No passwords are saved or logged. */
 const LeagueClient=(()=>{
-  const base='http://87.199.202.237:8080';
+  const base=ServerConfig.base;
   async function request(path,options={}){
-    const response=await fetch(base+path,{cache:'no-store',signal:AbortSignal.timeout(15000),...options});
+    const response=await fetch(base+path,{cache:'no-store',signal:AbortSignal.timeout(15000),...options,headers:ServerConfig.headers(options.headers)});
     const data=await response.json();if(!response.ok)throw Object.assign(new Error(data.error||`HTTP ${response.status}`),{status:response.status});return data;
   }
   async function acceptRules(rules){

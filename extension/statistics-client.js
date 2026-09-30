@@ -16,7 +16,7 @@ const StatisticsClient=(()=>{
   if(!force&&next===key&&now-last<CHECK_MS)return;
   loading=true;last=now;key=next;const priorError=error;
   try{
-   const r=await fetch(ctx.base+'/api/statistics/availability',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({events}),cache:'no-store',signal:AbortSignal.timeout(12000)});
+   const r=await fetch(ctx.base+'/api/statistics/availability',{method:'POST',headers:ServerConfig.headers({'Content-Type':'application/json'}),body:JSON.stringify({events}),cache:'no-store',signal:AbortSignal.timeout(12000)});
    statusCode=r.status||200;if(!r.ok)throw Error(messageForStatus(r.status));
    const raw=await r.json();
    if(!raw||Array.isArray(raw)||typeof raw!=='object'||Object.values(raw).some(v=>!v||!['dota2','cs2','hawk','crossbet'].includes(v.provider)||!v.id))throw Error('Сервер вернул некорректный ответ статистики.');

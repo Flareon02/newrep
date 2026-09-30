@@ -1,10 +1,10 @@
 'use strict';
-const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),BASE='http://87.199.202.237:8080',params=new URLSearchParams(location.search);
+const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),BASE=ServerConfig.base,params=new URLSearchParams(location.search);
 const dateFmt=new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}),date=at=>at?dateFmt.format(at):'нет даты',percent=p=>(p*100).toFixed(1)+'%',odd=v=>v==null?'—':v>=1000?v.toFixed(0):v.toFixed(3),fairOdd=v=>v==null?'—':settings?.maxOdds&&v>settings.maxOdds?odd(settings.maxOdds)+'+':odd(v);
 let localData={teams:[],players:[],matches:[]},serverData={},data={},picks=[null,null],result=null,category='match',running=false,sourceStatus={},picker=null,searchSequence=0,jobId=null,settings={margin:7.5,bestOf:3,maxOdds:25},dirty=false;
 const targets=[params.get('team1')||'',params.get('team2')||''];
 function status(s,error=false){$('status').textContent=s;$('status').classList.toggle('error',error);}
-async function api(path,body){const r=await fetch(BASE+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(30000),cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||(r.status===404?'Нужный API расчёта недоступен на сервере (HTTP 404)':'HTTP '+r.status));return d;}
+async function api(path,body){const r=await fetch(BASE+path,{method:body?'POST':'GET',headers:ServerConfig.headers(body?{'Content-Type':'application/json'}:{}),body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(30000),cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||(r.status===404?'Нужный API расчёта недоступен на сервере (HTTP 404)':'HTTP '+r.status));return d;}
 function mergeData(){data=HltvData.merge(serverData,localData);data.players=data.players.map(p=>HltvData.derivePlayer(p));}
 function teamFor(p){return p&&!p.custom?data.teams?.find(t=>t.id===p.id):null;}
 function playersFor(p){return Array.from({length:5},(_,i)=>data.players?.find(x=>x.id===p?.playerIds?.[i]));}
