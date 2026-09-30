@@ -14,10 +14,9 @@ import {matchAsync,matcherStatus} from './matcher-client.js';
 import http from "node:http";
 import {gzip} from "node:zlib";
 import { config } from "./config.js";
-import { resolveEvents, matcherRevision, canonicalCategory,leagueFamily,orientEvent } from "./entity-resolver.js";
+import { matcherRevision, canonicalCategory,leagueFamily,orientEvent } from "./entity-resolver.js";
 import { leagueStore } from './league-store.js';
-import { compareSchedule } from './comparison.js';
-import {queryUiEvents,queryLeagueCatalog,enrichResultsWithPrematch,mergeUiLedger,decorateUiEvent,buildUiPrematchEvents,compactUiEvent,compactUiPayload} from './ui-service.js';
+import {queryUiEvents,queryLeagueCatalog,enrichResultsWithPrematch,decorateUiEvent,buildUiPrematchEvents,compactUiPayload} from './ui-service.js';
 import {enrichEventMarketSemantics} from './market-semantics.js';
 import {normalizeErrorBody,publicMessage} from './http-errors.js';
 import {safeWrite} from './sse.js';
@@ -212,7 +211,6 @@ export function createApi({ authToken=config.apiToken, authTrustLoopback=true, l
       status(){prune(Date.now());return {clients:rows.size,ids:new Set([...rows.values()].flatMap(r=>r.ids)).size,warming:false};}
     };})();
   const feedClients=new Set();
-  const feedStates={live:[liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState],prematch:[prematchState,fonbetPrematchState,pinnaclePrematchState]};
   const feedMeta=mode=>mode==='live'?feedMetaSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState):feedMetaSnapshot('prematch',prematchState,fonbetPrematchState,pinnaclePrematchState);
   const writeSse=(res,wire)=>{safeWrite(res,wire);};
 

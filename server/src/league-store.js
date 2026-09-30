@@ -1,6 +1,6 @@
 import { log } from "./logger.js";
 import { createHash, randomBytes } from 'node:crypto';
-import { readJson, writeJson } from './utils.js';
+import { writeJson } from './utils.js';
 import Model from './league-model.cjs';
 import GameCategories from './game-categories.cjs';
 import fs from 'node:fs/promises';
