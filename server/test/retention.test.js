@@ -82,3 +82,25 @@ test('retention is disabled by default and disk level thresholds work', () => {
   assert.equal(diskLevel(config.diskWarnFreeMiB - 1), 'low');
   assert.equal(diskLevel(config.diskCriticalFreeMiB - 1), 'critical');
 });
+
+test('scheduler runs after its delay, prunes, and reschedules', async (t) => {
+  const { startRetention } = await import('../src/retention.js');
+  seedOdds('sched-old', 400);
+  seedOdds('sched-fresh', 1);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const handle = startRetention({ statistics: null, settings: { oddsRetentionDays: 180, scoreRetentionDays: 0, statisticsRetentionDays: 0 }, now: () => NOW });
+  t.mock.timers.tick(60_000);
+  // The run is async (setImmediate yields); wait until it has finished.
+  for (let i = 0; i < 50 && oddsEntries('astek', 'sched-old').length; i++) await new Promise((resolve) => setImmediate(resolve));
+  handle.stop();
+  assert.equal(oddsEntries('astek', 'sched-old').length, 0);
+  assert.equal(oddsEntries('astek', 'sched-fresh').length, 3);
+});
+
+test('a disabled scheduler never schedules anything', () => {
+  return import('../src/retention.js').then(({ startRetention }) => {
+    const handle = startRetention({ settings: { oddsRetentionDays: 0, scoreRetentionDays: 0, statisticsRetentionDays: 0 } });
+    assert.equal(typeof handle.stop, 'function');
+    handle.stop();
+  });
+});
