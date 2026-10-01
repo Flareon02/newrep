@@ -37,6 +37,11 @@ test('every staging shell script parses, and the systemd unit keeps its safety p
   for (const line of ['Restart=always', 'NoNewPrivileges=true', 'ProtectSystem=strict', 'TasksMax=128', 'CapabilityBoundingSet=']) assert.ok(unit.includes(line), line);
   const provision = fs.readFileSync(path.join(dir, 'provision.sh'), 'utf8');
   assert.ok(provision.indexOf('ufw allow "$p/tcp"') < provision.indexOf('ufw --force enable'), 'SSH is allowed before the firewall is enabled');
+  const soak = fs.readFileSync(path.join(dir, 'esports-monitor-soak.service'), 'utf8');
+  assert.ok(soak.includes('EnvironmentFile=-/etc/esports-monitor/server.env') && soak.includes('127.0.0.1:${PORT}'), 'soak follows the configured port');
+  const port = fs.readFileSync(path.join(dir, 'port.sh'), 'utf8');
+  assert.ok(/-lt 1024/.test(port) && port.includes('AmbientCapabilities=CAP_NET_BIND_SERVICE') && !/CAP_(?!NET_BIND_SERVICE)[A-Z_]+/.test(port), 'only CAP_NET_BIND_SERVICE, only for privileged ports');
+  assert.ok(!/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(port.replace(/127\.0\.0\.1/g, '')), 'no hardcoded IPs');
   assert.ok(!/MemoryMax|CPUQuota/.test(unit), 'limits come only from the profile drop-in, never from the base unit');
 });
 

@@ -4,9 +4,12 @@ After=esports-monitor.service
 
 [Service]
 Type=simple
+# Same port as the API: PORT comes from the service environment file (default 8080 if it is absent).
+Environment=PORT=8080
+EnvironmentFile=-/etc/esports-monitor/server.env
 User=root
 Nice=10
-ExecStart=/usr/local/bin/node /opt/esports-monitor/current/tools/soak-sampler.mjs --url http://127.0.0.1:8080 --service esports-monitor --data-dir /var/lib/esports-monitor/data --out /var/lib/esports-monitor-soak/samples.jsonl --interval 60
+ExecStart=/usr/local/bin/node /opt/esports-monitor/current/tools/soak-sampler.mjs --url http://127.0.0.1:${PORT} --service esports-monitor --data-dir /var/lib/esports-monitor/data --out /var/lib/esports-monitor-soak/samples.jsonl --interval 60
 Restart=always
 RestartSec=10
 MemoryMax=96M

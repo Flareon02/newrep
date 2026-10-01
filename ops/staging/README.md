@@ -7,6 +7,7 @@ Everything here is for the **staging** VPS only. It never references production 
 | `provision.sh` | One-time idempotent setup: Node 22, user `monitor`, directories, systemd units, journald limits (200 MB), firewall (SSH first), staging `API_TOKEN` |
 | `esports-monitor.service` | systemd unit: `Restart=always`, sandboxing that mirrors the container (`ProtectSystem=strict`, no capabilities, `TasksMax=128`) |
 | `profile.sh` | Resource profile of the service cgroup: `prod` (768M, no swap), `tight` (640M), `relaxed`. Limits only the service, never the VM or sshd |
+| `port.sh` | Makes the unit match `PORT` in `server.env`: for a port < 1024 (e.g. 80) it adds a drop-in granting only `CAP_NET_BIND_SERVICE`, otherwise removes it. Run `sudo esports-monitor-port` after changing `PORT` |
 | `deploy.sh` / `rollback.sh` | Release directories + `current` symlink, `npm ci`, health gate, automatic rollback to the previous release |
 | `health-watch.sh` + timer | Restarts the service after 3 failed `/health` checks (hangs); crashes are handled by systemd |
 | `esports-monitor-soak.service` | Runs `tools/soak-sampler.mjs` every minute -> `/var/lib/esports-monitor-soak/samples.jsonl` |
@@ -19,10 +20,13 @@ Everything here is for the **staging** VPS only. It never references production 
 git archive --format=tar.gz -o release.tar.gz refactor/production-hardening server tools
 scp release.tar.gz ops/staging/* root@STAGING:/root/stage/      # or any other way to get the files there
 # on staging
-cd /root/stage && sudo bash provision.sh --profile prod
+cd /root/stage && sudo bash provision.sh --profile prod            # add --http-port 80 --public-api when only 80/443 are reachable
 sudo esports-monitor-deploy --tar /root/stage/release.tar.gz
 sudo systemctl enable --now esports-monitor-soak
 ```
+
+The listening port lives only in `/etc/esports-monitor/server.env` (`PORT=`); deploy, health-watch and the soak sampler read it from there.
+To move it: edit `PORT`, run `sudo esports-monitor-port` (restarts the service), then open the new port with `ufw allow <port>/tcp` and close the old one.
 
 ## Everyday commands
 

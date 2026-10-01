@@ -64,6 +64,8 @@ ENV
 else
   echo "keeping existing $ETC/server.env"
 fi
+# The port that is actually configured wins (an existing server.env is never rewritten).
+HTTP_PORT="$(grep -E '^PORT=' "$ETC/server.env" | tail -n1 | cut -d= -f2)"; HTTP_PORT="${HTTP_PORT:-8080}"
 
 log "5/8 systemd units"
 install -m 0644 "$HERE/esports-monitor.service" /etc/systemd/system/esports-monitor.service
@@ -72,10 +74,12 @@ install -m 0644 "$HERE/esports-monitor-health.timer" /etc/systemd/system/esports
 install -m 0644 "$HERE/esports-monitor-soak.service" /etc/systemd/system/esports-monitor-soak.service
 install -m 0755 "$HERE/health-watch.sh" /usr/local/bin/esports-monitor-health-watch
 install -m 0755 "$HERE/profile.sh" /usr/local/bin/esports-monitor-profile
+install -m 0755 "$HERE/port.sh" /usr/local/bin/esports-monitor-port
 install -m 0755 "$HERE/deploy.sh" /usr/local/bin/esports-monitor-deploy
 install -m 0755 "$HERE/rollback.sh" /usr/local/bin/esports-monitor-rollback
 install -m 0755 "$HERE/compose-env.py" /usr/local/lib/esports-monitor-compose-env.py
 /usr/local/bin/esports-monitor-profile "$PROFILE" --no-restart
+/usr/local/bin/esports-monitor-port --no-restart
 install -d /etc/systemd/journald.conf.d
 cat > /etc/systemd/journald.conf.d/esports-monitor.conf <<'J'
 # Log rotation: the service logs to journald. Cap the journal so logs can never fill the disk.
