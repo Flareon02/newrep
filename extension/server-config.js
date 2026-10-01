@@ -1,13 +1,12 @@
 'use strict';
 /* Where the extension talks to, and the optional access token for write endpoints.
-   The default is the original production address, so installing this version changes nothing
-   until the user edits Settings -> Server.
+   The default is the public API behind Cloudflare (HTTPS); another server can be set in Settings -> Server.
    Extension pages build requests while their scripts load, so they read a localStorage mirror
    synchronously; the service worker has no localStorage and reads chrome.storage.local, which
    is the source of truth. A page reloads itself once if the mirror was stale. */
 const ServerConfig=(()=>{
   // DEFAULT_TOKEN stays empty in the repository; tools/build-staging-extension.mjs fills it in for a private STAGING build only.
-  const DEFAULT_BASE='http://87.199.202.237:8080',DEFAULT_TOKEN='',KEY='server',MIRROR='monitor-server',inPage=typeof localStorage!=='undefined';
+  const DEFAULT_BASE='https://api.esportsdata.online',DEFAULT_TOKEN='',KEY='server',MIRROR='monitor-server',inPage=typeof localStorage!=='undefined';
   // Keeps scheme, host, port and a reverse-proxy path prefix (https://host/monitor); drops trailing slashes, query and hash.
   function normalize(raw){try{const url=new URL(String(raw||'').trim());if(!['http:','https:'].includes(url.protocol)||!url.hostname||url.username||url.password)return '';return url.origin+url.pathname.replace(/\/+$/,'');}catch{return '';}}
   // Chrome match patterns carry no port, so the optional host permission is requested for scheme + host.

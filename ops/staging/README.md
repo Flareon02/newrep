@@ -14,6 +14,12 @@ Everything here is for the **staging** VPS only. It never references production 
 | `esports-monitor-soak.service` | Runs `tools/soak-sampler.mjs` every minute -> `/var/lib/esports-monitor-soak/samples.jsonl` |
 | `compose-env.py` | Derives the service environment from the release's own `docker-compose.yml`, so staging runs production settings |
 
+## Behind Cloudflare Tunnel (current staging)
+
+The public API is `https://api.esportsdata.online` (Cloudflare Tunnel, `cloudflared` -> `http://127.0.0.1:80`). The service
+listens on loopback only (`HOST=127.0.0.1` in `server.env`) and the firewall allows inbound SSH only; nothing reaches the
+origin directly. Health checks, deploy and the soak sampler already use `127.0.0.1`.
+
 ## Install
 
 ```sh

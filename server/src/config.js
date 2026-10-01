@@ -1,3 +1,4 @@
+import net from "node:net";
 import { explicitNetworkMode } from "./egress.js";
 
 const intEnv = (name, fallback, min = 1) => {
@@ -14,12 +15,22 @@ const signedIntEnv=(name,fallback)=>{const value=Number(process.env[name]);retur
 // ODDS_HISTORY_ENABLED=0 (low-write mode): see oddsHistoryEnabled below.
 const oddsHistoryEnabled = !/^(?:0|false|off|no)$/i.test(String(process.env.ODDS_HISTORY_ENABLED || "1").trim());
 
+function bindHost(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "0.0.0.0";
+  if (value.toLowerCase() === "localhost") return "127.0.0.1";
+  return net.isIP(value) ? value : "127.0.0.1";
+}
+
 const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekbet-0021.pro")
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
   version: "4.6.0",
   port: intEnv("PORT", 8080),
+  // Listen address. Unset: 0.0.0.0 (Docker). 127.0.0.1 / localhost when only a local reverse proxy or tunnel may reach
+  // the API. Any other value that is not an IP literal binds 127.0.0.1 (fails closed, never public) and is logged.
+  host: bindHost(process.env.HOST),
   dataDir: process.env.DATA_DIR || "/data",
   // Optional shared secret for write/compute endpoints (see src/auth.js). Empty = unauthenticated (legacy behaviour).
   apiToken: String(process.env.API_TOKEN || "").trim(),

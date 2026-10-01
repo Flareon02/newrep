@@ -2,8 +2,8 @@
 // Builds a PRIVATE test copy of the extension that talks to the staging server with the staging token preset.
 // Nothing is committed: output goes to dist/ (git-ignored) and the token is read from the environment or a file.
 //
-//   STAGING_TOKEN=... node tools/build-staging-extension.mjs --url http://STAGING_IP:8080
-//   node tools/build-staging-extension.mjs --url http://STAGING_IP:8080 --token-file /etc/esports-monitor/server.env
+//   STAGING_TOKEN=... node tools/build-staging-extension.mjs --url https://api.esportsdata.online
+//   node tools/build-staging-extension.mjs --url https://api.esportsdata.online --token-file /etc/esports-monitor/server.env
 //
 // The build is named "Esports Monitor (STAGING)" so it cannot be mistaken for the real extension, and it is
 // for testing only: anyone holding the ZIP holds the staging token. The repository code is unchanged.
@@ -27,7 +27,7 @@ rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true 
 cpSync(path.join(root, 'extension'), out, { recursive: true, filter: (src) => !/[\\/]extension[\\/]test([\\/]|$)/.test(src) });
 
 const patch = (name, edit) => { const f = path.join(out, name), before = readFileSync(f, 'utf8'), after = edit(before); if (after === before) throw new Error(`${name}: nothing to patch`); writeFileSync(f, after); };
-patch('server-config.js', (s) => s.replace("DEFAULT_BASE='http://87.199.202.237:8080',DEFAULT_TOKEN=''", `DEFAULT_BASE=${JSON.stringify(url.origin + url.pathname.replace(/\/+$/, ''))},DEFAULT_TOKEN=${JSON.stringify(token)}`));
+patch('server-config.js', (s) => s.replace("DEFAULT_BASE='https://api.esportsdata.online',DEFAULT_TOKEN=''", `DEFAULT_BASE=${JSON.stringify(url.origin + url.pathname.replace(/\/+$/, ''))},DEFAULT_TOKEN=${JSON.stringify(token)}`));
 patch('manifest.json', (s) => {
   const m = JSON.parse(s);
   m.name = 'Esports Monitor (STAGING)';

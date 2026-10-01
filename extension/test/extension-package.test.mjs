@@ -46,7 +46,7 @@ test('all scripts parse, and no hardcoded server address remains outside server-
 });
 
 test('the two optional-permission rules hold: default host stays, arbitrary hosts are optional only', () => {
-  assert.deepEqual(manifest.host_permissions, ['http://87.199.202.237/*']);
+  assert.deepEqual(manifest.host_permissions, ['https://api.esportsdata.online/*']);
   assert.deepEqual(manifest.optional_host_permissions, ['http://*/*', 'https://*/*']);
 });
 

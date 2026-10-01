@@ -170,7 +170,7 @@ test('relay bootstrap is preferred, reads credentials from files and never expos
   const secret='s'.repeat(64),ca='-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n';
   fs.writeFileSync(secretPath,secret);fs.writeFileSync(caPath,ca);
   const old={url:config.ggbetBootstrapRelayUrl,secret:config.ggbetBootstrapRelaySecretFile,ca:config.ggbetBootstrapRelayCaFile};
-  config.ggbetBootstrapRelayUrl='https://5.22.221.32:8787/v1/ggbet/bootstrap';config.ggbetBootstrapRelaySecretFile=secretPath;config.ggbetBootstrapRelayCaFile=caPath;
+  config.ggbetBootstrapRelayUrl='https://relay.test.invalid:8787/v1/ggbet/bootstrap';config.ggbetBootstrapRelaySecretFile=secretPath;config.ggbetBootstrapRelayCaFile=caPath;
   let directFetches=0,relayCalls=0;
   const token='p'.repeat(389),state={async success(){},async failure(){}};
   const collector=new GgbetLiveCollector(state,{fetchImpl:async()=>{directFetches++;throw Error('direct bootstrap must not run');},WebSocketImpl:FakeSocket,relayRequestImpl:async(url,options)=>{relayCalls++;assert.equal(url,config.ggbetBootstrapRelayUrl);assert.equal(options.secret,secret);assert.equal(options.ca,ca);return{ok:true,token,wsUrl:'wss://gg-b-gql.gg.bet/graphql',origin:'https://gg.bet'};}});
@@ -183,7 +183,7 @@ test('relay bootstrap is preferred, reads credentials from files and never expos
 test('relay bootstrap failure is isolated and counted without falling back through blocked local mirrors',async()=>{
   const {config}=await import('../src/config.js');const fs=await import('node:fs');const os=await import('node:os');const path=await import('node:path');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ggbet-relay-fail-'));const secretPath=path.join(dir,'secret'),caPath=path.join(dir,'ca.pem');fs.writeFileSync(secretPath,'x'.repeat(64));fs.writeFileSync(caPath,'-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n');
-  const old={url:config.ggbetBootstrapRelayUrl,secret:config.ggbetBootstrapRelaySecretFile,ca:config.ggbetBootstrapRelayCaFile};config.ggbetBootstrapRelayUrl='https://5.22.221.32:8787/v1/ggbet/bootstrap';config.ggbetBootstrapRelaySecretFile=secretPath;config.ggbetBootstrapRelayCaFile=caPath;
+  const old={url:config.ggbetBootstrapRelayUrl,secret:config.ggbetBootstrapRelaySecretFile,ca:config.ggbetBootstrapRelayCaFile};config.ggbetBootstrapRelayUrl='https://relay.test.invalid:8787/v1/ggbet/bootstrap';config.ggbetBootstrapRelaySecretFile=secretPath;config.ggbetBootstrapRelayCaFile=caPath;
   let directFetches=0;const collector=new GgbetLiveCollector({async success(){},async failure(){}},{fetchImpl:async()=>{directFetches++;return{ok:false,status:403,text:async()=>''};},relayRequestImpl:async()=>{throw Error('relay offline');}});
   try{await assert.rejects(()=>collector.fetchBootstrap(true),/relay offline/);assert.equal(directFetches,0);assert.equal(collector.status().relayFailures,1);assert.match(collector.status().lastRelayError,/relay offline/);}finally{config.ggbetBootstrapRelayUrl=old.url;config.ggbetBootstrapRelaySecretFile=old.secret;config.ggbetBootstrapRelayCaFile=old.ca;fs.rmSync(dir,{recursive:true,force:true});await collector.stop();}
 });
@@ -191,7 +191,7 @@ test('relay bootstrap failure is isolated and counted without falling back throu
 test('connection_init rejection invalidates cached relay token so the next reconnect asks for a fresh one',async()=>{
   const {config}=await import('../src/config.js');const fs=await import('node:fs');const os=await import('node:os');const path=await import('node:path');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ggbet-init-reject-'));const secretPath=path.join(dir,'secret'),caPath=path.join(dir,'ca.pem');fs.writeFileSync(secretPath,'y'.repeat(64));fs.writeFileSync(caPath,'-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n');
-  const old={url:config.ggbetBootstrapRelayUrl,secret:config.ggbetBootstrapRelaySecretFile,ca:config.ggbetBootstrapRelayCaFile};config.ggbetBootstrapRelayUrl='https://5.22.221.32:8787/v1/ggbet/bootstrap';config.ggbetBootstrapRelaySecretFile=secretPath;config.ggbetBootstrapRelayCaFile=caPath;
+  const old={url:config.ggbetBootstrapRelayUrl,secret:config.ggbetBootstrapRelaySecretFile,ca:config.ggbetBootstrapRelayCaFile};config.ggbetBootstrapRelayUrl='https://relay.test.invalid:8787/v1/ggbet/bootstrap';config.ggbetBootstrapRelaySecretFile=secretPath;config.ggbetBootstrapRelayCaFile=caPath;
   class RejectSocket extends FakeSocket{send(body){const msg=JSON.parse(body);this.sent.push(msg);if(msg.type==='connection_init')queueMicrotask(()=>{this.message({type:'connection_error',payload:{message:'hook failed: Unexpected response code: 400'}});});}}
   let relayCalls=0;const collector=new GgbetLiveCollector({async success(){},async failure(){}},{WebSocketImpl:RejectSocket,relayRequestImpl:async()=>{relayCalls++;return{token:'z'.repeat(389),wsUrl:'wss://gg-b-gql.gg.bet/graphql',origin:'https://gg.bet'};}});collector.stopped=false;
   try{await assert.rejects(()=>collector.connect(),/connection_init rejected/);assert.equal(relayCalls,1);assert.equal(collector.bootstrap,null);assert.ok(collector.status().authRefreshes>=1);}finally{config.ggbetBootstrapRelayUrl=old.url;config.ggbetBootstrapRelaySecretFile=old.secret;config.ggbetBootstrapRelayCaFile=old.ca;fs.rmSync(dir,{recursive:true,force:true});await collector.stop();}

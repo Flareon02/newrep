@@ -30,10 +30,10 @@ function load({ stored, mirror, withLocalStorage = true } = {}) {
   return { ServerConfig, store, local, listeners, reloads: () => reloads };
 }
 
-test('defaults to the original production address and sends no auth header', async () => {
+test('defaults to the public HTTPS API and sends no auth header', async () => {
   const { ServerConfig, reloads } = load();
   await ServerConfig.ready;
-  assert.equal(ServerConfig.base, 'http://87.199.202.237:8080');
+  assert.equal(ServerConfig.base, 'https://api.esportsdata.online');
   assert.equal(ServerConfig.token, '');
   assert.deepEqual({ ...ServerConfig.headers({ 'X-A': '1' }) }, { 'X-A': '1' });
   assert.equal(reloads(), 0);
@@ -51,7 +51,7 @@ test('invalid addresses fall back to the default instead of breaking requests', 
   for (const base of ['javascript:alert(1)', 'ftp://x', 'not a url', '', 'file:///etc/passwd']) {
     const { ServerConfig } = load({ stored: { base } });
     await ServerConfig.ready;
-    assert.equal(ServerConfig.base, 'http://87.199.202.237:8080', base);
+    assert.equal(ServerConfig.base, 'https://api.esportsdata.online', base);
   }
 });
 
@@ -94,7 +94,7 @@ test('save() persists sanitized values and storage changes propagate', async () 
   listeners[0]({ server: { newValue: { base: 'http://other:1', token: '' } } }, 'local');
   assert.equal(ServerConfig.base, 'http://other:1');
   await ServerConfig.reset();
-  assert.equal(ServerConfig.base, 'http://87.199.202.237:8080');
+  assert.equal(ServerConfig.base, 'https://api.esportsdata.online');
 });
 
 test('errorText turns browser network errors into Russian text and keeps server messages', () => {

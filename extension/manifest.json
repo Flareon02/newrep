@@ -14,7 +14,7 @@
     "nativeMessaging"
   ],
   "host_permissions": [
-    "http://87.199.202.237/*"
+    "https://api.esportsdata.online/*"
   ],
   "optional_host_permissions": [
     "http://*/*",

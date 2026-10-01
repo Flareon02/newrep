@@ -55,8 +55,9 @@ const hltvService=new HltvService();
 const oddsService=new OddsService(hltvService);
 const crossbetService=new CrossbetService();
 const server = createApi({ liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState,databetCollector,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt });
-server.listen(config.port, "0.0.0.0", () => {
-  log.info(`[api] listening on 0.0.0.0:${config.port}`);
+if(String(process.env.HOST||'').trim()&&!/^localhost$/i.test(String(process.env.HOST).trim())&&String(process.env.HOST).trim()!==config.host)log.warn(`[api] HOST is not an IP address; listening on ${config.host} instead`);
+server.listen(config.port, config.host, () => {
+  log.info(`[api] listening on ${config.host.includes(":")?`[${config.host}]`:config.host}:${config.port}`);
   log.info(`[api] AstekBet upstream ${config.origins.join(", ")}`);
   log.info(`[api] Fonbet upstream ${config.fonbetUrls.join(", ")}`);
   const proxy=proxyDiagnostics(),via=mode=>mode==='proxy'?`proxy ${proxy.proxyHost}:${proxy.proxyPort}`:mode;
