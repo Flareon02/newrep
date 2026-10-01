@@ -88,7 +88,7 @@ async function poll(kind,force=false){
    for(const port of ports)try{port.postMessage(changed?{kind,snapshot:next}:{kind:'freshness',feed:kind,freshness});}catch{}
   }catch(error){
    if(myEpoch!==epoch)return cache[kind];
-   const message=error?.message||String(error),before=cache[kind]?.transportError,count=(failures[kind]||0)+1;failures[kind]=count;retryAfter[kind]=Date.now()+retryDelay(kind,count);
+   const message=ServerConfig.errorText(error),before=cache[kind]?.transportError,count=(failures[kind]||0)+1;failures[kind]=count;retryAfter[kind]=Date.now()+retryDelay(kind,count);
    cache[kind]={...cache[kind],transportError:message,failedAt:Date.now()};
    const freshness={receivedAt:cache[kind]?.receivedAt,transportError:message,failedAt:cache[kind]?.failedAt,stale:cache[kind]?.stale,providers:cache[kind]?.providers};
    if(message!==before)for(const port of ports)try{port.postMessage({kind:'freshness',feed:kind,freshness});}catch{}
@@ -135,7 +135,7 @@ async function handleStreamEvent(type,data){
   return;
  }
  if(type==='status'){
-  const current=cache[kind];if(current){cache[kind]={...current,...(data.meta||{}),transportError:data.error||'',receivedAt:Date.now()};for(const port of ports)try{port.postMessage({kind:'freshness',feed:kind,freshness:{...(data.meta||{}),transportError:data.error||'',receivedAt:Date.now()}});}catch{}}
+  const current=cache[kind];if(current){cache[kind]={...current,...(data.meta||{}),transportError:data.error?ServerConfig.errorText(data.error):'',receivedAt:Date.now()};for(const port of ports)try{port.postMessage({kind:'freshness',feed:kind,freshness:{...(data.meta||{}),transportError:data.error?ServerConfig.errorText(data.error):'',receivedAt:Date.now()}});}catch{}}
  }
 }
 async function streamLoop(){

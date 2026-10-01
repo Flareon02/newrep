@@ -96,3 +96,11 @@ test('save() persists sanitized values and storage changes propagate', async () 
   await ServerConfig.reset();
   assert.equal(ServerConfig.base, 'http://87.199.202.237:8080');
 });
+
+test('errorText turns browser network errors into Russian text and keeps server messages', () => {
+  const { ServerConfig } = load();
+  assert.equal(ServerConfig.errorText(Object.assign(new Error('signal timed out'), { name: 'TimeoutError' })), 'сервер не ответил вовремя');
+  assert.equal(ServerConfig.errorText(Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' })), 'сервер не ответил вовремя');
+  assert.equal(ServerConfig.errorText(new TypeError('Failed to fetch')), 'сервер недоступен');
+  assert.equal(ServerConfig.errorText(new Error('Нужен токен доступа')), 'Нужен токен доступа');
+});

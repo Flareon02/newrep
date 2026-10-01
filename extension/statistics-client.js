@@ -25,7 +25,7 @@ const StatisticsClient=(()=>{
    const shape=JSON.stringify(Object.entries(data).sort(([a],[b])=>a.localeCompare(b)).map(([eventId,v])=>[eventId,v.provider,String(v.id)]));
    available=data;
    if(shape!==availableShape||priorError){availableShape=shape;ctx.render();}
-  }catch(e){error=e.name==='TimeoutError'?'Статистика: сервер не ответил вовремя.':e.message;if(error!==priorError)ctx.render();}
+  }catch(e){error=e.name==='TimeoutError'?'Статистика: сервер не ответил вовремя.':'Статистика: '+ServerConfig.errorText(e)+'.';if(error!==priorError)ctx.render();}
   finally{
    loading=false;
    if(queued){queued=false;queueMicrotask(()=>observe(observed,{force:true}));}

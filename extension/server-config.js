@@ -27,8 +27,10 @@ const ServerConfig=(()=>{
   })();
   if(inPage)ready.then(stale=>{if(stale&&typeof location!=='undefined')location.reload();});
   try{chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes[KEY]){current=sanitize(changes[KEY].newValue);writeMirror(current);}});}catch{}
+  // Network failures reach the UI as plain Russian text instead of the browser's English wording ("signal timed out", "Failed to fetch").
+  function errorText(error){const name=error?.name,text=error?.message||String(error);if(name==='TimeoutError'||name==='AbortError'||/timed out|aborted/i.test(text))return 'сервер не ответил вовремя';if(/failed to fetch|networkerror|network error|load failed/i.test(text))return 'сервер недоступен';return text;}
   return {
-    DEFAULT_BASE,ready,normalize,permissionPattern,
+    DEFAULT_BASE,ready,errorText,normalize,permissionPattern,
     get base(){return current.base;},
     get token(){return current.token;},
     headers(extra={}){return current.token?{Authorization:'Bearer '+current.token,...extra}:{...extra};},
