@@ -8,6 +8,7 @@ Everything here is for the **staging** VPS only. It never references production 
 | `esports-monitor.service` | systemd unit: `Restart=always`, sandboxing that mirrors the container (`ProtectSystem=strict`, no capabilities, `TasksMax=128`) |
 | `profile.sh` | Resource profile of the service cgroup: `prod` (768M, no swap), `tight` (640M), `relaxed`. Limits only the service, never the VM or sshd |
 | `port.sh` | Makes the unit match `PORT` in `server.env`: for a port < 1024 (e.g. 80) it adds a drop-in granting only `CAP_NET_BIND_SERVICE`, otherwise removes it. Run `sudo esports-monitor-port` after changing `PORT` |
+| `ggbet-relay.sh` | `esports-monitor-ggbet-relay <bundle>`: stores the relay secret/CA in `/etc/esports-monitor` (outside the repo) and sets `GGBET_BOOTSTRAP_RELAY_*` in `server.env`. Without it GGBET runs in direct mode, which is geo-blocked from this host |
 | `deploy.sh` / `rollback.sh` | Release directories + `current` symlink, `npm ci`, health gate, automatic rollback to the previous release |
 | `health-watch.sh` + timer | Restarts the service after 3 failed `/health` checks (hangs); crashes are handled by systemd |
 | `esports-monitor-soak.service` | Runs `tools/soak-sampler.mjs` every minute -> `/var/lib/esports-monitor-soak/samples.jsonl` |

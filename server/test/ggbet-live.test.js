@@ -242,3 +242,16 @@ test('stored Polish GGBET odds history is normalized on read',async()=>{
   assert.deepEqual(old.prices.map(p=>p.side),['over','under']);
   assert.equal(normalizeGgbetStoredMarket({title:'Handicap rund',period:0,prices:[]}).title,'Фора по раундам');
 });
+
+test('relay bootstrap in the real relay response shape is used as-is; a mirror origin is rejected with the origin named',async()=>{
+  const {config}=await import('../src/config.js');const fs=await import('node:fs');const os=await import('node:os');const path=await import('node:path');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ggbet-relay-shape-'));const secretPath=path.join(dir,'secret'),caPath=path.join(dir,'ca.pem');fs.writeFileSync(secretPath,'x'.repeat(64));fs.writeFileSync(caPath,'-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n');
+  const old={url:config.ggbetBootstrapRelayUrl,secret:config.ggbetBootstrapRelaySecretFile,ca:config.ggbetBootstrapRelayCaFile};config.ggbetBootstrapRelayUrl='https://relay.invalid/v1/ggbet/bootstrap';config.ggbetBootstrapRelaySecretFile=secretPath;config.ggbetBootstrapRelayCaFile=caPath;
+  const token='t'.repeat(389);let payload={ok:true,token,wsUrl:'wss://gg-b-gql.gg.bet/graphql',origin:'https://gg.bet',sourceOrigin:'https://gg.bet',issuedAt:1790854381697};
+  const collector=new GgbetLiveCollector({async success(){},async failure(){}},{fetchImpl:async()=>{throw Error('direct bootstrap must not run');},relayRequestImpl:async()=>payload});
+  try{
+    const boot=await collector.fetchBootstrap(true);assert.equal(boot.token,token);assert.equal(boot.wsUrl,'wss://gg-b-gql.gg.bet/graphql');assert.equal(boot.origin,'https://gg.bet');
+    payload={ok:true,token,wsUrl:'wss://gg-b-gql.gg.bet/graphql',sourceOrigin:'https://gg.bet'};assert.equal((await collector.fetchBootstrap(true)).origin,'https://gg.bet','sourceOrigin is used when origin is absent');
+    payload={ok:true,token,wsUrl:'wss://gg-b-gql.gg.bet/graphql',origin:'https://gg397.bet'};await assert.rejects(()=>collector.fetchBootstrap(true),/неожиданный origin \(https:\/\/gg397\.bet\)/);
+  }finally{config.ggbetBootstrapRelayUrl=old.url;config.ggbetBootstrapRelaySecretFile=old.secret;config.ggbetBootstrapRelayCaFile=old.ca;fs.rmSync(dir,{recursive:true,force:true});await collector.stop();}
+});

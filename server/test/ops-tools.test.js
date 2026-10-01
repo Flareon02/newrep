@@ -42,6 +42,8 @@ test('every staging shell script parses, and the systemd unit keeps its safety p
   const port = fs.readFileSync(path.join(dir, 'port.sh'), 'utf8');
   assert.ok(/-lt 1024/.test(port) && port.includes('AmbientCapabilities=CAP_NET_BIND_SERVICE') && !/CAP_(?!NET_BIND_SERVICE)[A-Z_]+/.test(port), 'only CAP_NET_BIND_SERVICE, only for privileged ports');
   assert.ok(!/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(port.replace(/127\.0\.0\.1/g, '')), 'no hardcoded IPs');
+  const relay = fs.readFileSync(path.join(dir, 'ggbet-relay.sh'), 'utf8');
+  assert.ok(relay.includes('GGBET_BOOTSTRAP_RELAY_SECRET_FILE') && relay.includes('/etc/esports-monitor/ggbet-relay'.replace('/etc/esports-monitor/', '$ETC/')) && !/curl .*-k|--insecure/.test(relay), 'relay secret/CA live under /etc, TLS verification stays on');
   assert.ok(!/MemoryMax|CPUQuota/.test(unit), 'limits come only from the profile drop-in, never from the base unit');
 });
 
