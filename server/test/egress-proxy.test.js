@@ -10,7 +10,7 @@ import { DatabetLiveCollector } from '../src/databet.js';
 import { SnapshotState } from '../src/state.js';
 import { createApi } from '../src/api.js';
 import { stopMatcher } from '../src/matcher-client.js';
-import { checkProxyEgress, explicitNetworkMode, proxyAgent, proxyDiagnostics, proxyFetch, redact, resetEgressForTests } from '../src/egress.js';
+import { checkProxyEgress, explicitNetworkMode, proxyAgent, proxyDiagnostics, proxyFetch, redact, reportProxySession, resetEgressForTests } from '../src/egress.js';
 
 // Credentials with characters that need URL encoding; they must reach the proxy intact and nowhere else.
 const USER = 'cz-user_sid-StickY42abc';
@@ -88,10 +88,10 @@ test('B: GGBET WebSocket of the session goes through the same proxy with the sam
   const direct = noDirect(); const collector = new GgbetLiveCollector(quietState('t-proxy-gg-b'), { fetchImpl: direct.fetchImpl });
   try {
     collector.stopped = false;
-    collector.bootstrap = { token: GGBET_TOKEN, wsUrl: 'wss://gg-b-gql.gg.bet/graphql', origin: 'https://gg.bet', at: Date.now(), source: 'html' };
+    collector.bootstrap = { token: GGBET_TOKEN, wsUrl: 'wss://gg-b-gql.gg.bet/graphql', origin: 'https://gg.bet', at: Date.now(), source: 'html' }; collector.bootstrapAgent = await proxyAgent();
     await assert.rejects(() => collector.connect());
     clearTimeout(collector.reconnectTimer); collector.reconnectTimer = null;
-    collector.bootstrap = { token: GGBET_TOKEN, wsUrl: 'wss://gg-b-gql.gg.bet/graphql', origin: 'https://gg.bet', at: Date.now(), source: 'html' };
+    collector.bootstrap = { token: GGBET_TOKEN, wsUrl: 'wss://gg-b-gql.gg.bet/graphql', origin: 'https://gg.bet', at: Date.now(), source: 'html' }; collector.bootstrapAgent = await proxyAgent();
     await assert.rejects(() => collector.connect());
     assert.ok(proxy.connects.length >= 2);
     assert.ok(proxy.connects.every((c) => c.target === 'gg-b-gql.gg.bet:443'), 'only the WebSocket host is tunneled: the cached bootstrap is not refetched');
@@ -116,7 +116,7 @@ test('D: DataBet WebSocket goes through the same proxy', async () => {
   const direct = noDirect(); const collector = new DatabetLiveCollector(quietState('t-proxy-db-d'), { fetchImpl: direct.fetchImpl });
   try {
     collector.stopped = false;
-    collector.bootstrap = { token: DATABET_TOKEN, wsUrl: 'wss://sportsbook-gql.databet.cloud/graphql?label=cdrriyv', origin: config.databetOrigin, at: Date.now(), label: 'cdrriyv' };
+    collector.bootstrap = { token: DATABET_TOKEN, wsUrl: 'wss://sportsbook-gql.databet.cloud/graphql?label=cdrriyv', origin: config.databetOrigin, at: Date.now(), label: 'cdrriyv' }; collector.bootstrapAgent = await proxyAgent();
     await assert.rejects(() => collector.connect());
     assert.deepEqual(proxy.connects.map((c) => c.target), ['sportsbook-gql.databet.cloud:443']);
     assert.equal(proxy.connects[0].auth, BASIC); assert.equal(direct.calls.n, 0);
@@ -149,8 +149,9 @@ test('the proxy agent carries HTTP (redirects, gzip) and WebSocket traffic end t
   try {
     const res = await proxyFetch(`http://${hostPort}/start`, { timeoutMs: 4000 });
     assert.equal(res.status, 200); assert.match(await res.text(), /bettingOptions/);
+    const agent = await proxyAgent();
     const echoed = await new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws://${hostPort}/graphql`, 'graphql-ws', { agent: proxyAgent() });
+      const ws = new WebSocket(`ws://${hostPort}/graphql`, 'graphql-ws', { agent });
       ws.on('open', () => ws.send('ping')); ws.on('message', (m) => { resolve(String(m)); ws.close(); }); ws.on('error', reject);
     });
     assert.equal(echoed, 'echo:ping');
@@ -196,4 +197,29 @@ test('E: proxy credentials never appear in errors, collector status, /health or 
     if (server) await new Promise((resolve) => server.close(resolve));
     await gg.stop(); await db.stop(); await stopMatcher(); restoreModes(); restoreEnv(); await proxy.close();
   }
+});
+
+test('one gateway per session: the proxy host is resolved once and pinned; a token is reused only through the same agent', async () => {
+  const proxy = await fakeProxy(); const restoreEnv = useProxy(proxy.port), restoreModes = useModes({ ggbet: 'proxy' });
+  process.env.CZECH_PROXY_HOST = 'localhost'; resetEgressForTests();
+  const collector = new GgbetLiveCollector(quietState('t-proxy-pin'), { fetchImpl: noDirect().fetchImpl });
+  try {
+    const first = await proxyAgent(), again = await proxyAgent();
+    assert.equal(first, again, 'every tunnel of the process uses the same agent');
+    assert.equal(proxyDiagnostics().proxyGateway, '127.0.0.1'); assert.equal(proxyDiagnostics().proxyHost, 'localhost');
+    collector.stopped = false;
+    collector.bootstrap = { token: GGBET_TOKEN, wsUrl: 'wss://gg-b-gql.gg.bet/graphql', origin: 'https://gg.bet', at: Date.now(), source: 'html' }; collector.bootstrapAgent = first;
+    await assert.rejects(() => collector.connect()); clearTimeout(collector.reconnectTimer); collector.reconnectTimer = null;
+    assert.deepEqual(proxy.connects.map((c) => c.target), ['gg-b-gql.gg.bet:443'], 'token fetched through this agent is reused');
+    // Three failed sessions in a row drop the pinned gateway; the next session gets a new agent and therefore a fresh token.
+    reportProxySession(false); // with the failed connect above: two failed sessions in a row
+    assert.equal(await proxyAgent(), first, 'two failures keep the gateway');
+    reportProxySession(false);
+    const second = await proxyAgent();
+    assert.notEqual(second, first); assert.equal(proxyDiagnostics().gatewayPins, 2);
+    proxy.connects.length = 0;
+    collector.bootstrap = { token: GGBET_TOKEN, wsUrl: 'wss://gg-b-gql.gg.bet/graphql', origin: 'https://gg.bet', at: Date.now(), source: 'html' };
+    await assert.rejects(() => collector.connect());
+    assert.deepEqual(proxy.connects.map((c) => c.target), ['gg.bet:443'], 'a token from another agent is not reused: the session bootstraps again through the new agent');
+  } finally { await collector.stop(); restoreModes(); restoreEnv(); await proxy.close(); }
 });

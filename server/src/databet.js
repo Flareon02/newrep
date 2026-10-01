@@ -2,7 +2,7 @@ import GameCategories from './game-categories.cjs';
 import { canonicalCategory, englishize, eventKind } from './entity-resolver.js';
 import { config } from './config.js';
 import { canonicalizeGgbetMarket } from './market-semantics.js';
-import { proxyAgent, proxyDiagnostics, proxyFetch, redact } from './egress.js';
+import { proxyAgent, proxyDiagnostics, proxyFetch, redact, reportProxySession } from './egress.js';
 import {
   MATCH_STATUSES, LIVE_SPORTS, absoluteAsset, scoreParts, marketPeriod, marketType, localizedMarketTitle,
   outcomeDesignation, localizedOutcomeLabel, pricePoint, mergeGgbetEvent
@@ -163,20 +163,22 @@ export class DatabetLiveCollector {
     };
   }
 
-  async fetchBootstrap(force = false) {
-    if (!force && this.bootstrap && this.now() - this.bootstrap.at < config.databetBootstrapCacheMs) return this.bootstrap;
+  // agent: proxy sessions reuse a cached token only if it was fetched through the same agent (= the same egress IP).
+  async fetchBootstrap(force = false, agent = null) {
+    if (!force && this.bootstrap && this.now() - this.bootstrap.at < config.databetBootstrapCacheMs && (!agent || this.bootstrapAgent === agent)) return this.bootstrap;
+    if (config.databetNetworkMode === 'proxy') agent = agent || await proxyAgent();
     const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), config.databetRequestTimeoutMs); timer.unref?.();
     try {
       const url = `${config.databetOrigin}/${config.databetLocale}/esports/live`, headers = { 'user-agent': USER_AGENT, accept: 'text/html,application/xhtml+xml', 'accept-language': `${config.databetLocale},en;q=0.8` };
       // Proxy mode: the page that issues the guest token goes through the same proxy agent as the WebSocket below.
       const res = config.databetNetworkMode === 'proxy'
-        ? await proxyFetch(url, { headers, signal: ctrl.signal, timeoutMs: config.databetRequestTimeoutMs, agent: proxyAgent() })
+        ? await proxyFetch(url, { headers, signal: ctrl.signal, timeoutMs: config.databetRequestTimeoutMs, agent })
         : await this.fetch(url, { headers, redirect: 'follow', signal: ctrl.signal });
       if (!res?.ok) throw Object.assign(Error(`DataBet bootstrap HTTP ${res?.status || 0}`), { status: res?.status || 0 });
       const html = await res.text();
       if (html.length > 4_000_000) throw Error('DataBet: bootstrap HTML слишком большой');
       const data = databetBootstrapFromHtml(html, { origin: config.databetOrigin, at: this.now() });
-      this.bootstrap = data; this.bootstrapFetches++;
+      this.bootstrap = data; this.bootstrapAgent = agent; this.bootstrapFetches++;
       return data;
     } catch (error) {
       this.bootstrapFailures++;
@@ -370,9 +372,11 @@ export class DatabetLiveCollector {
     if (this.stopped || !config.databetLiveEnabled || this.connecting) return this.connecting;
     this.connecting = (async () => {
       try {
-        const bootstrap = await this.fetchBootstrap(!this.bootstrap); if (this.stopped) return;
+        // Proxy mode: one agent for the whole session - the token and the WebSocket leave through the same gateway.
+        const agent = config.databetNetworkMode === 'proxy' ? await proxyAgent() : null;
+        const bootstrap = await this.fetchBootstrap(!this.bootstrap, agent); if (this.stopped) return;
         const WebSocketClass = await this.webSocketClass();
-        const ws = new WebSocketClass(bootstrap.wsUrl, 'graphql-ws', { headers: { Origin: bootstrap.origin, 'User-Agent': USER_AGENT }, handshakeTimeout: config.databetRequestTimeoutMs, perMessageDeflate: false, maxPayload: config.upstreamMaxBytes, ...(config.databetNetworkMode === 'proxy' ? { agent: proxyAgent() } : {}) });
+        const ws = new WebSocketClass(bootstrap.wsUrl, 'graphql-ws', { headers: { Origin: bootstrap.origin, 'User-Agent': USER_AGENT }, handshakeTimeout: config.databetRequestTimeoutMs, perMessageDeflate: false, maxPayload: config.upstreamMaxBytes, ...(agent ? { agent } : {}) });
         this.ws = ws; this.lastAckAt = 0; this.lastConnectAt = this.now(); this.lastMessageAt = this.now(); this.requests.clear(); this.subscriptions.clear();
         for (const row of this.tabs.values()) row.pending = false;
         await new Promise((resolve, reject) => {
@@ -398,8 +402,9 @@ export class DatabetLiveCollector {
           ws.addEventListener('open', open); ws.addEventListener('message', message); ws.addEventListener('error', error); ws.addEventListener('close', close);
         });
         if (this.connectCount++ > 0) this.reconnects++;
-        this.failures = 0; this.lastError = '';
+        this.failures = 0; this.lastError = ''; if (agent) reportProxySession(true);
       } catch (error) {
+        if (config.databetNetworkMode === 'proxy') reportProxySession(false);
         this.failures++; this.lastError = redact(error?.message || String(error));
         await this.state.failure({ message: this.lastError, status: error?.status || 0 });
         if (isAuthError(this.lastError)) this.bootstrap = null;

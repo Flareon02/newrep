@@ -1,8 +1,8 @@
 // Outbound network path of the LIVE odds platform collectors (GGBET, DataBet).
 //
 //   <PROVIDER>_NETWORK_MODE=proxy   bootstrap page AND GraphQL WebSocket go through the HTTP CONNECT proxy
-//                                   (CZECH_PROXY_*). One agent, one credential set: every request of a session
-//                                   leaves through the same sticky proxy session. Never falls back to direct.
+//                                   (CZECH_PROXY_*). One agent, one credential set, one gateway: every request of a
+//                                   session leaves through the same sticky proxy session. Never falls back to direct.
 //   GGBET_NETWORK_MODE=relay        guest token from the bootstrap relay, WebSocket direct (4.4/4.5 behaviour)
 //   <PROVIDER>_NETWORK_MODE=direct  everything direct
 // Unset: GGBET = relay when GGBET_BOOTSTRAP_RELAY_URL is set, otherwise direct; DataBet = direct.
@@ -12,6 +12,8 @@
 import http from 'node:http';
 import https from 'node:https';
 import zlib from 'node:zlib';
+import dns from 'node:dns';
+import net from 'node:net';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
 const MODES = { ggbet: ['proxy', 'relay', 'direct'], databet: ['proxy', 'direct'] };
@@ -31,7 +33,14 @@ function readProxySettings(env = process.env) {
   };
 }
 
-let agentCache = null; // {signature, agent}
+let agentCache = null; // {signature, agent, gateway}
+let pinning = null;    // in-flight gateway resolution
+let failedGateway = '';
+let consecutiveFailures = 0, gatewayPins = 0;
+// A residential proxy hostname resolves to several gateway nodes and the sticky session is kept per node: the same
+// credentials through two nodes leave from two different IPs. One gateway IP is therefore pinned for every tunnel of
+// the process; it is re-pinned only after REPIN_AFTER consecutive failed sessions.
+const REPIN_AFTER = 3;
 let secrets = [];      // strings that must never leave the process (credentials and their encodings)
 let egress = { ip: '', country: '', asn: '', org: '', checkedAt: null, error: '' };
 
@@ -49,27 +58,48 @@ export function redact(value) {
   return out.replace(/(\/\/)[^/@\s]+@/g, '$1***@');
 }
 
-// The single proxy agent of this process. Throws (fail closed) when proxy mode is requested but not configured.
-export function proxyAgent(env = process.env) {
+async function pickGateway(host) {
+  if (net.isIP(host)) return host;
+  const all = [...new Set((await dns.promises.lookup(host, { all: true, family: 4 })).map((row) => row.address))];
+  if (!all.length) throw Error(`Czech proxy host ${host} did not resolve`);
+  const candidates = all.length > 1 ? all.filter((ip) => ip !== failedGateway) : all;
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+// The single proxy agent of this process (pinned to one gateway IP). Rejects (fail closed) when proxy mode is requested
+// but the proxy is disabled or not configured. A session must use one agent for its bootstrap and its WebSocket.
+export async function proxyAgent(env = process.env) {
   const settings = readProxySettings(env);
   rememberSecrets(settings);
   if (!settings.enabled) throw Error('Czech proxy disabled (CZECH_PROXY_ENABLED is not 1)');
   if (!settings.host || !settings.port) throw Error('Czech proxy not configured (CZECH_PROXY_HOST / CZECH_PROXY_PORT)');
   const signature = JSON.stringify([settings.host, settings.port, settings.username, settings.password]);
   if (agentCache?.signature === signature) return agentCache.agent;
-  const url = new URL(`http://${settings.host}:${settings.port}`);
-  if (settings.username) url.username = encodeURIComponent(settings.username);
-  if (settings.password) url.password = encodeURIComponent(settings.password);
-  agentCache = { signature, agent: new HttpsProxyAgent(url, { keepAlive: false }) };
-  return agentCache.agent;
+  if (!pinning) pinning = (async () => {
+    const gateway = await pickGateway(settings.host);
+    const url = new URL(`http://${gateway}:${settings.port}`);
+    if (settings.username) url.username = encodeURIComponent(settings.username);
+    if (settings.password) url.password = encodeURIComponent(settings.password);
+    agentCache = { signature, gateway, agent: new HttpsProxyAgent(url, { keepAlive: false }) };
+    gatewayPins++; consecutiveFailures = 0;
+    return agentCache.agent;
+  })().finally(() => { pinning = null; });
+  return pinning;
 }
 
-export function resetEgressForTests() { agentCache = null; secrets = []; egress = { ip: '', country: '', asn: '', org: '', checkedAt: null, error: '' }; }
+// Collectors report each proxy session: a success keeps the gateway, REPIN_AFTER failures in a row drop it so the next
+// session (fresh bootstrap + WebSocket together) is pinned to another gateway node.
+export function reportProxySession(ok) {
+  if (ok) { consecutiveFailures = 0; return; }
+  if (++consecutiveFailures >= REPIN_AFTER && agentCache) { failedGateway = agentCache.gateway; agentCache = null; consecutiveFailures = 0; }
+}
 
-// Safe diagnostics: host and port only, never the username or password.
+export function resetEgressForTests() { agentCache = null; pinning = null; failedGateway = ''; consecutiveFailures = 0; gatewayPins = 0; secrets = []; egress = { ip: '', country: '', asn: '', org: '', checkedAt: null, error: '' }; }
+
+// Safe diagnostics: host, port and the pinned gateway IP only, never the username or password.
 export function proxyDiagnostics(env = process.env) {
   const s = readProxySettings(env);
-  return { proxyEnabled: s.enabled, proxyHost: s.host, proxyPort: s.port || null, credentials: s.username || s.password ? 'set' : 'missing', egress: { ...egress } };
+  return { proxyEnabled: s.enabled, proxyHost: s.host, proxyPort: s.port || null, proxyGateway: agentCache?.gateway || null, gatewayPins, credentials: s.username || s.password ? 'set' : 'missing', egress: { ...egress } };
 }
 
 function decode(res, body) {
@@ -82,8 +112,8 @@ function decode(res, body) {
 
 // Minimal fetch() for GET requests through the proxy agent: follows redirects (each hop is a new CONNECT through the
 // same agent), decodes gzip/deflate/br, enforces a size limit. Returns {ok, status, url, headers, text()}.
-export function proxyFetch(target, { headers = {}, timeoutMs = 12000, maxBytes = 8 * 1024 * 1024, maxRedirects = 5, signal = null, agent = null } = {}) {
-  const viaAgent = agent || proxyAgent();
+export async function proxyFetch(target, { headers = {}, timeoutMs = 12000, maxBytes = 8 * 1024 * 1024, maxRedirects = 5, signal = null, agent = null } = {}) {
+  const viaAgent = agent || await proxyAgent();
   const run = (url, redirectsLeft) => new Promise((resolve, reject) => {
     let parsed; try { parsed = new URL(url); } catch { reject(Error('proxy fetch: invalid URL')); return; }
     const lib = parsed.protocol === 'https:' ? https : parsed.protocol === 'http:' ? http : null;

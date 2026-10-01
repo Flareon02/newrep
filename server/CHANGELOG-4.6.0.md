@@ -8,7 +8,11 @@ SQLite schema stays at 3, no migration. Without the new variables the server beh
   `DATABET_NETWORK_MODE=proxy|direct`. In `proxy` mode the whole session goes through one HTTP CONNECT proxy
   (`CZECH_PROXY_ENABLED/HOST/PORT/USERNAME/PASSWORD`): the bootstrap page that issues the guest token **and** the GraphQL
   WebSocket, including reconnects and token refreshes. One `https-proxy-agent` instance per process with the credentials
-  exactly as configured, so a sticky proxy session keeps one egress IP. Proxy mode fails closed: if the proxy is disabled or
+  exactly as configured, pinned to **one gateway IP** of the proxy
+  hostname: a residential proxy hostname resolves to several gateway nodes and keeps the sticky session per node, so the same
+  credentials through two nodes leave from two IPs (measured on staging). A session obtains the agent once and uses it for
+  its bootstrap and its WebSocket; a cached token is reused only through the agent it was fetched with. The gateway is
+  re-pinned only after 3 consecutive failed sessions (`network.proxy.proxyGateway`, `gatewayPins` in `/health`). Proxy mode fails closed: if the proxy is disabled or
   incomplete the collector reports an error and never connects directly. GGBET without an explicit mode keeps the 4.5.0
   rule (relay when `GGBET_BOOTSTRAP_RELAY_URL` is set, otherwise direct); the relay code is unchanged and still used in
   `relay` mode.
