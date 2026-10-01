@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # One-time (idempotent) setup of the STAGING server: Ubuntu 24.04, run as root.
 #
-#   sudo bash provision.sh [--http-port 8080] [--profile prod|tight|relaxed]
+#   sudo bash provision.sh [--http-port 8080] [--profile prod|tight|relaxed] [--public-api] [--allow 443/tcp]...
+#
+# Firewall is an explicit allowlist: SSH always; the API port only with --public-api; anything else only via --allow.
 #
 # Creates: node 22, service user, directories, systemd service + health watchdog + journald limits, firewall (SSH stays
 # open), and a staging-only API token in /etc/esports-monitor/server.env (never printed in full, never committed).
@@ -9,8 +11,8 @@
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HTTP_PORT=8080; PROFILE=prod
-while [ $# -gt 0 ]; do case "$1" in --http-port) HTTP_PORT="$2"; shift 2;; --profile) PROFILE="$2"; shift 2;; *) echo "unknown option $1" >&2; exit 2;; esac; done
+HTTP_PORT=8080; PROFILE=prod; PUBLIC_API=0; ALLOW=()
+while [ $# -gt 0 ]; do case "$1" in --http-port) HTTP_PORT="$2"; shift 2;; --profile) PROFILE="$2"; shift 2;; --public-api) PUBLIC_API=1; shift;; --allow) ALLOW+=("$2"); shift 2;; *) echo "unknown option $1" >&2; exit 2;; esac; done
 
 APP=/opt/esports-monitor; DATA=/var/lib/esports-monitor; ETC=/etc/esports-monitor; SOAK=/var/lib/esports-monitor-soak
 log() { printf '\n==> %s\n' "$*"; }
@@ -92,7 +94,8 @@ log "6/8 firewall (SSH is allowed BEFORE the firewall is enabled)"
 ssh_ports="$(ss -Htlnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}' | sort -u)"
 [ -n "$ssh_ports" ] || ssh_ports=22
 for p in $ssh_ports; do ufw allow "$p/tcp" >/dev/null; echo "allowed ssh on $p/tcp"; done
-ufw allow "$HTTP_PORT/tcp" >/dev/null
+[ "$PUBLIC_API" = 1 ] && ufw allow "$HTTP_PORT/tcp" >/dev/null
+for r in "${ALLOW[@]}"; do ufw allow "$r" >/dev/null; echo "allowed $r"; done
 ufw default deny incoming >/dev/null; ufw default allow outgoing >/dev/null
 ufw --force enable >/dev/null
 ufw status | sed 's/^/   /'
