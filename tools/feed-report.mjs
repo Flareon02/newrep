@@ -2,9 +2,10 @@
 // Honest per-source status of the real integrations, taken from a running server's /health. A source is only
 // reported WORKING when it delivered data and has no error; blocked/unreachable sources are stated as such.
 //
-//   node tools/feed-report.mjs [--url http://127.0.0.1:8080] [--json]
+//   node tools/feed-report.mjs [--url http://127.0.0.1[:port]]  (default: STAGING_URL, else PORT from /etc/esports-monitor/server.env, else 8080) [--json]
+import { defaultUrl } from './default-url.mjs';
 const arg = (n, d) => { const i = process.argv.indexOf('--' + n); return i > 0 ? process.argv[i + 1] : d; };
-const url = arg('url', process.env.STAGING_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
+const url = arg('url', defaultUrl()).replace(/\/+$/, '');
 const h = await (await fetch(url + '/health', { signal: AbortSignal.timeout(10000) })).json();
 
 function classify({ count, stale, err, http, attempts, successes }) {

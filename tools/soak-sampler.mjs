@@ -2,7 +2,7 @@
 // Long-running measurement: appends one JSON line per interval to a file, so a soak test can run unattended for
 // days and be analysed later with tools/soak-report.mjs (also from a different session).
 //
-//   node tools/soak-sampler.mjs --url http://127.0.0.1:8080 --out /var/lib/esports-monitor-soak/samples.jsonl \
+//   node tools/soak-sampler.mjs --url http://127.0.0.1 --out /var/lib/esports-monitor-soak/samples.jsonl \
 //        --service esports-monitor --data-dir /var/lib/esports-monitor/data [--interval 60]
 //
 // Without --service it finds the server by `--pid` or by scanning /proc for "node src/index.js".
@@ -11,9 +11,10 @@ import { execFile } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { defaultUrl } from './default-url.mjs';
 
 const arg = (n, d) => { const i = process.argv.indexOf('--' + n); return i > 0 ? process.argv[i + 1] : d; };
-const url = arg('url', 'http://127.0.0.1:8080'), out = arg('out', './samples.jsonl'), service = arg('service', ''), dataDir = arg('data-dir', '');
+const url = arg('url', defaultUrl()), out = arg('out', './samples.jsonl'), service = arg('service', ''), dataDir = arg('data-dir', '');
 const interval = Number(arg('interval', 60)) * 1000, once = process.argv.includes('--once');
 const MAX_FILE = 20 * 1024 * 1024;
 mkdirSync(path.dirname(path.resolve(out)), { recursive: true });

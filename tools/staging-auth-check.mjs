@@ -8,9 +8,10 @@
 // Only lightweight endpoints are called with the right token (they do not contact any bookmaker). Endpoints that would
 // trigger an outbound request (HLTV lookups) are checked for rejection only.
 import { readFileSync } from 'node:fs';
+import { defaultUrl } from './default-url.mjs';
 
 const arg = (n, d) => { const i = process.argv.indexOf('--' + n); return i > 0 ? process.argv[i + 1] : d; };
-const url = (arg('url', process.env.STAGING_URL || 'http://127.0.0.1:8080')).replace(/\/+$/, '');
+const url = (arg('url', defaultUrl())).replace(/\/+$/, '');
 let token = process.env.STAGING_TOKEN || '';
 const file = arg('token-file', '');
 if (!token && file) { const m = /^API_TOKEN=(.*)$/m.exec(readFileSync(file, 'utf8')); token = (m ? m[1] : readFileSync(file, 'utf8')).trim(); }

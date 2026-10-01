@@ -97,3 +97,15 @@ test('soak sampler + report: one sample is complete, and the report forecasts gr
     assert.ok(Math.abs(report.cpuPercentOfOneCore.avg - 0.1) < 0.02, `CPU percent from ticks (${report.cpuPercentOfOneCore.avg})`);
   } finally { await api.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('staging tools default to the configured server port, STAGING_URL wins, 8080 is only the fallback', async () => {
+  const { defaultUrl } = await import(path.join(repo, 'tools/default-url.mjs'));
+  const file = (text) => () => text;
+  assert.equal(defaultUrl({}, file('PORT=80\nAPI_TOKEN=x\n')), 'http://127.0.0.1');
+  assert.equal(defaultUrl({}, file('DATA_DIR=/x\nPORT=9090\n')), 'http://127.0.0.1:9090');
+  assert.equal(defaultUrl({}, file('API_TOKEN=x\n')), 'http://127.0.0.1:8080');
+  assert.equal(defaultUrl({}, () => { throw new Error('ENOENT'); }), 'http://127.0.0.1:8080');
+  assert.equal(defaultUrl({ STAGING_URL: 'http://example.test:81' }, file('PORT=80\n')), 'http://example.test:81');
+  const r = spawnSync('node', ['-e', `import('${path.join(repo, 'tools/default-url.mjs')}').then(m=>console.log(m.defaultUrl()))`], { encoding: 'utf8', env: { ...process.env, STAGING_URL: '', ESPORTS_MONITOR_ENV_FILE: '/nonexistent' } });
+  assert.equal(r.stdout.trim(), 'http://127.0.0.1:8080');
+});
