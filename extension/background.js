@@ -90,8 +90,8 @@ async function poll(kind,force=false){
    if(myEpoch!==epoch)return cache[kind];
    const message=ServerConfig.errorText(error),before=cache[kind]?.transportError,count=(failures[kind]||0)+1;failures[kind]=count;retryAfter[kind]=Date.now()+retryDelay(kind,count);
    cache[kind]={...cache[kind],transportError:message,failedAt:Date.now()};
-   const freshness={receivedAt:cache[kind]?.receivedAt,transportError:message,failedAt:cache[kind]?.failedAt,stale:cache[kind]?.stale,providers:cache[kind]?.providers};
-   if(message!==before)for(const port of ports)try{port.postMessage({kind:'freshness',feed:kind,freshness});}catch{}
+   const freshness={receivedAt:cache[kind]?.receivedAt,transportError:message,failures:count,failedAt:cache[kind]?.failedAt,stale:cache[kind]?.stale,providers:cache[kind]?.providers};
+   if(message!==before||count===2)for(const port of ports)try{port.postMessage({kind:'freshness',feed:kind,freshness});}catch{}
   }
   return cache[kind];
  })().finally(()=>inflight.delete(kind));inflight.set(kind,run);return run;

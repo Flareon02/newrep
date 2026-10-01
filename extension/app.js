@@ -24,7 +24,7 @@ function theme(){document.body.classList.toggle('pinned-menu',!!prefs.pinMenu);$
 systemTheme.addEventListener('change',theme);
 window.addEventListener('storage',e=>{if(e.key==='monitor-theme'&&e.newValue){prefs.theme=e.newValue;theme();}});
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,3200);}
-function report(error){const message=error?.message||String(error||'Неизвестная ошибка');errors.push({at:new Date().toISOString(),message});if(errors.length>50)errors.shift();toast(message);}
+function report(error){const message=error?ServerConfig.errorText(error):'Неизвестная ошибка';errors.push({at:new Date().toISOString(),message});if(errors.length>50)errors.shift();toast(message);}
 async function request(path,options={}){
  const key=options.method==='POST'?null:path;if(key&&pending.has(key))return pending.get(key);
  const run=(async()=>{const timeout=path==='/api/prematch/compare'||path.startsWith('/api/ui/history')||path.startsWith('/api/ui/results')?35000:15000;const response=await fetch(BASE+path,{cache:'no-store',signal:AbortSignal.timeout(timeout),...options,headers:ServerConfig.headers(options.headers)});const data=await response.json();if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data;})().finally(()=>{if(key)pending.delete(key);});if(key)pending.set(key,run);return run;
@@ -419,7 +419,7 @@ function renderLeagues(){
  $('leagueLists').onchange=event=>{const id=event.target.dataset.selectLeague;if(!id)return;if(event.target.checked)selection.add(id);else selection.delete(id);$('connectLeagues').textContent=`Объединить выбранные (${selection.size})`;scheduleRank();};
  $('leagueLists').onclick=event=>{const b=event.target.closest('button');if(!b)return;const more=b.dataset.moreLeagues;if(more){leagueListLimits.set(more,(leagueListLimits.get(more)||LEAGUE_PAGE_SIZE)+LEAGUE_PAGE_SIZE);lists();return;}if(b.dataset.visibilityKey){toggleLeagueScope(b.dataset.visibilityKey,b.dataset.visibilityScope);$('leagueLists').querySelectorAll('[data-visibility-key]').forEach(button=>button.setAttribute('aria-pressed',leagueShown(button.dataset.visibilityKey,button.dataset.visibilityScope)));return;}const star=b.dataset.starLeague;if(star){prefs.favorites=prefs.favorites.includes(star)?prefs.favorites.filter(k=>k!==star):[...prefs.favorites,star];savePrefs();$('leagueLists').querySelectorAll('[data-star-league]').forEach(button=>{const active=prefs.favorites.includes(button.dataset.starLeague);button.setAttribute('aria-pressed',active);button.innerHTML=starIcon(active);});}};
  $('connectLeagues').onclick=async()=>{try{const name=$('groupName').value.trim();if(!name)throw new Error('Введите название общей лиги');const picked=providers.flatMap(source=>catalog.providers?.[source]||[]).filter(r=>selection.has(r.id||LeagueModel.id(r)));if(picked.length<2)throw new Error('Выберите минимум две лиги');const category=await chooseLeagueCategory(picked);if(!category)return;workingLinks=LeagueModel.connect(workingLinks,picked,crypto.randomUUID(),Date.now(),category);const g=LeagueModel.groupFor(picked[0],workingLinks);g.name=name;selection.clear();renderLeagues();toast('Группа в черновике. Опубликуйте изменения.');}catch(error){report(error);}};
- $('publishLeagues').onclick=async()=>{try{const result=await LeagueClient.publishDialog(catalog,LeagueModel.diff(catalog.links||[],workingLinks));if(result){catalog={...catalog,...result.result,receivedAt:0};workingLinks=structuredClone(result.result?.links||workingLinks);snapshots=await chrome.runtime.sendMessage({type:'refresh'});viewSignature='';await loadCatalog(true,[]);toast('Связи опубликованы');}}catch(error){report(error);}};
+ $('publishLeagues').onclick=async()=>{try{const result=await LeagueClient.publishDialog(catalog,LeagueModel.diff(catalog.links||[],workingLinks));if(result){catalog={...catalog,...result.result,receivedAt:0};workingLinks=structuredClone(result.result?.links||workingLinks);toast('Связи опубликованы');renderLeagues();snapshots=await chrome.runtime.sendMessage({type:'refresh'});viewSignature='';await loadCatalog(true,[]);}}catch(error){report(error);}};
  $('content').querySelectorAll('[data-edit-group]').forEach(b=>b.onclick=()=>editLeagueGroup(b.dataset.editGroup));
  $('content').querySelectorAll('[data-remove-group]').forEach(b=>b.onclick=()=>{workingLinks=workingLinks.filter(g=>g.id!==b.dataset.removeGroup);renderLeagues();});
  $('content').querySelectorAll('[data-rename-group]').forEach(b=>b.onclick=()=>{const group=workingLinks.find(g=>g.id===b.dataset.renameGroup);modal(`<h2>Название группы</h2><input id="renameInput" value="${esc(group.name||'')}" maxlength="150"><div class="dialog-actions"><button id="renameCancel">Отмена</button><button id="renameSave">Сохранить черновик</button></div>`);$('renameCancel').onclick=()=>$('modal').close();$('renameSave').onclick=()=>{const name=$('renameInput').value.trim();if(!name)return;workingLinks=workingLinks.map(g=>g.id===group.id?{...g,name}:g);$('modal').close();renderLeagues();};});
@@ -502,7 +502,12 @@ function connect(){
   if(message.kind==='ui-stream'){reconcileUiStream();return;}
   let needsRender=true;
   if(message.kind==='freshness'){
-   const target=snapshots[message.feed];if(target&&message.freshness)Object.assign(target,message.freshness);else if(message.freshness?.transportError)snapshots[message.feed]={events:[],...message.freshness};needsRender=!target&&!!message.freshness?.transportError;
+   const target=snapshots[message.feed],failed=!!message.freshness?.transportError;
+   // Before the first snapshot only a placeholder (offline:true) records the connection error; it is never treated as data.
+   if(target&&!target.offline&&message.freshness)Object.assign(target,message.freshness);
+   else if(failed&&message.freshness&&(target?.offline||message.freshness.failures>=2)){snapshots[message.feed]={events:[],offline:true,...message.freshness};needsRender=true;}
+   else if(target?.offline&&!failed){delete snapshots[message.feed];needsRender=true;}
+   if(!(target?.offline||snapshots[message.feed]?.offline))needsRender=false;
   }else if(message.kind==='initial'){
    snapshots={...snapshots,...message.snapshots};observeScores(snapshots.live);
   }else if(message.push){
@@ -510,7 +515,7 @@ function connect(){
     const key=`${patch.source}:${patch.sourceEventId||patch.id}`;
     for(const [cacheKey,entry] of detailCache)if(refs(entry?.event||{}).some(r=>`${r.source}:${r.sourceEventId||r.id}`===key))detailCache.delete(cacheKey);
    }
-   const before=snapshots[message.kind],applied=FeedPush.applyProviderPatches(before,message.patches||[],message.meta||{},Number(message.meta?.receivedAt)||Date.now()),next=applied.snapshot;
+   const before=snapshots[message.kind]?.offline?undefined:snapshots[message.kind],applied=FeedPush.applyProviderPatches(before,message.patches||[],message.meta||{},Number(message.meta?.receivedAt)||Date.now()),next=applied.snapshot;
    if(next){snapshots[message.kind]=next;needsRender=snapshotChanged(before,next);if(message.kind==='live')observeScores(next);if(applyVisibleFeedPatches(message.kind,message.patches))needsRender=false;window.dispatchEvent(new CustomEvent('monitor-feed-push',{detail:{kind:message.kind,patches:message.patches||[],snapshot:next}}));}else needsRender=false;
   }else{
    const before=snapshots[message.kind];snapshots[message.kind]=message.snapshot;needsRender=snapshotChanged(before,message.snapshot);if(message.kind==='live')observeScores(message.snapshot);
