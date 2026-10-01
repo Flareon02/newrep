@@ -1,0 +1,220 @@
+{
+  "file": "/tmp/claude-0/-home-user-newrep/eb3348d1-4e2f-5f72-872f-101570699969/scratchpad/soak.jsonl",
+  "samples": 80,
+  "from": "2026-09-30T23:48:16.086Z",
+  "to": "2026-10-01T00:08:03.042Z",
+  "hours": 0.3,
+  "metrics": {
+    "Process RSS, MiB": {
+      "min": 206,
+      "avg": 234.9,
+      "p95": 270,
+      "max": 284.9,
+      "last": 231.4,
+      "first": 238.3,
+      "slopePerDay": -714.1
+    },
+    "V8 heap used, MiB": {
+      "min": 29,
+      "avg": 43.1,
+      "p95": 53,
+      "max": 64,
+      "last": 46,
+      "first": 46,
+      "slopePerDay": 253.7
+    },
+    "History rows resident": {
+      "min": 14769,
+      "avg": 14770.8,
+      "p95": 14772,
+      "max": 14772,
+      "last": 14769,
+      "first": 14772,
+      "slopePerDay": -235.2
+    },
+    "History rows persisted": {
+      "min": 700060,
+      "avg": 700234.7,
+      "p95": 700660,
+      "max": 700660,
+      "last": 700060,
+      "first": 700660,
+      "slopePerDay": -54093.2
+    },
+    "Event loop max, ms": {
+      "min": 52,
+      "avg": 119.9,
+      "p95": 233,
+      "max": 333,
+      "last": 86,
+      "first": 333,
+      "slopePerDay": -2549.9
+    },
+    "Open file descriptors": {
+      "min": 25,
+      "avg": 33.6,
+      "p95": 42,
+      "max": 45,
+      "last": 25,
+      "first": 41,
+      "slopePerDay": -529.7
+    },
+    "Threads": {
+      "min": 9,
+      "avg": 9.5,
+      "p95": 11,
+      "max": 11,
+      "last": 9,
+      "first": 11,
+      "slopePerDay": -85.1
+    },
+    "SQLite file, MiB": {
+      "min": 416.9,
+      "avg": 430.3,
+      "p95": 433.7,
+      "max": 433.7,
+      "last": 433.7,
+      "first": 416.9,
+      "slopePerDay": 1120.2
+    },
+    "SQLite WAL, MiB": {
+      "min": 0,
+      "avg": 6.4,
+      "p95": 6.7,
+      "max": 6.7,
+      "last": 6.7,
+      "first": 0,
+      "slopePerDay": 120.1
+    },
+    "Odds journal rows": {
+      "min": 0,
+      "avg": 592.4,
+      "p95": 600,
+      "max": 600,
+      "last": 600,
+      "first": 0,
+      "slopePerDay": 3276.3
+    },
+    "Free disk, MiB": {
+      "min": 29769,
+      "avg": 29772.7,
+      "p95": 29789,
+      "max": 29789,
+      "last": 29769,
+      "first": 29789,
+      "slopePerDay": -1248.5
+    },
+    "MemAvailable (system), MiB": {
+      "min": 15239.9,
+      "avg": 15319.7,
+      "p95": 15352.2,
+      "max": 15365.8,
+      "last": 15301.5,
+      "first": 15312.5,
+      "slopePerDay": -614.8
+    }
+  },
+  "cpuPercentOfOneCore": {
+    "min": 2.2,
+    "avg": 5.1,
+    "p95": 13.2,
+    "max": 42.1,
+    "last": 8.6,
+    "first": 4
+  },
+  "counters": {
+    "restarts": null,
+    "processChanges": 0,
+    "healthProbeFailures": 1,
+    "apiRequests": 546,
+    "matcherFailures": 0,
+    "matcherTimeouts": 0
+  },
+  "feeds": {
+    "live.astek": {
+      "samples": 79,
+      "stalePercent": 0,
+      "withError": 0,
+      "lastCount": 60,
+      "lastError": ""
+    },
+    "live.fonbet": {
+      "samples": 79,
+      "stalePercent": 100,
+      "withError": 100,
+      "lastCount": 0,
+      "lastError": "HTTP 404"
+    },
+    "live.pinnacle": {
+      "samples": 79,
+      "stalePercent": 100,
+      "withError": 100,
+      "lastCount": 0,
+      "lastError": "HTTP 403"
+    },
+    "live.ggbet": {
+      "samples": 79,
+      "stalePercent": 100,
+      "withError": 0,
+      "lastCount": 0,
+      "lastError": ""
+    },
+    "prematch.astek": {
+      "samples": 79,
+      "stalePercent": 0,
+      "withError": 100,
+      "lastCount": 600,
+      "lastError": "Прематч частично обновлён: 45 лиг; Ответ достиг лимита: предыдущая линия сохране"
+    },
+    "prematch.fonbet": {
+      "samples": 79,
+      "stalePercent": 100,
+      "withError": 100,
+      "lastCount": 0,
+      "lastError": "HTTP 404"
+    },
+    "prematch.pinnacle": {
+      "samples": 79,
+      "stalePercent": 100,
+      "withError": 100,
+      "lastCount": 0,
+      "lastError": "HTTP 403"
+    }
+  },
+  "upstream": {
+    "astekPrematch": {
+      "attempts": 27,
+      "failures": 0
+    },
+    "fonbetBase": {
+      "attempts": 20,
+      "failures": 20
+    },
+    "pinnaclePrematch": {
+      "attempts": 3,
+      "failures": 3
+    },
+    "astekLive": {
+      "attempts": 233,
+      "failures": 0
+    },
+    "fonbetFeed": {
+      "attempts": 96,
+      "failures": 96
+    },
+    "astekResultsCatalog": {
+      "attempts": 123,
+      "failures": 123
+    }
+  },
+  "diskForecast": {
+    "note": "straight-line from 0.3 h of samples; indicative only",
+    "SQLite file, MiB": {
+      "now": 433.7,
+      "perDay": 1120.2,
+      "after30d": 34039.7,
+      "after90d": 101251.7,
+      "after365d": 409306.7
+    }
+  }
+}

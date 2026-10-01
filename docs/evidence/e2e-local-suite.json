@@ -1,0 +1,137 @@
+[
+  {
+    "id": "E01",
+    "covers": "X1 X2",
+    "title": "extension loads, service worker runs, LIVE cards render from the server feed, SSE is connected",
+    "status": "PASS",
+    "seconds": 0,
+    "detail": ""
+  },
+  {
+    "id": "E02",
+    "covers": "X1",
+    "title": "every tab opens without script errors (LIVE, Results, Line, History, Compare, Leagues)",
+    "status": "PASS",
+    "seconds": 4,
+    "detail": "opened: results, prematch, compare, leagues, live; hidden by default: history"
+  },
+  {
+    "id": "E03",
+    "covers": "X1",
+    "title": "Line (prematch) tab shows fixtures from the feed",
+    "status": "PASS",
+    "seconds": 1,
+    "detail": ""
+  },
+  {
+    "id": "E04",
+    "covers": "X2 X4",
+    "title": "a score change on the server reaches an open page through the SSE push path (no reload)",
+    "status": "PASS",
+    "seconds": 4,
+    "detail": ""
+  },
+  {
+    "id": "E05",
+    "covers": "X2",
+    "title": "server killed (SIGKILL) and restarted: extension reports the outage and recovers by itself",
+    "status": "PASS",
+    "seconds": 7,
+    "detail": "recovered 2 s after the restart"
+  },
+  {
+    "id": "E06",
+    "covers": "X2",
+    "title": "service worker idles out and is terminated by the browser, then is woken by reopening the page: feed resumes without a reinstall",
+    "status": "SKIP",
+    "detail": "NOT VERIFIABLE HERE: Playwright/CDP keeps the extension worker alive, so the browser never idles it out (and forcing it with ServiceWorker.stopAllWorkers leaves it unrecoverable); run with --only E06 on a real browser"
+  },
+  {
+    "id": "E07",
+    "covers": "X3",
+    "title": "a new LIVE fixture raises exactly one browser notification (chrome.notifications) when LIVE notifications are on",
+    "status": "PASS",
+    "seconds": 12,
+    "detail": ""
+  },
+  {
+    "id": "E08",
+    "covers": "X1 X9",
+    "title": "settings persist in chrome.storage; the Settings dialog saves server address and token (custom hosts need a browser permission prompt: not automatable)",
+    "status": "PASS",
+    "seconds": 1,
+    "detail": ""
+  },
+  {
+    "id": "E09",
+    "covers": "X1 X4",
+    "title": "odds dialog opens from a LIVE card and lists markets (odds are an opt-in, hidden-by-default feature)",
+    "status": "PASS",
+    "seconds": 1,
+    "detail": ""
+  },
+  {
+    "id": "E10",
+    "covers": "X2",
+    "title": "server answers 500: extension keeps the last data, backs off (no retry storm) and recovers",
+    "status": "PASS",
+    "seconds": 61,
+    "detail": "6 requests in 40 s while failing"
+  },
+  {
+    "id": "E11",
+    "covers": "X2",
+    "title": "malformed (non-JSON) answer: worker survives, reports an error, recovers",
+    "status": "PASS",
+    "seconds": 66,
+    "detail": "error shown: \"Failed to fetch\""
+  },
+  {
+    "id": "E12",
+    "covers": "X2",
+    "title": "requests that never finish (timeout): bounded by the client timeout, then recovery",
+    "status": "PASS",
+    "seconds": 19,
+    "detail": ""
+  },
+  {
+    "id": "E13",
+    "covers": "X2",
+    "title": "SSE stream cut every few seconds: reconnects with backoff, no reconnect storm",
+    "status": "PASS",
+    "seconds": 60,
+    "detail": "10 SSE connections in 60 s while cut every 4 s"
+  },
+  {
+    "id": "E14",
+    "covers": "X9",
+    "title": "401 from the server: the server message reaches the user and feeds recover once the token is valid",
+    "status": "PASS",
+    "seconds": 0,
+    "detail": ""
+  },
+  {
+    "id": "E15",
+    "covers": "X1",
+    "title": "browser restart with the same profile: stored preferences and server settings survive and the feed comes back (chrome.runtime.reload() itself cannot be automated: a flag-loaded extension is not re-enabled)",
+    "status": "PASS",
+    "seconds": 2,
+    "detail": ""
+  },
+  {
+    "id": "E16",
+    "covers": "X6 X9",
+    "title": "secondary pages load without errors: odds generator and score history",
+    "status": "PASS",
+    "seconds": 3,
+    "detail": ""
+  },
+  {
+    "id": "E17",
+    "covers": "X2",
+    "title": "SSE stream goes silent (half-dead connection): the worker notices and reconnects instead of waiting forever",
+    "status": "PASS",
+    "seconds": 61,
+    "detail": ""
+  }
+]

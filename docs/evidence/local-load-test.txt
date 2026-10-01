@@ -1,0 +1,5 @@
+== moderate: 60 live, 600 prematch, 3 SSE, no jitter, 7x100k history rows
+{"seconds": 120, "startRssMiB": 181, "avgRssMiB": 211.3, "peakRssMiB": 250, "avgCpuPct": 7.4, "maxCpuPct": 51.6, "eventLoopMaxMs": 154, "scale": {"live": 60, "prematch": 600, "sseClients": 3, "historyRowsPerSnapshot": 100000}, "historyResident": 14772, "historyPersisted": 700660, "dbMiB": 420.9, "heapUsedMiB": 45, "upstreamHits": 30, "liveEvents": 60}
+== busy: 120 live, 1200 prematch, 10 SSE, score changes every poll, 7x100k history rows
+{"seconds": 120, "startRssMiB": 162, "avgRssMiB": 252.8, "peakRssMiB": 288, "avgCpuPct": 16.6, "maxCpuPct": 114, "eventLoopMaxMs": 118, "scale": {"live": 120, "prematch": 1200, "sseClients": 10, "historyRowsPerSnapshot": 100000}, "historyResident": 15432, "historyPersisted": 701320, "dbMiB": 424.8, "heapUsedMiB": 71, "upstreamHits": 30, "liveEvents": 120}
+done

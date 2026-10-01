@@ -6,7 +6,10 @@
 //
 // The other books (Fonbet, GGBET, Pinnacle) are not mocked and fail fast, so this measures a
 // LOWER bound for a full production feed. Use it to compare before/after a change, not as an absolute budget.
-import { spawn } from 'node:child_process';
+//
+// Scale options: --live N (LIVE fixtures, default 12), --prematch M (line fixtures, default 6), --sse K (extra SSE clients),
+// --history-rows R (synthetic persisted History rows per snapshot to start with), --jitter (score changes every poll).
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
@@ -15,19 +18,37 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'server');
 const arg = (n, d) => { const i = process.argv.indexOf('--' + n); return i > 0 ? process.argv[i + 1] : d; };
-const seconds = Number(arg('seconds', 120));
+const seconds = Number(arg('seconds', 120)), LIVE = Number(arg('live', 12)), PRE = Number(arg('prematch', 6)), SSE = Number(arg('sse', 1)), HISTORY_ROWS = Number(arg('history-rows', 0)), JITTER = process.argv.includes('--jitter');
 const fixture = (name) => readFileSync(path.join(root, 'test/fixtures', name));
-const routes = [[/LiveFeed\/Get1x2_VZip/, 'astek-live.json'], [/LineFeed\/GetChampsZip/, 'astek-champs.json'], [/LineFeed\/Get1x2_VZip/, 'astek-prematch-games.json']];
+let tick = 0;
+function scaledLive() {
+  const body = JSON.parse(fixture('astek-live.json'));
+  const base = body.Value; body.Value = [];
+  for (let i = 0; i < LIVE; i++) { const e = JSON.parse(JSON.stringify(base[i % base.length])); if (i >= base.length) { e.I = 880000 + i; e.LI = e.I; e.O1 = e.O1E = `Team A${i}`; e.O2 = e.O2E = `Team B${i}`; } if (JITTER && e.SC?.PS?.[2]) e.SC.PS[2].Value.S1 = 10 + ((tick + i) % 60); body.Value.push(e); }
+  return JSON.stringify(body);
+}
+function scaledPrematch() {
+  const body = JSON.parse(fixture('astek-prematch-games.json'));
+  const base = body.Value; body.Value = [];
+  for (let i = 0; i < PRE; i++) { const g = JSON.parse(JSON.stringify(base[i % base.length])); g.I = 770000 + i; g.S = Math.floor(Date.now() / 1000) + 3600 * (2 + (i % 72)); if (i >= base.length) { g.O1 = g.O1E = `Line A${i}`; g.O2 = g.O2E = `Line B${i}`; } body.Value.push(g); }
+  return JSON.stringify(body);
+}
+const routes = [[/LiveFeed\/Get1x2_VZip/, () => { tick++; return scaledLive(); }], [/LineFeed\/GetChampsZip/, () => fixture('astek-champs.json')], [/LineFeed\/Get1x2_VZip/, () => scaledPrematch()]];
 let upstreamHits = 0;
 const mock = http.createServer((req, res) => {
   const hit = routes.find(([re]) => re.test(req.url));
   if (!hit) { res.writeHead(404).end('{}'); return; }
   upstreamHits++;
-  res.writeHead(200, { 'content-type': 'application/json' }).end(fixture(hit[1]));
+  res.writeHead(200, { 'content-type': 'application/json' }).end(hit[1]());
 }).listen(0, '127.0.0.1');
 await new Promise((r) => mock.once('listening', r));
 const dataDir = mkdtempSync(path.join(tmpdir(), 'bench-steady-'));
-const port = 19000 + Math.floor(Math.random() * 500);
+const port = Number(arg('port', 19000 + Math.floor(Math.random() * 500)));
+if (HISTORY_ROWS) {
+  const gen = `process.env.DATA_DIR=${JSON.stringify(dataDir)};const {snapshotSave}=await import(${JSON.stringify(path.join(root, 'src/sqlite-storage.js'))});const now=Date.now();for(const name of ['live','prematch','fonbet-live','fonbet-prematch','ggbet-live','pinnacle-prematch','pinnacle-live']){const history=Array.from({length:${HISTORY_ROWS}},(_,i)=>({id:name+'-'+i,sourceEventId:String(i),source:'astek',category:'Dota 2',league:'League '+i%240,team1:'Team '+i%997,team2:'Team '+(i*7)%991,marketKind:'main',lifecycle:[],startAt:now-i*300000,firstSeenAt:now-i*300000-3600000,lastSeenAt:now-i*300000,removedAt:now-i*300000+1000}));snapshotSave(name,{revision:1,matchRevision:1,events:[],history,seen:{}},{});}`;
+  const r = spawnSync('node', ['--input-type=module', '-e', gen], { env: { ...process.env, NODE_OPTIONS: '--disable-warning=ExperimentalWarning' } });
+  if (r.status) throw new Error('history seeding failed: ' + r.stderr);
+}
 const child = spawn('node', ['src/index.js'], { cwd: root, stdio: 'ignore', env: {
   ...process.env, DATA_DIR: dataDir, PORT: String(port), ASTEK_ORIGINS: `http://127.0.0.1:${mock.address().port}`,
   FONBET_URLS: `http://127.0.0.1:${mock.address().port}/none`, FONBET_DELTA_URLS: `http://127.0.0.1:${mock.address().port}/none`, FONBET_RESULTS_URLS: `http://127.0.0.1:${mock.address().port}/none`,
@@ -40,7 +61,7 @@ const rssMiB = () => { const m = /VmRSS:\s+(\d+) kB/.exec(readFileSync(`/proc/${
 const peakMiB = () => { const m = /VmHWM:\s+(\d+) kB/.exec(readFileSync(`/proc/${child.pid}/status`, 'utf8')); return Math.round(Number(m[1]) / 1024); };
 for (let i = 0; i < 60; i++) { try { if ((await fetch(base + '/health')).ok) break; } catch {} await new Promise((r) => setTimeout(r, 250)); }
 const sse = new AbortController();
-fetch(base + '/api/feed-stream?modes=live,prematch,results,history,leagues&thin=1', { signal: sse.signal }).then(async (r) => { for await (const chunk of r.body) void chunk; }).catch(() => {});
+for (let k = 0; k < SSE; k++) fetch(base + '/api/feed-stream?modes=live,prematch,results,history,leagues&thin=1', { signal: sse.signal }).then(async (r) => { for await (const chunk of r.body) void chunk; }).catch(() => {});
 const poll = setInterval(() => { for (const p of ['/api/ui/live?meta=1&thin=1', '/api/ui/prematch?meta=1&thin=1']) fetch(base + p).catch(() => {}); }, 5000);
 const idle = { rss: rssMiB(), cpu: cpuTicks() }, samples = []; let last = idle.cpu;
 for (let t = 10; t <= seconds; t += 10) {
@@ -51,4 +72,4 @@ const health = await (await fetch(base + '/health')).json();
 clearInterval(poll); sse.abort(); child.kill('SIGTERM'); mock.close(); rmSync(dataDir, { recursive: true, force: true });
 const avg = (k) => Math.round(samples.reduce((n, s) => n + s[k], 0) / samples.length * 10) / 10;
 console.log(JSON.stringify({ seconds, startRssMiB: idle.rss, avgRssMiB: avg('rss'), peakRssMiB: peakMiB(), avgCpuPct: avg('cpuPct'), maxCpuPct: Math.max(...samples.map((s) => s.cpuPct)),
-  eventLoopMaxMs: health.runtime?.eventLoopMaxMs, heapUsedMiB: health.runtime?.heapUsedMiB, upstreamHits, liveEvents: health.live?.astek?.count, samples }, null, 1));
+  eventLoopMaxMs: health.runtime?.eventLoopMaxMs, scale: { live: LIVE, prematch: PRE, sseClients: SSE, historyRowsPerSnapshot: HISTORY_ROWS }, historyResident: health.runtime?.history?.rows, historyPersisted: health.runtime?.history?.persistedRows, dbMiB: health.runtime?.storage?.sizeMiB, heapUsedMiB: health.runtime?.heapUsedMiB, upstreamHits, liveEvents: health.live?.astek?.count, samples }, null, 1));
