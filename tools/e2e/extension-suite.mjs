@@ -222,6 +222,7 @@ scenario('E08', 'X1 X9', 'settings persist in chrome.storage; the Settings dialo
   await page.selectOption('#theme', 'dark');
   await sleep(500);
   const before = await swEval(async () => (await chrome.storage.local.get('server')).server);
+  // eslint-disable-next-line no-undef -- evaluated inside the extension page / worker, not in Node
   const defaultBase = await page.evaluate(() => ServerConfig.DEFAULT_BASE);
   await page.fill('#serverBase', defaultBase);
   await page.fill('#serverToken', 'replacement-token-1234567890');
@@ -341,6 +342,7 @@ scenario('E17', 'X2', 'SSE stream goes silent (half-dead connection): the worker
   await until(async () => proxyState.sseConnects >= 1, { timeout: 15000, what: 'the stalled connection' });
   const first = proxyState.sseConnects;
   try { await until(async () => proxyState.sseConnects > first, { timeout: 90000, what: 'a reconnect after the stream went silent' }); }
+  // eslint-disable-next-line no-undef -- evaluated inside the extension page / worker, not in Node
   catch (e) { throw new Error(`${e.message}; worker state ${JSON.stringify(await swEval(() => ({ streamRunning, streamHealthy, streamFailures, ports: ports.size })))}; proxy sse connects ${proxyState.sseConnects}`); }
   proxyState.mode = 'pass';
   await page.close();
