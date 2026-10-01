@@ -114,3 +114,38 @@ test('I: ODDS_HISTORY_ENABLED=1 keeps the previous behaviour (journal, odds_stat
     assert.equal(restarted.events.length, 1, 'the current snapshot is restored as before'); assert.equal(homePrice(restarted, 'i1'), 1.9);
   });
 });
+
+test('History heartbeat throttle: a still-listed unchanged fixture is not rewritten every save; changes, removals and shutdown are', async () => {
+  await withStore(false, async () => {
+    const old = config.historyTouchPersistMs; config.historyTouchPersistMs = 15 * 60 * 1000;
+    try {
+      const state = new SnapshotState('t-touch', 60000);
+      const hist = () => writeCounters().byCategory.snapshotHistory;
+      const fixture = (score) => ({ id: 'astek-t1', source: 'astek', sourceEventId: 't1', team1: 'A', team2: 'B', startAt: 1, scoreText: score });
+      await state.success([fixture('0:0'), { ...fixture('0:0'), id: 'astek-t2', sourceEventId: 't2' }]); await state.persist(true);
+      const lastSeen = (id) => Number(sqlite().db.prepare('SELECT last_seen_at AS v FROM snapshot_history WHERE name=? AND event_id=?').get('t-touch', id).v);
+      const h0 = hist(), seen0 = lastSeen('astek-t1');
+      for (let i = 0; i < 5; i++) { await new Promise((r) => setTimeout(r, 5)); await state.success([fixture('0:0'), { ...fixture('0:0'), id: 'astek-t2', sourceEventId: 't2' }]); state.lastPersistAt = 0; await state.persist(false); }
+      assert.equal(hist(), h0, 'lastSeenAt-only refreshes are not written');
+      assert.ok(state.historyRow('astek-t1').lastSeenAt > seen0, 'RAM still has the fresh lastSeenAt');
+      await state.success([fixture('1:0'), { ...fixture('0:0'), id: 'astek-t2', sourceEventId: 't2' }]); state.lastPersistAt = 0; await state.persist(false);
+      assert.equal(hist(), h0 + 1, 'a content change (score) is written');
+      await state.success([fixture('1:0')]); state.lastPersistAt = 0; await state.persist(false);
+      assert.equal(hist(), h0 + 2, 'a removal is written'); assert.ok(Number(sqlite().db.prepare('SELECT removed_at AS v FROM snapshot_history WHERE name=? AND event_id=?').get('t-touch', 'astek-t2').v) > 0);
+      await new Promise((r) => setTimeout(r, 5)); await state.success([fixture('1:0')]);
+      const before = lastSeen('astek-t1'); await state.persist(true);
+      assert.ok(lastSeen('astek-t1') > before, 'a forced (shutdown) save stores the latest lastSeenAt');
+    } finally { config.historyTouchPersistMs = old; }
+  });
+});
+
+test('History heartbeat throttle is off by default: every save writes every listed fixture (previous behaviour)', async () => {
+  await withStore(true, async () => {
+    assert.equal(config.historyTouchPersistMs, 0);
+    const state = new SnapshotState('t-touch-off', 60000), fixture = { id: 'astek-u1', source: 'astek', sourceEventId: 'u1', team1: 'A', team2: 'B', startAt: 1, scoreText: '0:0' };
+    await state.success([fixture]); await state.persist(true);
+    const h0 = writeCounters().byCategory.snapshotHistory;
+    await state.success([fixture]); state.lastPersistAt = 0; await state.persist(false);
+    assert.equal(writeCounters().byCategory.snapshotHistory, h0 + 1);
+  });
+});

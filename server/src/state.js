@@ -1,4 +1,5 @@
 import { log } from "./logger.js";
+import { createHash } from "node:crypto";
 import {teamLogos} from './team-logos.js';
 import {coalesce} from './identity.js';
 import {scoreLog} from './score-log.js';
@@ -18,6 +19,8 @@ export function compactHistoryEvent(event) {
   return event;
 }
 
+// Content of a History row without the timestamps that move on every poll.
+const historyFingerprint = (row) => createHash("sha1").update(JSON.stringify(row, (key, value) => (key === "lastSeenAt" || key === "updatedAt" ? undefined : value))).digest("base64");
 const activityOf = (event) => Math.max(Number(event?.firstSeenAt || 0), Number(event?.lastSeenAt || 0), Number(event?.removedAt || 0));
 const byFirstSeen = (a, b) => Number(a.firstSeenAt || 0) - Number(b.firstSeenAt || 0) || String(a.id).localeCompare(String(b.id));
 
@@ -59,6 +62,19 @@ export class SnapshotState {
     this.hotDays = config.historyHotDays;
     // Ids of the fixtures that were current before a restart whose current snapshot was not restored (see load()).
     this.restoredCurrentIds = null;
+    // id -> {fp, at}: content and time of the last History write of a listed fixture (HISTORY_TOUCH_PERSIST_MS).
+    this.historyWritten = new Map();
+  }
+
+  // With HISTORY_TOUCH_PERSIST_MS > 0 a still-listed fixture whose History row did not change except for lastSeenAt is
+  // not rewritten on every save; any content change (score, lifecycle, teams, ...) is.
+  historyNeedsWrite(id, row, now) {
+    const every = config.historyTouchPersistMs;
+    if (!every) return true;
+    const fp = historyFingerprint(row), last = this.historyWritten.get(id);
+    if (last && last.fp === fp && now - last.at < every) return false;
+    this.historyWritten.set(id, { fp, at: now });
+    return true;
   }
 
   hotCutoff(now = Date.now()) {
@@ -140,6 +156,8 @@ export class SnapshotState {
 
   async persist(force = false) {
     if (!force && Date.now() - Number(this.lastPersistAt || 0) < 60000) return;
+    // A forced save (shutdown) stores the latest lastSeenAt of every listed fixture.
+    if (force && config.historyTouchPersistMs) for (const event of this.events) { const id = String(event?.id || ""); if (id) this.dirtyHistoryIds.add(id); }
     await this.save();
   }
 
@@ -225,8 +243,9 @@ export class SnapshotState {
       if(!previousCurrent.has(id))lifecycle.push({type:'entered',at:now});
       const event = { ...teamLogos.decorate(raw), firstSeenAt, enteredLiveAt:firstSeenAt, lifecycle, lastSeenAt: now, removedAt: 0 };
       this.seen[id] = { firstSeenAt, lastSeenAt: now };
-      historyMap.set(id, compactHistoryEvent({ ...(old || {}), ...event }));
-      this.dirtyHistoryIds.add(id);
+      const row = compactHistoryEvent({ ...(old || {}), ...event });
+      historyMap.set(id, row);
+      if (this.historyNeedsWrite(id, row, now)) this.dirtyHistoryIds.add(id);
       incoming.push(event);
     }
 
@@ -243,6 +262,7 @@ export class SnapshotState {
         removedAt: now
       }));
       this.dirtyHistoryIds.add(id);
+      this.historyWritten.delete(id);
     }
 
     // TTL pruning only needs to run periodically; the old implementation
@@ -380,12 +400,14 @@ export class SnapshotState {
 
   // Drops rows that are old, saved and not currently listed. They remain in SQLite.
   evictCold(now, keepIds = new Set()) {
+    for (const id of this.historyWritten.keys()) if (!this.historyIndex.has(id)) this.historyWritten.delete(id);
     const cutoff = this.hotCutoff(now);
     if (!cutoff) return 0;
     let evicted = 0;
     for (const [id, row] of this.historyIndex) {
       if (keepIds.has(id) || this.dirtyHistoryIds.has(id) || activityOf(row) >= cutoff) continue;
       this.historyIndex.delete(id);
+      this.historyWritten.delete(id);
       delete this.seen[id];
       evicted++;
     }

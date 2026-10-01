@@ -21,6 +21,10 @@ SQLite schema stays at 3, no migration. Without the new variables the server beh
   served from memory as before. The ids that were current are kept in `snapshot_meta` so the first update after a restart
   still records the correct entered/removed lifecycle for History and Results. Stored history is not deleted and stays
   readable.
+- **`HISTORY_TOUCH_PERSIST_MS`** (default 0; 15 min when odds history is disabled). A History row whose only change is
+  `lastSeenAt` — the fixture is simply still listed — is rewritten at most that often instead of on every save (about 420
+  rows a minute on staging, mostly prematch); new, changed (score, lifecycle, …) and removed fixtures are written at the
+  next save as before, and a clean shutdown saves every current row. Rows stay in RAM with the fresh value.
 - `/health` → `persistence` (`oddsHistoryEnabled`, `dbWritesSinceStart` = SQLite `total_changes()`,
   `dbOddsWritesSinceStart`, `writesByCategory`), `network`, and per provider `networkMode`, `freshnessMs`,
   `lastMessageAt`, `reconnects`.
@@ -28,7 +32,7 @@ SQLite schema stays at 3, no migration. Without the new variables the server beh
 ## Still written with `ODDS_HISTORY_ENABLED=0`
 
 `snapshot_meta` (one row per feed, at most once a minute), `snapshot_history` (compact fixture rows without odds: History
-page and Results), `score_entries`/`score_meta` (score changes only: score history), `archive_blobs` (Results archive),
+page and Results; new/changed/removed fixtures, plus a `lastSeenAt` refresh at most every 15 min), `score_entries`/`score_meta` (score changes only: score history), `archive_blobs` (Results archive),
 `meta` (markers).
 
 ## Dependency

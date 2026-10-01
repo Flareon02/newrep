@@ -11,6 +11,9 @@ const listEnv = (name, fallback) => String(process.env[name] || fallback)
   .filter(Boolean);
 const signedIntEnv=(name,fallback)=>{const value=Number(process.env[name]);return Number.isFinite(value)?Math.trunc(value):fallback;};
 
+// ODDS_HISTORY_ENABLED=0 (low-write mode): see oddsHistoryEnabled below.
+const oddsHistoryEnabled = !/^(?:0|false|off|no)$/i.test(String(process.env.ODDS_HISTORY_ENABLED || "1").trim());
+
 const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekbet-0021.pro")
   .map((value) => value.replace(/\/+$/, ""));
 
@@ -98,7 +101,11 @@ export const config = {
   prematchBulkCount: intEnv("PREMATCH_BULK_COUNT", 50, 20),
   // ODDS_HISTORY_ENABLED=0: no odds journal (odds_entries_v3/odds_state) and no current-snapshot rows with market
   // trees (snapshot_current) are written, and LIVE is not restored from SQLite at startup. Current odds live in RAM.
-  oddsHistoryEnabled: !/^(?:0|false|off|no)$/i.test(String(process.env.ODDS_HISTORY_ENABLED || "1").trim()),
+  oddsHistoryEnabled,
+  // A History row whose only change is lastSeenAt (the fixture is simply still listed) is rewritten at most this often;
+  // new, changed and removed rows are saved as before, and a clean shutdown saves every current row. 0 = every save
+  // (default); 15 min by default when odds history is disabled.
+  historyTouchPersistMs: intEnv("HISTORY_TOUCH_PERSIST_MS", oddsHistoryEnabled ? 0 : 15 * 60 * 1000, 0),
   // 0 = keep forever (default). See src/retention.js.
   oddsRetentionDays: intEnv("ODDS_RETENTION_DAYS", 0, 0),
   scoreRetentionDays: intEnv("SCORE_RETENTION_DAYS", 0, 0),
