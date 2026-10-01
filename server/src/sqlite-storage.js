@@ -14,6 +14,13 @@ const parse = (value, fallback = null) => {
   catch { return fallback; }
 };
 const safeId=s=>String(s||'').replace(/[^\w-]/g,'').slice(0,80);
+// Rows written by this process, per category (diagnostics: proves that odds are not journaled when
+// ODDS_HISTORY_ENABLED=0). `total` comes from SQLite itself (total_changes() of the single connection).
+const writes={odds:0,oddsState:0,snapshotMeta:0,snapshotCurrent:0,snapshotHistory:0,score:0,archive:0,meta:0};
+export function writeCounters(){
+  let total=0;try{total=Number(Object.values(sqlite().db.prepare('SELECT total_changes() AS n').get()||{})[0]||0);}catch{}
+  return {dbWritesSinceStart:total,dbOddsWritesSinceStart:writes.odds+writes.oddsState,byCategory:{...writes}};
+}
 
 function databasePath(dir=config.dataDir){return path.join(path.resolve(dir),'monitor-v2.sqlite3');}
 function ensureParent(file){fs.mkdirSync(path.dirname(file),{recursive:true});}
@@ -105,7 +112,7 @@ export function closeSqliteStorage(){checkpointSqliteStorage();for(const row of 
 export function sqliteFile(){return sqlite().file;}
 export function integrityCheck(){const {db}=sqlite();const row=db.prepare('PRAGMA quick_check').get();return String(Object.values(row||{})[0]||'').toLowerCase()==='ok';}
 export function metaGet(key){const row=sqlite().db.prepare('SELECT value FROM meta WHERE key=?').get(String(key));return row?.value??null;}
-export function metaSet(key,value){sqlite().db.prepare('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(String(key),String(value));}
+export function metaSet(key,value){writes.meta++;sqlite().db.prepare('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(String(key),String(value));}
 
 // Parse rows one at a time. `.all()` first materialises every JSON string of the
 // table (a year of History is hundreds of thousands of rows), doubling the peak
@@ -160,20 +167,24 @@ export function snapshotImport(name,saved){
     db.exec('COMMIT');metaSet(`migrated:snapshot:${name}`,'1');
   }catch(error){try{db.exec('ROLLBACK');}catch{}throw error;}
 }
-export function snapshotSave(name,state,{dirtyIds=null,pruneBefore=0}={}){
+// current=false keeps snapshot_current untouched (neither deleted nor rewritten): the current events carry full
+// market trees and are not persisted when odds history is disabled.
+export function snapshotSave(name,state,{dirtyIds=null,pruneBefore=0,current:saveCurrent=true}={}){
   const {events=[],history=[],...meta}=state,{db}=sqlite();
   const byId=new Map((history||[]).map(e=>[String(e?.id||''),e]).filter(([id])=>id));
   const dirty=dirtyIds?new Set([...dirtyIds].map(String)):new Set(byId.keys());
   let pruned=0;
   db.exec('BEGIN IMMEDIATE');
   try{
-    db.prepare('INSERT INTO snapshot_meta(name,payload,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(name,json(meta),Date.now());
-    db.prepare('DELETE FROM snapshot_current WHERE name=?').run(name);
-    const current=db.prepare('INSERT INTO snapshot_current(name,event_id,payload) VALUES(?,?,?) ON CONFLICT(name,event_id) DO UPDATE SET payload=excluded.payload');
-    for(const e of events||[]){const id=String(e?.id||'');if(id)current.run(name,id,json(e));}
+    db.prepare('INSERT INTO snapshot_meta(name,payload,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(name,json(meta),Date.now());writes.snapshotMeta++;
+    if(saveCurrent){
+      writes.snapshotCurrent+=Number(db.prepare('DELETE FROM snapshot_current WHERE name=?').run(name).changes)||0;
+      const current=db.prepare('INSERT INTO snapshot_current(name,event_id,payload) VALUES(?,?,?) ON CONFLICT(name,event_id) DO UPDATE SET payload=excluded.payload');
+      for(const e of events||[]){const id=String(e?.id||'');if(id){current.run(name,id,json(e));writes.snapshotCurrent++;}}
+    }
     const hist=db.prepare(`INSERT INTO snapshot_history(name,event_id,start_at,first_seen_at,last_seen_at,removed_at,payload) VALUES(?,?,?,?,?,?,?)
       ON CONFLICT(name,event_id) DO UPDATE SET start_at=excluded.start_at,first_seen_at=excluded.first_seen_at,last_seen_at=excluded.last_seen_at,removed_at=excluded.removed_at,payload=excluded.payload`);
-    for(const id of dirty){const e=byId.get(id);if(e)hist.run(name,id,Number(e.startAt)||0,Number(e.firstSeenAt)||0,Number(e.lastSeenAt)||0,Number(e.removedAt)||0,json(e));}
+    for(const id of dirty){const e=byId.get(id);if(e){writes.snapshotHistory++;hist.run(name,id,Number(e.startAt)||0,Number(e.firstSeenAt)||0,Number(e.lastSeenAt)||0,Number(e.removedAt)||0,json(e));}}
     if(pruneBefore>0){
       pruned+=Number(db.prepare('DELETE FROM snapshot_history WHERE name=? AND first_seen_at<?').run(name,Number(pruneBefore)).changes);
       pruned+=Number(db.prepare(`DELETE FROM snapshot_history WHERE name=? AND event_id NOT IN (
@@ -204,10 +215,10 @@ export function scoreImport(identity,log){
 }
 export function scoreAppend(identity,startedAt,entry){
   const {db}=sqlite();db.exec('BEGIN IMMEDIATE');
-  try{db.prepare(`INSERT INTO score_meta(identity,started_at) VALUES(?,?) ON CONFLICT(identity) DO UPDATE SET started_at=CASE WHEN score_meta.started_at=0 THEN excluded.started_at ELSE MIN(score_meta.started_at,excluded.started_at) END`).run(identity,Number(startedAt)||Number(entry.at)||0);db.prepare('INSERT INTO score_entries(identity,at,payload) VALUES(?,?,?)').run(identity,Number(entry.at)||0,json(entry));db.exec('COMMIT');}
+  writes.score++;try{db.prepare(`INSERT INTO score_meta(identity,started_at) VALUES(?,?) ON CONFLICT(identity) DO UPDATE SET started_at=CASE WHEN score_meta.started_at=0 THEN excluded.started_at ELSE MIN(score_meta.started_at,excluded.started_at) END`).run(identity,Number(startedAt)||Number(entry.at)||0);db.prepare('INSERT INTO score_entries(identity,at,payload) VALUES(?,?,?)').run(identity,Number(entry.at)||0,json(entry));db.exec('COMMIT');}
   catch(error){try{db.exec('ROLLBACK');}catch{}throw error;}
 }
-export function scoreReplaceLast(identity,entry){const {db}=sqlite();const row=db.prepare('SELECT seq FROM score_entries WHERE identity=? ORDER BY at DESC,seq DESC LIMIT 1').get(identity);if(row)db.prepare('UPDATE score_entries SET at=?,payload=? WHERE seq=?').run(Number(entry.at)||0,json(entry),row.seq);}
+export function scoreReplaceLast(identity,entry){writes.score++;const {db}=sqlite();const row=db.prepare('SELECT seq FROM score_entries WHERE identity=? ORDER BY at DESC,seq DESC LIMIT 1').get(identity);if(row)db.prepare('UPDATE score_entries SET at=?,payload=? WHERE seq=?').run(Number(entry.at)||0,json(entry),row.seq);}
 export function scoreIdentities(){return sqlite().db.prepare('SELECT identity FROM score_meta ORDER BY identity').all().map(r=>r.identity);}
 
 function legacyJson(target,fallback){try{return JSON.parse(fs.readFileSync(target,'utf8'));}catch{try{return JSON.parse(fs.readFileSync(target+'.bak','utf8'));}catch{return fallback;}}}
@@ -248,9 +259,9 @@ export function oddsEnsureMigrated(source,id){
   }catch(error){try{db.exec('ROLLBACK');}catch{}throw error;}
 }
 export function oddsStateLoad(source,id){oddsEnsureMigrated(source,id);const row=sqlite().db.prepare('SELECT payload FROM odds_state WHERE source=? AND event_id=?').get(safeId(source),safeId(id));return parse(row?.payload,null);}
-export function oddsStateSave(source,id,value){sqlite().db.prepare('INSERT INTO odds_state(source,event_id,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(source,event_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(safeId(source),safeId(id),json(value),Number(value?.lastAt)||Date.now());}
+export function oddsStateSave(source,id,value){writes.oddsState++;sqlite().db.prepare('INSERT INTO odds_state(source,event_id,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(source,event_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(safeId(source),safeId(id),json(value),Number(value?.lastAt)||Date.now());}
 export function oddsAppend(source,id,entry){
-  source=safeId(source);id=safeId(id);oddsEnsureMigrated(source,id);
+  source=safeId(source);id=safeId(id);oddsEnsureMigrated(source,id);writes.odds++;
   sqlite().db.prepare('INSERT INTO odds_entries_v3(source,event_id,at,payload,origin,origin_pos) VALUES(?,?,?,?,NULL,NULL)').run(source,id,Number(entry.at)||Date.now(),oddsEncode(entry));
 }
 export function oddsEntries(source,id,{before=Infinity,limit=0,ascending=true}={}){
@@ -332,7 +343,7 @@ async function migrateOddsKey(source,id,{compact=false,removed,progress=()=>{}}=
   return {source,id,legacyRows:legacyResult.rows,journalRows:journalResult.rows};
 }
 export function archiveRead(key,fallback=null){const row=sqlite().db.prepare('SELECT payload FROM archive_blobs WHERE key=?').get(String(key));if(row)return parse(row.payload,fallback);const legacy=legacyJson(path.join(config.dataDir,String(key)),undefined);if(legacy!==undefined){archiveWrite(key,legacy);return legacy;}return fallback;}
-export function archiveWrite(key,value){sqlite().db.prepare('INSERT INTO archive_blobs(key,payload,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(String(key),json(value),Date.now());}
+export function archiveWrite(key,value){writes.archive++;sqlite().db.prepare('INSERT INTO archive_blobs(key,payload,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(String(key),json(value),Date.now());}
 export function archiveKeys(prefix=''){return sqlite().db.prepare('SELECT key FROM archive_blobs WHERE key LIKE ? ORDER BY key').all(String(prefix)+'%').map(r=>r.key);}
 
 

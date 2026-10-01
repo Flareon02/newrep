@@ -19,6 +19,7 @@ import {HltvService} from './hltv-service.js';
 import {OddsService} from './odds-service.js';
 import {CrossbetService} from './crossbet.js';
 import {startRetention} from './retention.js';
+import {checkProxyEgress,proxyDiagnostics} from './egress.js';
 const pinnacleLiveState=new SnapshotState('pinnacle-live',60000);
 const pinnaclePrematchState=new SnapshotState('pinnacle-prematch',300000);
 const startedAt = Date.now();
@@ -58,8 +59,11 @@ server.listen(config.port, "0.0.0.0", () => {
   log.info(`[api] listening on 0.0.0.0:${config.port}`);
   log.info(`[api] AstekBet upstream ${config.origins.join(", ")}`);
   log.info(`[api] Fonbet upstream ${config.fonbetUrls.join(", ")}`);
-  log.info(`[api] GGBET LIVE bootstrap ${config.ggbetBootstrapRelayUrl?`relay ${config.ggbetBootstrapRelayUrl}`:config.ggbetOrigins.join(", ")}`);
-  log.info(`[api] DataBet LIVE ${config.databetLiveEnabled?`bootstrap ${config.databetOrigin}/${config.databetLocale}/esports/live`:"disabled (DATABET_LIVE_ENABLED=0)"}`);
+  const proxy=proxyDiagnostics(),via=mode=>mode==='proxy'?`proxy ${proxy.proxyHost}:${proxy.proxyPort}`:mode;
+  log.info(`[api] GGBET LIVE network ${via(config.ggbetNetworkMode)}: ${config.ggbetNetworkMode==='relay'?`bootstrap relay ${config.ggbetBootstrapRelayUrl}`:`bootstrap ${config.ggbetOrigins.join(", ")} + WebSocket`}`);
+  log.info(`[api] DataBet LIVE ${config.databetLiveEnabled?`network ${via(config.databetNetworkMode)}: bootstrap ${config.databetOrigin}/${config.databetLocale}/esports/live + WebSocket`:"disabled (DATABET_LIVE_ENABLED=0)"}`);
+  log.info(`[storage] odds history ${config.oddsHistoryEnabled?'enabled':'disabled (ODDS_HISTORY_ENABLED=0): no odds journal, no current-snapshot rows, LIVE starts empty'}`);
+  if([config.ggbetNetworkMode,config.databetNetworkMode].includes('proxy'))startEgressCheck();
   liveCollector.start();
   prematchCollector.start();
   fonbetCollector.start();ggbetCollector.start();databetCollector.start();pinnacleCollector.start();
@@ -67,10 +71,16 @@ server.listen(config.port, "0.0.0.0", () => {
   retention=startRetention({statistics:server.statistics,activeKeys:server.activeEventKeys});
 });
 
+// Diagnostics only: which public IP/country/ASN the proxy presents (never the credentials). Collectors do not depend on it.
+let egressTimer=null;
+function startEgressCheck(){
+  const run=()=>checkProxyEgress().then(e=>log.info(`[egress] proxy egress ${e.error?`check failed: ${e.error}`:`${e.ip} ${e.country} ${e.asn} ${e.org}`}`)).catch(()=>{});
+  run();egressTimer=setInterval(run,30*60*1000);egressTimer.unref?.();
+}
 let shuttingDown=false,retention=null;
 async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   if(shuttingDown)return;shuttingDown=true;
-  log.info(`[api] shutting down (${reason}${persist?'':' / no-persist'})`);
+  log.info(`[api] shutting down (${reason}${persist?'':' / no-persist'})`);clearInterval(egressTimer);
   const deadline=setTimeout(() => process.exit(exitCode||1), persist?30000:5000);deadline.unref();
   const closed=new Promise(resolve=>server.close(()=>resolve()));
   await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),databetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);

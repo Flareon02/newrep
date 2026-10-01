@@ -2,6 +2,7 @@ import { log } from "./logger.js";
 import {scoreLog} from './score-log.js';
 import {readJson} from './utils.js';
 import {oddsAppend,oddsEntries,oddsStateLoad,oddsStateSave} from './sqlite-storage.js';
+import { config } from './config.js';
 
 const safeId=s=>String(s||'').replace(/[^\w-]/g,'').slice(0,80);
 const price=v=>Number.isFinite(Number(v))&&Number(v)>1?Math.round(Number(v)*10000)/10000:null;
@@ -29,7 +30,7 @@ export function normalizeGgbetStoredMarket(market={}){
 // This prevents full-market GGBET sessions from retaining and re-stringifying
 // an ever-growing entries[] array on every websocket push.
 export class OddsLog{
-  constructor(){this.cache=new Map();this.loading=new Map();this.pending=new Map();}
+  constructor(){this.cache=new Map();this.loading=new Map();this.pending=new Map();this.skipped=0;}
   legacyFile(source,id){return `odds/${safeId(source)}/${safeId(id)}.json`;}
   stateFile(source,id){return `odds-state/${safeId(source)}/${safeId(id)}.json`;}
   async state(source,id){
@@ -45,7 +46,10 @@ export class OddsLog{
   async append(source,id,entry){oddsAppend(source,id,entry);}
   async legacy(source,id){return readJson(this.legacyFile(source,id),{entries:[],last:{}});}
   async *journal(source,id){for(const row of oddsEntries(source,id,{ascending:true}))yield row;}
+  // ODDS_HISTORY_ENABLED=0: nothing is journaled (neither odds_entries_v3 nor odds_state); current odds stay in the
+  // in-memory snapshots. Already stored history remains readable through get()/timeline().
   record(ref,odds=ref?.odds){
+    if(!config.oddsHistoryEnabled){this.skipped++;return Promise.resolve();}
     const source=ref?.source,id=safeId(ref?.sourceEventId||ref?.id);
     if(!['astek','fonbet','pinnacle','ggbet'].includes(source)||!id||!odds||odds.stale||!Array.isArray(odds.markets)||!odds.markets.length)return Promise.resolve();
     const key=source+':'+id;

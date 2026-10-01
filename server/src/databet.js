@@ -2,6 +2,7 @@ import GameCategories from './game-categories.cjs';
 import { canonicalCategory, englishize, eventKind } from './entity-resolver.js';
 import { config } from './config.js';
 import { canonicalizeGgbetMarket } from './market-semantics.js';
+import { proxyAgent, proxyDiagnostics, proxyFetch, redact } from './egress.js';
 import {
   MATCH_STATUSES, LIVE_SPORTS, absoluteAsset, scoreParts, marketPeriod, marketType, localizedMarketTitle,
   outcomeDesignation, localizedOutcomeLabel, pricePoint, mergeGgbetEvent
@@ -148,6 +149,8 @@ export class DatabetLiveCollector {
     const full = [...this.subscriptions.values()].filter((s) => s.mode === 'full').length;
     return {
       enabled: config.databetLiveEnabled, provider: 'databet', transport: 'graphql-ws', connectionState: this.connectionState(),
+      networkMode: config.databetNetworkMode, ...(config.databetNetworkMode === 'proxy' ? (({ proxyEnabled, proxyHost, proxyPort }) => ({ proxyEnabled, proxyHost, proxyPort }))(proxyDiagnostics()) : {}),
+      freshnessMs: this.lastMessageAt ? Math.max(0, this.now() - this.lastMessageAt) : null,
       connected: this.ws?.readyState === 1, acknowledged: !!this.lastAckAt && this.ws?.readyState === 1,
       origin: this.bootstrap?.origin || config.databetOrigin, endpoint: (this.bootstrap?.wsUrl || '').replace(/\?.*$/, '').replace(/\/graphql$/, ''),
       label: this.bootstrap?.label || '', locale: this.bootstrap?.locale || '', currency: this.bootstrap?.currency || '', authorized: this.bootstrap?.isAuthorized === true,
@@ -155,7 +158,7 @@ export class DatabetLiveCollector {
       events: this.events.size, markets, subscriptions: this.subscriptions.size, fullMarketEvents: full, lightEvents: this.subscriptions.size - full,
       reconnects: this.reconnects, failures: this.failures, snapshots: this.snapshots, pushes: this.pushes, publishes: this.publishes, mismatchedPushes: this.mismatchedPushes, finishedEvents: this.finishedEvents,
       bootstrapFetches: this.bootstrapFetches, bootstrapFailures: this.bootstrapFailures, authRefreshes: this.authRefreshes, scheduledRefreshes: this.scheduledRefreshes,
-      lastError: this.lastError, lastClose: this.lastClose,
+      lastError: redact(this.lastError), lastClose: redact(this.lastClose),
       snapshotIntervalMs: config.databetSnapshotIntervalMs, sessionRefreshMs: config.databetSessionRefreshMs, fullMarketsTtlMs: config.databetFullMarketsTtlMs, maxFullEvents: config.databetMaxFullEvents
     };
   }
@@ -164,7 +167,11 @@ export class DatabetLiveCollector {
     if (!force && this.bootstrap && this.now() - this.bootstrap.at < config.databetBootstrapCacheMs) return this.bootstrap;
     const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), config.databetRequestTimeoutMs); timer.unref?.();
     try {
-      const res = await this.fetch(`${config.databetOrigin}/${config.databetLocale}/esports/live`, { headers: { 'user-agent': USER_AGENT, accept: 'text/html,application/xhtml+xml', 'accept-language': `${config.databetLocale},en;q=0.8` }, redirect: 'follow', signal: ctrl.signal });
+      const url = `${config.databetOrigin}/${config.databetLocale}/esports/live`, headers = { 'user-agent': USER_AGENT, accept: 'text/html,application/xhtml+xml', 'accept-language': `${config.databetLocale},en;q=0.8` };
+      // Proxy mode: the page that issues the guest token goes through the same proxy agent as the WebSocket below.
+      const res = config.databetNetworkMode === 'proxy'
+        ? await proxyFetch(url, { headers, signal: ctrl.signal, timeoutMs: config.databetRequestTimeoutMs, agent: proxyAgent() })
+        : await this.fetch(url, { headers, redirect: 'follow', signal: ctrl.signal });
       if (!res?.ok) throw Object.assign(Error(`DataBet bootstrap HTTP ${res?.status || 0}`), { status: res?.status || 0 });
       const html = await res.text();
       if (html.length > 4_000_000) throw Error('DataBet: bootstrap HTML слишком большой');
@@ -365,7 +372,7 @@ export class DatabetLiveCollector {
       try {
         const bootstrap = await this.fetchBootstrap(!this.bootstrap); if (this.stopped) return;
         const WebSocketClass = await this.webSocketClass();
-        const ws = new WebSocketClass(bootstrap.wsUrl, 'graphql-ws', { headers: { Origin: bootstrap.origin, 'User-Agent': USER_AGENT }, handshakeTimeout: config.databetRequestTimeoutMs, perMessageDeflate: false, maxPayload: config.upstreamMaxBytes });
+        const ws = new WebSocketClass(bootstrap.wsUrl, 'graphql-ws', { headers: { Origin: bootstrap.origin, 'User-Agent': USER_AGENT }, handshakeTimeout: config.databetRequestTimeoutMs, perMessageDeflate: false, maxPayload: config.upstreamMaxBytes, ...(config.databetNetworkMode === 'proxy' ? { agent: proxyAgent() } : {}) });
         this.ws = ws; this.lastAckAt = 0; this.lastConnectAt = this.now(); this.lastMessageAt = this.now(); this.requests.clear(); this.subscriptions.clear();
         for (const row of this.tabs.values()) row.pending = false;
         await new Promise((resolve, reject) => {
@@ -393,8 +400,8 @@ export class DatabetLiveCollector {
         if (this.connectCount++ > 0) this.reconnects++;
         this.failures = 0; this.lastError = '';
       } catch (error) {
-        this.failures++; this.lastError = error?.message || String(error);
-        await this.state.failure(error);
+        this.failures++; this.lastError = redact(error?.message || String(error));
+        await this.state.failure({ message: this.lastError, status: error?.status || 0 });
         if (isAuthError(this.lastError)) this.bootstrap = null;
         this.scheduleReconnect(backoff(this.failures));
         throw error;

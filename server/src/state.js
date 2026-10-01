@@ -57,6 +57,8 @@ export class SnapshotState {
     this.coldBefore = 0;
     this.historyTotal = 0;
     this.hotDays = config.historyHotDays;
+    // Ids of the fixtures that were current before a restart whose current snapshot was not restored (see load()).
+    this.restoredCurrentIds = null;
   }
 
   hotCutoff(now = Date.now()) {
@@ -96,6 +98,21 @@ export class SnapshotState {
     this.matchSignature = stableMatchEventSignature(this.events);
     this.matchRevision = Number(saved.matchRevision || 0);
     this.lastPersistAt = Date.now();
+    if (!config.oddsHistoryEnabled) this.dropRestoredCurrent(saved);
+  }
+
+  // Odds history off: start with an empty, stale current snapshot that fresh upstream data fills within seconds, instead
+  // of serving the market trees saved before the restart as LIVE. The ids that were current are kept (not their odds)
+  // so the first update still records the correct lifecycle (entered / removed) for History and Results.
+  dropRestoredCurrent(saved) {
+    const ids = Array.isArray(saved.currentIds) ? saved.currentIds : (saved.events || []).map((event) => event?.id);
+    this.restoredCurrentIds = new Set(ids.map((id) => String(id || "")).filter(Boolean));
+    this.events = [];
+    this.generatedAt = 0;
+    this.lastSuccessfulUpdateAt = 0;
+    this.lastProgressAt = 0;
+    this.signature = stableEventSignature(this.events);
+    this.matchSignature = stableMatchEventSignature(this.events);
   }
 
   async save() {
@@ -112,8 +129,9 @@ export class SnapshotState {
       lastElapsedMs: this.lastElapsedMs,
       events: this.events,
       history: this.history,
-      seen: this.seen
-    }, {dirtyIds:this.dirtyHistoryIds,pruneBefore:this.historyPruneBefore});
+      seen: this.seen,
+      ...(config.oddsHistoryEnabled ? {} : { currentIds: this.restoredCurrentIds ? [...this.restoredCurrentIds] : this.events.map((event) => String(event?.id || "")).filter(Boolean) })
+    }, {dirtyIds:this.dirtyHistoryIds,pruneBefore:this.historyPruneBefore,current:config.oddsHistoryEnabled});
     if (result?.pruned) this.historyTotal = Math.max(0, this.historyTotal - result.pruned);
     this.dirtyHistoryIds.clear();
     this.historyPruneBefore = 0;
@@ -178,6 +196,11 @@ export class SnapshotState {
     this.lastElapsedMs = Number(meta.elapsedMs || 0);
 
     const previousCurrent = new Map(this.events.map((event) => [String(event?.id || ""), event]));
+    // First update after a restart without a restored current snapshot: the fixtures that were current then.
+    if (this.restoredCurrentIds) {
+      for (const id of this.restoredCurrentIds) { const row = this.historyRow(id); if (row && !previousCurrent.has(id)) previousCurrent.set(id, row); }
+      this.restoredCurrentIds = null;
+    }
     // historyIndex contains the same compact objects as this.history. Reusing it
     // removes a large O(history) allocation/copy from every LIVE update.
     if (!(this.historyIndex instanceof Map)) this.historyIndex = new Map();

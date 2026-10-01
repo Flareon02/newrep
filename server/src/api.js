@@ -23,6 +23,13 @@ import {safeWrite} from './sse.js';
 import {historyCapacity,warnHistoryCapacity} from './capacity.js';
 import {createAuthorizer,MIN_TOKEN_LENGTH} from './auth.js';
 import {randomUUID} from 'node:crypto';
+import {writeCounters} from './sqlite-storage.js';
+import {proxyDiagnostics} from './egress.js';
+
+// What this process writes to SQLite (odds history on/off, rows per category since start). No secrets.
+function persistenceStatus(){const w=writeCounters();return {oddsHistoryEnabled:config.oddsHistoryEnabled,dbWritesSinceStart:w.dbWritesSinceStart,dbOddsWritesSinceStart:w.dbOddsWritesSinceStart,oddsRecordsSkipped:oddsLog.skipped||0,writesByCategory:w.byCategory};}
+// Outbound path of the LIVE odds platform collectors. Proxy host/port only; credentials are never exposed.
+function networkStatus(){const proxyUsed=[config.ggbetNetworkMode,config.databetNetworkMode].includes('proxy');return {ggbet:{networkMode:config.ggbetNetworkMode,relayInUse:config.ggbetNetworkMode==='relay'},databet:{networkMode:config.databetNetworkMode},...(proxyUsed?{proxy:proxyDiagnostics()}:{})};}
 
 function memoryStatus(){try{const m=process.memoryUsage();return {rssMiB:Math.round(m.rss/1048576),heapUsedMiB:Math.round(m.heapUsed/1048576),heapTotalMiB:Math.round(m.heapTotal/1048576),externalMiB:Math.round(m.external/1048576)};}catch{return {rssMiB:null};}}
 
@@ -215,7 +222,7 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
     // A scheduled token refresh reconnects within a second or two: data younger than the grace window still counts.
     const recent=!!state.lastSuccessfulUpdateAt&&Date.now()-state.lastSuccessfulUpdateAt<ODDS_PROVIDER_GRACE_MS;
     const available=!stale&&(connectionState==='connected'||(connectionState==='reconnecting'&&recent));
-    return {provider,name:providerLabel(provider),available,connectionState,events:events.length,markets,lastUpdateAt,lastError:String(c.lastError||state.lastError||''),stale};
+    return {provider,name:providerLabel(provider),available,connectionState,events:events.length,markets,lastUpdateAt,lastError:String(c.lastError||state.lastError||''),stale,networkMode:c.networkMode||'direct',lastMessageAt:c.lastMessageAt||null,freshnessMs:c.freshnessMs??null,reconnects:Number(c.reconnects)||0};
   };
   const oddsProvidersStatus=()=>Object.fromEntries(LIVE_ODDS_PROVIDERS.filter(provider=>liveOddsStates[provider]).map(provider=>[provider,oddsProviderStatus(provider)]));
   // UI payloads name their odds provider and carry its live status so the extension can show
@@ -491,6 +498,8 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
         ggbetCollector: ggbetCollector?.status?.()||{enabled:false},
         databetCollector: databetCollector?.status?.()||{enabled:false},
         oddsProviders: oddsProvidersStatus(),
+        network: networkStatus(),
+        persistence: persistenceStatus(),
         results: resultsService?.status?.()||{enabled:false}
         ,leagueRules:{revision:leagueStore.revision(),groups:leagueStore.state.links.length,catalogLeagues:leagueStore.catalog.size,hiddenLeagueKeys:leagueStore.state.visibility.excludedLeagueKeys.length,publishAuth:'one-time-challenge'},security:{cors:'extension-only',writeAuth:authorizer.mode,getRateLimitPerMinute:config.apiRateLimitPerMinute,postRateLimitPerMinute:config.apiPostRateLimitPerMinute,sseLimitPerIp:config.apiSseLimitPerIp,upstreamMaxBytes:config.upstreamMaxBytes}
       });
@@ -750,6 +759,8 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
         ggbetCollector: ggbetCollector?.status?.()||{enabled:false},
         databetCollector: databetCollector?.status?.()||{enabled:false},
         oddsProviders: oddsProvidersStatus(),
+        network: networkStatus(),
+        persistence: persistenceStatus(),
         results: resultsService?.status?.()||{enabled:false}
       });
     }

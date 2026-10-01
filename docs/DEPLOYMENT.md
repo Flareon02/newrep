@@ -63,6 +63,11 @@ python3 tools/package-release.py     # dist/Esports-Monitor-server-4.4.0.zip и 
 | `DATABET_LIVE_ENABLED` | `1` | LIVE‑коэффициенты DataBet (публичный demo.data.bet, гостевой токен со страницы, только в памяти). `0` — выключить |
 | `DATABET_ORIGIN` / `DATABET_LOCALE` | `https://demo.data.bet` / `en` | Страница, с которой берётся гостевая сессия DataBet (только хосты `*.data.bet`) |
 | `DATABET_FULL_MARKETS_TTL_MS` / `DATABET_MAX_FULL_EVENTS` | 180000 / 4 | Полное дерево рынков DataBet держится только для матчей с открытым диалогом коэффициентов |
+| `GGBET_NETWORK_MODE` | не задан (= `relay`, если задан `GGBET_BOOTSTRAP_RELAY_URL`, иначе `direct`) | `proxy` — и загрузка страницы/гостевого токена, и GraphQL WebSocket идут через HTTP CONNECT прокси `CZECH_PROXY_*` (relay не используется); `relay` — токен через relay, WebSocket напрямую; `direct` — всё напрямую |
+| `DATABET_NETWORK_MODE` | `direct` | `proxy` — страница demo.data.bet (токен) и WebSocket через тот же прокси; `direct` — напрямую |
+| `CZECH_PROXY_ENABLED` / `CZECH_PROXY_HOST` / `CZECH_PROXY_PORT` | `0` / — / — | HTTP CONNECT прокси для режима `proxy`. Если режим `proxy`, а прокси выключен или не задан, коллектор **не** подключается напрямую, а показывает ошибку |
+| `CZECH_PROXY_USERNAME` / `CZECH_PROXY_PASSWORD` | — | Секрет. Используются как заданы (sticky‑сессия в имени пользователя не меняется), только в памяти процесса; в логах, ошибках и `/health` не появляются |
+| `ODDS_HISTORY_ENABLED` | `1` | `0` — не писать в SQLite журнал коэффициентов (`odds_entries_v3`, `odds_state`) и текущие снимки с деревьями рынков (`snapshot_current`); LIVE после рестарта стартует пустым и наполняется с апстрима. Уже сохранённая история не удаляется и остаётся читаемой |
 | `HOST_DATA_DIR`, `COMPOSE_PROJECT_NAME` | пишет `upgrade.sh` | Каталог данных на хосте и имя проекта Compose |
 | `PINNACLE_API_KEY` | получается автоматически | Необязательное переопределение ключа Pinnacle |
 

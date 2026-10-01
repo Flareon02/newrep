@@ -91,5 +91,12 @@
 | GET | `/api/ui/odds-providers` | `{defaultProvider,providers:{ggbet,databet}}`: `connectionState`, `available`, `events`, `markets`, `lastUpdateAt`, `lastError` |
 | GET | `/health`, `/api/status` | `live.databet`, `databetCollector`, `oddsProviders` |
 
+## Изменения 4.6.0: сетевой путь коллекторов и запись в SQLite
+
+| Метод | URL | Что добавлено |
+|---|---|---|
+| GET | `/health`, `/api/status` | `network{ggbet{networkMode,relayInUse},databet{networkMode},proxy{proxyEnabled,proxyHost,proxyPort,credentials,egress{ip,country,asn,org,checkedAt,error}}}` (без логина/пароля); `persistence{oddsHistoryEnabled,dbWritesSinceStart,dbOddsWritesSinceStart,oddsRecordsSkipped,writesByCategory}`; `ggbetCollector`/`databetCollector`: `networkMode`, `freshnessMs`, (`proxyHost`,`proxyPort`) |
+| GET | `/api/ui/odds-providers`, `oddsProviders` в `/health` | у каждого провайдера `networkMode`, `lastMessageAt`, `freshnessMs`, `reconnects` |
+
 Цены DataBet в `odds.markets[].prices[]` дополнительно несут `probability` (как пришла с апстрима, число) и `rawValue`
 (исходная строка `value`); `decimal` = `value` для открытого исхода и `null` для закрытого.

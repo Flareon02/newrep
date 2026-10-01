@@ -1,3 +1,5 @@
+import { explicitNetworkMode } from "./egress.js";
+
 const intEnv = (name, fallback, min = 1) => {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value >= min ? Math.floor(value) : fallback;
@@ -13,7 +15,7 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.5.0",
+  version: "4.6.0",
   port: intEnv("PORT", 8080),
   dataDir: process.env.DATA_DIR || "/data",
   // Optional shared secret for write/compute endpoints (see src/auth.js). Empty = unauthenticated (legacy behaviour).
@@ -24,6 +26,11 @@ export const config = {
   origins: originList.length ? originList : ["https://astekbet.com"],
   origin: originList[0] || "https://astekbet.com",
   ggbetLiveEnabled: !/^(?:0|false|off|no)$/i.test(String(process.env.GGBET_LIVE_ENABLED || "1")),
+  // Outbound path of the LIVE odds platform collectors: proxy | relay (GGBET only) | direct. See src/egress.js.
+  // GGBET without an explicit mode keeps the 4.5.0 behaviour: relay when a relay URL is configured, otherwise direct.
+  ggbetNetworkModeSetting: explicitNetworkMode("ggbet"),
+  get ggbetNetworkMode() { return this.ggbetNetworkModeSetting || (this.ggbetBootstrapRelayUrl ? "relay" : "direct"); },
+  databetNetworkMode: explicitNetworkMode("databet") || "direct",
   ggbetBootstrapRelayUrl: String(process.env.GGBET_BOOTSTRAP_RELAY_URL || "").trim(),
   ggbetBootstrapRelaySecretFile: String(process.env.GGBET_BOOTSTRAP_RELAY_SECRET_FILE || "/run/secrets/ggbet-relay-secret").trim(),
   ggbetBootstrapRelayCaFile: String(process.env.GGBET_BOOTSTRAP_RELAY_CA_FILE || "/run/secrets/ggbet-relay-ca.pem").trim(),
@@ -89,6 +96,9 @@ export const config = {
   apiSseLimitPerIp: intEnv("API_SSE_LIMIT_PER_IP", 24, 2),
   prematchBulkRetryMs: intEnv("PREMATCH_BULK_RETRY_MS", 600000, 60000),
   prematchBulkCount: intEnv("PREMATCH_BULK_COUNT", 50, 20),
+  // ODDS_HISTORY_ENABLED=0: no odds journal (odds_entries_v3/odds_state) and no current-snapshot rows with market
+  // trees (snapshot_current) are written, and LIVE is not restored from SQLite at startup. Current odds live in RAM.
+  oddsHistoryEnabled: !/^(?:0|false|off|no)$/i.test(String(process.env.ODDS_HISTORY_ENABLED || "1").trim()),
   // 0 = keep forever (default). See src/retention.js.
   oddsRetentionDays: intEnv("ODDS_RETENTION_DAYS", 0, 0),
   scoreRetentionDays: intEnv("SCORE_RETENTION_DAYS", 0, 0),
