@@ -1,7 +1,11 @@
 /* View projections never use a hidden bookmaker's clocks or presence. */
 (function(root){
  const refs=e=>e.sourceRefs?.length?e.sourceRefs:[e];
- function selected(e,prefs,view){return refs(e).filter(r=>(!r.source||prefs[r.source]!==false)&&(view!=='live'||r.inLive)&&(view!=='results'||!['pinnacle','ggbet'].includes(r.source))&&(view!=='history'||r.source!=='ggbet'&&r.firstPrematchAt>0));}
+ // GGBET and DataBet are alternative LIVE-only odds providers: only the selected one is ever shown, and
+ // neither takes part in Results/History.
+ const oddsProviders=['ggbet','databet'];
+ const liveOddsProvider=prefs=>oddsProviders.includes(prefs?.liveOddsProvider)?prefs.liveOddsProvider:'ggbet';
+ function selected(e,prefs,view){return refs(e).filter(r=>(!r.source||prefs[r.source]!==false)&&(!oddsProviders.includes(r.source)||r.source===liveOddsProvider(prefs))&&(view!=='live'||r.inLive)&&(view!=='results'||!['pinnacle',...oddsProviders].includes(r.source))&&(view!=='history'||!oddsProviders.includes(r.source)&&r.firstPrematchAt>0));}
  function start(e){const times=refs(e).map(r=>Number(r.startAt)).filter(t=>t>0);return times.length?Math.min(...times):0;}
  function appearance(e){return Math.max(0,...refs(e).map(r=>Number(r.firstPrematchAt)||0));}
  function clock(e,view){return Math.max(0,...refs(e).map(r=>Number(view==='history'?r.firstPrematchAt:view==='live'?r.enteredLiveAt||r.firstSeenAt:r.endedAt||r.removedAt||r.enteredLiveAt||r.startAt)||0));}

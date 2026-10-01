@@ -1,13 +1,17 @@
-importScripts('server-config.js','league-model.js','feed-push.js');
+importScripts('server-config.js','league-model.js','feed-push.js','odds-provider.js');
 const PUSH_CHECKPOINT_MS=120000,STREAM_STALL_MS=50000;
 // Bumped whenever the server address/token changes; a response that belongs to an older epoch is discarded instead of
 // polluting the cache of the new server with the old server's data or failure.
 let epoch=0;
-const inflight=new Map(),lastAttempt={},ports=new Set(),portActivity=new WeakMap(),seenSets=new Map(),failures={},retryAfter={};let cache={},prefs={},seen={},lastPersistAt=0,schedulerTimer=null,streamAbort=null,streamRetryTimer=null,streamHealthy=false,streamRunning=false,streamFailures=0,streamLastAt=0;
+const inflight=new Map(),lastAttempt={},ports=new Set(),portActivity=new WeakMap(),seenSets=new Map(),failures={},retryAfter={};let cache={},prefs={},seen={},suppressLiveNotifications=false,lastPersistAt=0,schedulerTimer=null,streamAbort=null,streamRetryTimer=null,streamHealthy=false,streamRunning=false,streamFailures=0,streamLastAt=0;
 const boot=Promise.all([chrome.storage.local.get(['prefs','seenEvents']),ServerConfig.ready]).then(([data])=>{cache={};prefs=data.prefs||{};seen=data.seenEvents||{};chrome.storage.local.remove(['historyCache','snapshots']).catch(()=>{});});
 function wantsBackgroundFeeds(){return !!(prefs.notifications?.live||prefs.notifications?.prematch);}
+// GGBET and DataBet are alternative LIVE odds providers. Switching drops everything received for the previous
+// one (a response still in flight belongs to an older epoch and is discarded) and reconnects the stream with
+// the new provider. The first snapshot of the new provider only seeds "seen" ids: its fixtures are not new.
+function switchLiveProvider(){epoch++;inflight.clear();delete cache.live;delete failures.live;delete retryAfter.live;delete lastAttempt.live;suppressLiveNotifications=true;for(const port of ports)try{port.postMessage({kind:'live-provider',provider:OddsProvider.selected(prefs)});}catch{}if(ports.size){stopFeedStream();setTimeout(()=>{startFeedStream();poll('live',true).catch(()=>{});scheduleFeeds();},150);}else if(wantsBackgroundFeeds())poll('live',true).catch(()=>{});}
 async function configureBackgroundAlarm(){if(wantsBackgroundFeeds()){const alarm=await chrome.alarms.get('feeds');if(!alarm)chrome.alarms.create('feeds',{periodInMinutes:0.5});}else await chrome.alarms.clear('feeds');}
-chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.prefs){prefs=changes.prefs.newValue||{};configureBackgroundAlarm().catch(()=>{});if((changes.prefs.oldValue?.generatorEnabled===true||!changes.prefs.oldValue?.features630)&&(prefs.hideOdds!==false||prefs.generatorEnabled!==true))chrome.tabs.query({url:chrome.runtime.getURL('odds.html')+'*'}).then(tabs=>Promise.all(tabs.map(t=>chrome.tabs.remove(t.id)))).catch(()=>{});}});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.prefs){const providerBefore=OddsProvider.selected(changes.prefs.oldValue||prefs);prefs=changes.prefs.newValue||{};if(OddsProvider.selected(prefs)!==providerBefore)switchLiveProvider();configureBackgroundAlarm().catch(()=>{});if((changes.prefs.oldValue?.generatorEnabled===true||!changes.prefs.oldValue?.features630)&&(prefs.hideOdds!==false||prefs.generatorEnabled!==true))chrome.tabs.query({url:chrome.runtime.getURL('odds.html')+'*'}).then(tabs=>Promise.all(tabs.map(t=>chrome.tabs.remove(t.id)))).catch(()=>{});}});
 // A changed server address or token invalidates everything received so far: drop the cache and reconnect.
 chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local'||!changes.server)return;epoch++;inflight.clear();cache={};for(const key of Object.keys(failures))delete failures[key];for(const key of Object.keys(retryAfter))delete retryAfter[key];if(ports.size){stopFeedStream();setTimeout(()=>{startFeedStream();scheduleFeeds(0);},300);}});
 async function open(){await boot;const url=chrome.runtime.getURL('app.html'),tabs=await chrome.tabs.query({url}),type=prefs.openMode==='tab'?'normal':'popup';for(const tab of tabs){const win=await chrome.windows.get(tab.windowId);if(win.type===type){await chrome.tabs.update(tab.id,{active:true});await chrome.windows.update(win.id,{focused:true});return;}}if(type==='popup')await loadedWindow(url,1060,850);else await chrome.tabs.create({url});}
@@ -18,7 +22,8 @@ function notificationLeague(e){let title=String(e.league||e.category||'Кибе�
 async function notifyNew(kind,snapshot){
  const before=seenSets.get(kind)||new Set(seen[kind]||[]);if(!seenSets.has(kind))seenSets.set(kind,before);const all=snapshot.events||[];
  const ids=all.flatMap(e=>[logicalKey(e),...(e.sourceRefs||[e]).map(r=>`${r.source}:${r.sourceEventId||r.id}`)]);
- if(seen[kind]&&prefs.notifications?.[kind]){
+ const quiet=kind==='live'&&suppressLiveNotifications;if(kind==='live')suppressLiveNotifications=false;
+ if(seen[kind]&&prefs.notifications?.[kind]&&!quiet){
   const rules=snapshot.leagueRules||{},hidden={publishedLeagueLinks:rules.links||[],excludedLeagueKeys:[...(prefs.hiddenLeagues||[]),...(prefs.hiddenLeaguesByView?.[kind]||[]),...(rules.visibility?.excludedLeagueKeys||[])],excludedCategoryKeys:rules.visibility?.excludedCategoryKeys||[]};
   let fresh=all.filter(e=>(e.sourceRefs||[e]).some(r=>prefs[r.source]!==false&&!before.has(`${r.source}:${r.sourceEventId||r.id}`))&&!LeagueModel.hidden(e,hidden));
   if(prefs.notifications.deduplicate)fresh=fresh.filter(e=>{
@@ -28,7 +33,7 @@ async function notifyNew(kind,snapshot){
   if(prefs.notifications.favoritesOnly)fresh=fresh.filter(e=>[e.leagueKey,...(e.sourceRefs||[e]).map(r=>`${r.source}:${r.sourceEventId||r.id}`)].some(id=>(prefs.favorites||[]).includes(id)));
   for(const [index,e] of fresh.slice(0,8).entries()){
    const newRefs=(e.sourceRefs||[e]).filter(r=>prefs[r.source]!==false&&!before.has(`${r.source}:${r.sourceEventId||r.id}`));
-   const books=[...new Set((newRefs.length?newRefs:e.sourceRefs||[e]).map(r=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET'})[r.source]||r.provider||r.source).filter(Boolean))].join(' + ');
+   const books=[...new Set((newRefs.length?newRefs:e.sourceRefs||[e]).map(r=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET',databet:'DataBet'})[r.source]||r.provider||r.source).filter(Boolean))].join(' + ');
    await chrome.notifications.create(`${kind}-${Date.now()}-${index}`,{type:'basic',iconUrl:'icons/icon128.png',title:notificationLeague(e),message:`${e.team1} - ${e.team2}`,contextMessage:books,priority:0,silent:prefs.notifications.sound!==true});
   }
   if(fresh.length>8)await chrome.notifications.create(`${kind}-${Date.now()}-more`,{type:'basic',iconUrl:'icons/icon128.png',title:kind==='live'?'Ещё новые LIVE':'Ещё новые в линии',message:`Ещё событий: ${fresh.length-8}`,priority:0,silent:true});
@@ -58,10 +63,10 @@ async function poll(kind,force=false){
   try{
    // LIVE is already server-resolved. The line uses the thin-client endpoint,
    // where the server also removes fixtures that have already entered LIVE.
-   const endpoint=kind==='prematch'?'/api/ui/prematch':'/api/ui/live';
+   const endpoint=kind==='prematch'?'/api/ui/prematch':'/api/ui/live',providerQuery=kind==='live'?`&provider=${OddsProvider.selected(prefs)}`:'';
    // Tiny metadata probe keeps freshness/status current without downloading the
    // whole feed when its logical revision has not changed.
-   const metaResponse=await fetch(`${ServerConfig.base}${endpoint}?meta=1&thin=1`,{cache:'no-store',headers:ServerConfig.headers(),signal:AbortSignal.timeout(8000)});
+   const metaResponse=await fetch(`${ServerConfig.base}${endpoint}?meta=1&thin=1${providerQuery}`,{cache:'no-store',headers:ServerConfig.headers(),signal:AbortSignal.timeout(8000)});
    if(!metaResponse.ok)throw new Error(`HTTP ${metaResponse.status}`);
    const meta=await metaResponse.json(),previous=cache[kind];
    const rulesChanged=Number(previous?.leagueRules?.revision||0)!==Number(meta?.leagueRules?.revision||0);
@@ -69,7 +74,7 @@ async function poll(kind,force=false){
    let next,changed=false;
    if(needsFull){
     const headers=ServerConfig.headers();if(previous?._etag)headers['If-None-Match']=previous._etag;
-    const response=await fetch(`${ServerConfig.base}${endpoint}?compact=1&thin=1`,{cache:'no-store',headers,signal:AbortSignal.timeout(10000)});
+    const response=await fetch(`${ServerConfig.base}${endpoint}?compact=1&thin=1${providerQuery}`,{cache:'no-store',headers,signal:AbortSignal.timeout(10000)});
     if(response.status===304&&previous){next={...previous,...meta,events:previous.events,_etag:previous._etag};}
     else{
      if(!response.ok)throw new Error(`HTTP ${response.status}`);
@@ -144,7 +149,7 @@ async function streamLoop(){
  // half-dead connection (frozen server, vanished NAT entry): abort it so the normal reconnect-with-backoff path runs.
  const stallTimer=setInterval(()=>{if(Date.now()-lastByteAt>STREAM_STALL_MS){stalled=true;controller.abort();}},5000);
  try{
-  const response=await fetch(`${ServerConfig.base}/api/feed-stream?modes=live,prematch,results,history,leagues&thin=1`,{cache:'no-store',headers:ServerConfig.headers({Accept:'text/event-stream'}),signal:controller.signal});if(!response.ok||!response.body)throw Error(`HTTP ${response.status}`);
+  const response=await fetch(`${ServerConfig.base}/api/feed-stream?modes=live,prematch,results,history,leagues&thin=1&provider=${OddsProvider.selected(prefs)}`,{cache:'no-store',headers:ServerConfig.headers({Accept:'text/event-stream'}),signal:controller.signal});if(!response.ok||!response.body)throw Error(`HTTP ${response.status}`);
   const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';streamHealthy=true;streamFailures=0;
   lastByteAt=Date.now();
   while(ports.size&&!controller.signal.aborted){const {value,done}=await reader.read();lastByteAt=Date.now();if(done)throw Error('Поток закрыт сервером');buffer+=decoder.decode(value,{stream:true});let index;while((index=buffer.search(/\r?\n\r?\n/))>=0){const block=buffer.slice(0,index),sep=buffer.match(/\r?\n\r?\n/)?.[0]?.length||2;buffer=buffer.slice(index+sep);const event=FeedPush.parseSseBlock(block);if(event)await handleStreamEvent(event.type,event.data);}}

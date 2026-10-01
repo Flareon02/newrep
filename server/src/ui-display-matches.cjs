@@ -10,7 +10,7 @@
  const signature=e=>JSON.stringify([norm(e.category),...([team(e.team1),team(e.team2)].sort())]);
  function sameLeague(a,b){return !!a.leagueKey&&a.leagueKey===b.leagueKey||league(a).replace(/\bseries\s*\d+\b/g,'').trim()===league(b).replace(/\bseries\s*\d+\b/g,'').trim();}
  function compatible(a,b){return refs(a).length===1&&refs(b).length===1&&refs(a)[0].source!==refs(b)[0].source&&
-  ['astek','fonbet','pinnacle','ggbet'].includes(refs(a)[0].source)&&['astek','fonbet','pinnacle','ggbet'].includes(refs(b)[0].source)&&
+  ['astek','fonbet','pinnacle','ggbet','databet'].includes(refs(a)[0].source)&&['astek','fonbet','pinnacle','ggbet','databet'].includes(refs(b)[0].source)&&
   (!a.marketKind||a.marketKind==='main')&&(!b.marketKind||b.marketKind==='main')&&
   (!a.bestOf||!b.bestOf||a.bestOf===b.bestOf)&&sameLeague(a,b)&&Number(a.startAt)>0&&Number(b.startAt)>0&&
   Math.abs(a.startAt-b.startAt)<=90*60000;

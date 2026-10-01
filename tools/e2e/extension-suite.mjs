@@ -53,11 +53,13 @@ const mock = http.createServer((req, res) => {
 });
 
 // ---------------------------------------------------------------- fault-injecting proxy ---------------------------
-const proxyState = { mode: 'pass', hits: new Map(), sseConnects: 0, sse: new Set() };
+const proxyState = { mode: 'pass', hits: new Map(), sseConnects: 0, sse: new Set(), liveProviders: [], streamProviders: [] };
 const hit = (p) => proxyState.hits.set(p, (proxyState.hits.get(p) || 0) + 1);
 let serverPort = 0;
 const proxy = http.createServer((req, res) => {
   const p = req.url.split('?')[0]; hit(p);
+  if (p === '/api/ui/live') proxyState.liveProviders.push(new URL(req.url, 'http://x').searchParams.get('provider') || '');
+  if (p === '/api/feed-stream') proxyState.streamProviders.push(new URL(req.url, 'http://x').searchParams.get('provider') || '');
   const apiUi = p.startsWith('/api/ui/') || p === '/api/leagues';
   if (p === '/api/feed-stream' && req.method === 'GET') { proxyState.sseConnects++; proxyState.sse.add(res); res.on('close', () => proxyState.sse.delete(res)); }
   const m = proxyState.mode;
@@ -83,7 +85,7 @@ let child = null, serverLog = '';
 function startServer() {
   child = spawn('node', ['src/index.js'], { cwd: path.join(root, 'server'), stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, DATA_DIR: dataDir, PORT: String(serverPort), API_TOKEN: TOKEN,
     ASTEK_ORIGINS: `http://127.0.0.1:${mock.address().port}`, FONBET_URLS: `http://127.0.0.1:${mock.address().port}/none`, FONBET_DELTA_URLS: `http://127.0.0.1:${mock.address().port}/none`,
-    FONBET_RESULTS_URLS: `http://127.0.0.1:${mock.address().port}/none`, GGBET_LIVE_ENABLED: '0', LOG_LEVEL: 'info', NODE_OPTIONS: '--disable-warning=ExperimentalWarning' } });
+    FONBET_RESULTS_URLS: `http://127.0.0.1:${mock.address().port}/none`, GGBET_LIVE_ENABLED: '0', DATABET_LIVE_ENABLED: '0', LOG_LEVEL: 'info', NODE_OPTIONS: '--disable-warning=ExperimentalWarning' } });
   child.stdout.on('data', (d) => { serverLog += d; }); child.stderr.on('data', (d) => { serverLog += d; });
 }
 const stopServer = async (signal = 'SIGTERM') => { if (!child) return; const c = child; child = null; c.kill(signal); await new Promise((r) => c.once('exit', r)); };
@@ -122,7 +124,8 @@ const cards = (page) => page.locator('article.card').count();
 const clickTab = async (page, tab) => { await page.click(`#tabs [data-tab="${tab}"]`); await sleep(700); };
 // A provider (e.g. Fonbet) failing upstream is also surfaced as `transportError`; only these texts mean the SERVER is unreachable/broken.
 const dropStreams = () => { for (const res of [...proxyState.sse]) res.destroy(); };   // a failing server does not keep old streams open
-const isDown = (err) => /Failed to fetch|HTTP (?:401|5\d\d)|aborted|timed? ?out|Unexpected token|not valid JSON|is not JSON|Нет списка/i.test(String(err || ''));
+// Since extension 8.2.x network failures reach the user in Russian (ServerConfig.errorText): match both wordings.
+const isDown = (err) => /Failed to fetch|HTTP (?:401|5\d\d)|aborted|timed? ?out|Unexpected token|not valid JSON|is not JSON|Нет списка|сервер недоступен|сервер не ответил вовремя/i.test(String(err || ''));
 const swState = (key) => swEval((k) => { try { const c = cache[k]; return c ? { events: (c.events || []).length, transportError: c.transportError || '', stale: !!c.stale, receivedAt: c.receivedAt || 0 } : null; } catch (e) { return { error: String(e) }; } }, key);
 
 // ---------------------------------------------------------------- scenarios ------------------------------------------------
@@ -348,6 +351,43 @@ scenario('E17', 'X2', 'SSE stream goes silent (half-dead connection): the worker
   await page.close();
 });
 
+scenario('E18', 'X1 X2 X4', 'LIVE odds provider GGBET <-> DataBet: requests follow the choice, providers never mix, the choice survives a reopen, an unavailable provider is explicit', async () => {
+  const shots = process.env.E2E_SCREENSHOTS || '';
+  const shot = async (page, name) => { if (shots) await page.screenshot({ path: path.join(shots, name) }); };
+  const rowSources = (page) => page.$$eval('article.card [data-source-ref]', (rows) => [...new Set(rows.map((r) => r.dataset.sourceRef.split(':')[0]))]);
+  const pressed = (page) => page.evaluate(() => ({ ggbet: document.getElementById('ggbet').getAttribute('aria-pressed'), databet: document.getElementById('databet').getAttribute('aria-pressed') }));
+  const notice = (page) => page.evaluate(() => { const n = document.getElementById('providerNotice'); return n && !n.hidden ? n.textContent : ''; });
+  let page = await openApp();
+  await until(async () => (await cards(page)) >= 1, { what: 'LIVE cards' });
+  if ((await pressed(page)).databet === 'true') { await page.click('#ggbet'); await sleep(1500); }
+  await until(async () => (await pressed(page)).ggbet === 'true', { what: 'GGBET selected' });
+  await until(async () => !(await rowSources(page)).includes('databet'), { what: 'no DataBet rows while GGBET is selected' });
+  await shot(page, 'provider-ggbet-selected.png');
+  // Switch to DataBet.
+  proxyState.liveProviders.length = 0; proxyState.streamProviders.length = 0;
+  await page.click('#databet');
+  await until(async () => (await pressed(page)).databet === 'true' && (await pressed(page)).ggbet === 'false', { what: 'DataBet selected' });
+  await until(async () => remote || (proxyState.liveProviders.includes('databet') && proxyState.streamProviders.includes('databet')), { what: 'LIVE feed and stream requested for DataBet' });
+  if (!remote && proxyState.liveProviders.some((p) => p !== 'databet')) throw new Error('a LIVE request after the switch did not name DataBet: ' + proxyState.liveProviders.join(','));
+  await until(async () => (await cards(page)) >= 1, { what: 'LIVE cards after the switch' });
+  await until(async () => !(await rowSources(page)).includes('ggbet'), { what: 'no GGBET rows while DataBet is selected' });
+  if (remote) await until(async () => (await rowSources(page)).includes('databet'), { timeout: 30000, what: 'DataBet rows from the real feed' });
+  else await until(async () => /DataBet временно недоступен/.test(await notice(page)), { what: 'explicit "DataBet unavailable" notice (DataBet is disabled on the local server)' });
+  await shot(page, remote ? 'provider-databet-selected.png' : 'provider-databet-unavailable.png');
+  // The choice survives closing and reopening the extension page.
+  await page.close(); page = await openApp();
+  await until(async () => (await pressed(page)).databet === 'true', { what: 'DataBet still selected after reopen' });
+  const stored = await swEval(async () => (await chrome.storage.local.get('prefs')).prefs?.liveOddsProvider);
+  if (stored !== 'databet') throw new Error('stored provider is ' + stored);
+  // Switch back to GGBET from the notice / selector.
+  if (!remote && await notice(page)) await page.click('#providerNotice [data-switch-provider="ggbet"]'); else await page.click('#ggbet');
+  await until(async () => (await pressed(page)).ggbet === 'true' && (await pressed(page)).databet === 'false', { what: 'GGBET selected again' });
+  await until(async () => !(await rowSources(page)).includes('databet') && !(await notice(page)), { what: 'GGBET view without DataBet rows or notice' });
+  if (remote) await until(async () => (await rowSources(page)).includes('ggbet'), { timeout: 30000, what: 'GGBET rows from the real feed again' });
+  if (page.errors.length) throw new Error(page.errors.join(' | '));
+  await page.close();
+});
+
 // ---------------------------------------------------------------- runner ---------------------------------------------------
 const report = [];
 try {
@@ -361,7 +401,7 @@ try {
   } else if (!process.env.STAGING_URL) throw new Error('--remote needs STAGING_URL (and STAGING_TOKEN)');
   await launch();
   await setServer();
-  const remoteOk = new Set(['E01', 'E02', 'E03', 'E08', 'E09', 'E15', 'E16']);
+  const remoteOk = new Set(['E01', 'E02', 'E03', 'E08', 'E09', 'E15', 'E16', 'E18']);
   for (const s of scenarios) {
     if (only.size && !only.has(s.id)) continue;
     if (s.id === 'E06' && !only.has('E06')) { report.push({ id: s.id, covers: s.covers, title: s.title, status: 'SKIP', detail: 'NOT VERIFIABLE HERE: Playwright/CDP keeps the extension worker alive, so the browser never idles it out (and forcing it with ServiceWorker.stopAllWorkers leaves it unrecoverable); run with --only E06 on a real browser' }); console.log(`SKIP  E06  ${s.title}`); continue; }

@@ -226,3 +226,17 @@ dialog[data-kind="book-odds"] .market-period{border:1px solid var(--line);border
 /* 6.10.6: keep the league-management DOM bounded and cheap to paint. */
 .league-list .league-row{content-visibility:auto;contain-intrinsic-size:72px}
 .league-more{display:block;width:calc(100% - 10px);margin:8px 5px 10px}
+/* LIVE odds provider selector (GGBET | DataBet): one segmented control inside the bookmaker toggles. */
+:root{--databet:#00a87e}
+.source.databet,.source-link.databet,#databet[aria-pressed=true]{color:var(--databet)}
+#databet[aria-pressed=true]{border-color:var(--databet);background:color-mix(in srgb,var(--databet) 12%,var(--surface))}
+.odds-source{display:inline-flex;align-items:center;flex:0 0 auto;gap:0}
+.odds-source[hidden]{display:none}
+.odds-source>button{border-radius:0}
+.odds-source>button:first-of-type{border-top-left-radius:8px;border-bottom-left-radius:8px}
+.odds-source>button:last-of-type{border-top-right-radius:8px;border-bottom-right-radius:8px;margin-left:-1px}
+.odds-source>button[aria-pressed=true]{position:relative;z-index:1}
+.odds-source-label{font-size:11px;color:var(--muted);margin:0 6px 0 4px;white-space:nowrap}
+.provider-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid color-mix(in srgb,#ba802b 52%,var(--line));background:color-mix(in srgb,#ba802b 8%,var(--surface));border-radius:9px;padding:8px 12px;margin-bottom:10px;font-size:13px}
+.provider-notice[hidden]{display:none}
+.provider-notice button{flex:0 0 auto;white-space:nowrap}

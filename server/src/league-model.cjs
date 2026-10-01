@@ -9,7 +9,7 @@
   const groupKey=set=>`logical:manual:${set.id}`;
   const nameKey=ref=>`name-alias:${ref.source}:${norm(ref.category)}:${norm(ref.league).replace(/\s+bo\s*[1357]$/,'')}`;
   function refKeys(ref={}){
-    const source=['fonbet','pinnacle','ggbet'].includes(ref.source)?ref.source:'astek';
+    const source=['fonbet','pinnacle','ggbet','databet'].includes(ref.source)?ref.source:'astek';
     return unique([ref.leagueKey,ref.canonicalLeagueId,id(ref),ref.family?`logical:${String(ref.category).trim().toLowerCase()}:${ref.family}`:'',ref.leagueId?`${source!=='astek'?source+':':''}id:${ref.leagueId}`:'',
       !ref.leagueId?`${source!=='astek'?source+':':''}name:${String(ref.league||'').trim().toLowerCase()}`:'']);
   }

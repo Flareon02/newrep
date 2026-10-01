@@ -13,7 +13,7 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.4.0",
+  version: "4.5.0",
   port: intEnv("PORT", 8080),
   dataDir: process.env.DATA_DIR || "/data",
   // Optional shared secret for write/compute endpoints (see src/auth.js). Empty = unauthenticated (legacy behaviour).
@@ -38,6 +38,22 @@ export const config = {
   ggbetBootstrapCacheMs: intEnv("GGBET_BOOTSTRAP_CACHE_MS", 4 * 60 * 1000, 30 * 1000),
   ggbetWatchdogMs: intEnv("GGBET_WATCHDOG_MS", 90000, 30000),
   ggbetMaxBackoffMs: intEnv("GGBET_MAX_BACKOFF_MS", 60000, 5000),
+  // DataBet LIVE (public demo.data.bet). The guest token is read from the public SSR page on every
+  // session start and kept only in memory; the collector is an ordinary server-side GraphQL-WS client.
+  databetLiveEnabled: !/^(?:0|false|off|no)$/i.test(String(process.env.DATABET_LIVE_ENABLED || "1")),
+  databetOrigin: (() => { const value = String(process.env.DATABET_ORIGIN || "https://demo.data.bet").trim().replace(/\/+$/, ""); return /^https:\/\/([a-z0-9-]+\.)*data\.bet$/i.test(value) ? value : "https://demo.data.bet"; })(),
+  databetLocale: /^[a-z]{2}$/.test(String(process.env.DATABET_LOCALE || "")) ? String(process.env.DATABET_LOCALE) : "en",
+  databetRequestTimeoutMs: intEnv("DATABET_REQUEST_TIMEOUT_MS", 12000, 3000),
+  databetSnapshotIntervalMs: intEnv("DATABET_SNAPSHOT_INTERVAL_MS", 30000, 5000),
+  databetSessionRefreshMs: intEnv("DATABET_SESSION_REFRESH_MS", 10 * 60 * 1000, 60 * 1000),
+  databetBootstrapCacheMs: intEnv("DATABET_BOOTSTRAP_CACHE_MS", 4 * 60 * 1000, 30 * 1000),
+  databetWatchdogMs: intEnv("DATABET_WATCHDOG_MS", 90000, 30000),
+  databetMaxBackoffMs: intEnv("DATABET_MAX_BACKOFF_MS", 60000, 5000),
+  // Full market trees are pushed only for events whose odds dialog is open (each detail request
+  // extends the window). Every other LIVE event streams fixture + top markets only.
+  databetFullMarketsTtlMs: intEnv("DATABET_FULL_MARKETS_TTL_MS", 3 * 60 * 1000, 30 * 1000),
+  databetMaxFullEvents: intEnv("DATABET_MAX_FULL_EVENTS", 4, 1),
+  databetPublishDebounceMs: intEnv("DATABET_PUBLISH_DEBOUNCE_MS", 400, 1),
   fonbetUrls: listEnv(
     "FONBET_URLS",
     "https://line04w.bk6bba-resources.com/events/listBase?lang=en&scopeMarket=1600,https://line-lb51.bk6bba-resources.com/events/listBase?lang=en&scopeMarket=1600"

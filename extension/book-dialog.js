@@ -1,7 +1,9 @@
 const BookDialog=(()=>{
  const norm=s=>MarketCanonical.norm(s);
- const name=s=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET'})[s]||s;
- const sourceOrder={astek:0,fonbet:1,pinnacle:2,ggbet:3};
+ const name=s=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET',databet:'DataBet'})[s]||s;
+ const sourceOrder={astek:0,fonbet:1,pinnacle:2,ggbet:3,databet:3};
+ // GGBET and DataBet are DATA.BET-platform feeds: full markets and native tabs come from the server detail.
+ const platformSource=s=>s==='ggbet'||s==='databet';
  let cleanup=()=>{};
  function open(e,{refs,esc,stamp,modal,load,reload,request,base}){
   cleanup();const $=id=>document.getElementById(id);
@@ -27,7 +29,7 @@ const BookDialog=(()=>{
   const priceLabel=(p,m)=>MarketCanonical.outcomeLabel(p,m,e,nativeTeams());
   function outcomeRank(p){const d=String(p?.designation||'');return ({home:0,'home-draw':0,over:0,yes:0,draw:1,'home-away':1,away:2,'draw-away':2,under:2,no:2})[d]??5;}
   async function refreshDetail(){
-   const r=selected(),id=sourceId(r),needsServerDetail=source==='astek'||source==='ggbet';
+   const r=selected(),id=sourceId(r),needsServerDetail=source==='astek'||platformSource(source);
    if(!needsServerDetail||!id||!reload||loading)return;
    // A hydrated event already contains the full market tree. Keep it until a
    // detailChanged push arrives; a 60s fallback refresh covers missed pushes
@@ -51,10 +53,10 @@ const BookDialog=(()=>{
   function providerTabLabel(row){const id=String(row?.id||''),raw=String(row?.name||'');if(id==='all'||/^all$/i.test(raw))return'Все';if(/popular/i.test(raw))return'Популярные';if(/round/i.test(raw))return'Раунды ⚡';if(/^match$/i.test(raw))return'Матч';const map=raw.match(/map\s*(\d+)/i)||id.match(/mapnr:mapnr:(\d+)/);if(map)return`Карта ${map[1]}`;const half=raw.match(/half\s*(\d+)/i)||id.match(/halfnr:(\d+)/);if(half)return`Половина ${half[1]}`;return raw||id;}
   const inProviderTab=(m,id)=>id==='all'||(m?.providerTabs||[]).includes(id);
   function render(force=false){if(!activeModal())return;
-   const books=[...new Map(current().filter(r=>['astek','fonbet','pinnacle','ggbet'].includes(r.source)).map(r=>[r.source,r])).values()].sort((a,b)=>(sourceOrder[a.source]??9)-(sourceOrder[b.source]??9));
+   const books=[...new Map(current().filter(r=>['astek','fonbet','pinnacle','ggbet','databet'].includes(r.source)).map(r=>[r.source,r])).values()].sort((a,b)=>(sourceOrder[a.source]??9)-(sourceOrder[b.source]??9));
    if(books.length&&!books.some(r=>r.source===source)){source=books[0].source;history=null;historyOpen=false;++historyToken;}
    const r=selected(),o=currentOdds(),markets=o?.markets||[],query=norm($('bookSearch').value),described=markets.map((m,index)=>({m,index,d:describe(m)}));
-   const nativeTabs=source==='ggbet'&&Array.isArray(o?.providerTabs)?o.providerTabs:[];
+   const nativeTabs=platformSource(source)&&Array.isArray(o?.providerTabs)?o.providerTabs:[];
    if(providerTab!=='all'&&!nativeTabs.some(t=>String(t.id)===providerTab))providerTab='all';
    const providerVisible=described.filter(x=>inProviderTab(x.m,providerTab));
    const scopes=[...new Set(providerVisible.map(x=>x.d.period))].sort((a,b)=>a-b);if(scope!=='all'&&!scopes.includes(Number(scope)))scope='all';
@@ -65,7 +67,7 @@ const BookDialog=(()=>{
    // seconds was one of the largest UI stalls in the odds dialog.
    const next=[source,sourceId(r),Number(o?.updatedAt||0),Number(o?.checkedAt||0),markets.length,nativeTabs.map(t=>`${t.id}:${t.count||0}`).join(','),historyOpen,query,providerTab,scope,category,loading,detailError].join('|');if(!force&&next===revision)return;revision=next;
    StableDOM.patch($('bookSources'),books.map(row=>{const count=row.source===source?(currentOdds()?.markets?.length||0):(row.odds?.markets?.length||0);return `<button type="button" role="tab" data-book-source="${esc(row.source)}" aria-selected="${source===row.source}" aria-pressed="${source===row.source}"><span>${name(row.source)}</span><b>${count}</b></button>`;}).join(''));
-   const providerBox=$('bookProviderTabs');providerBox.hidden=!(source==='ggbet'&&nativeTabs.length>1);
+   const providerBox=$('bookProviderTabs');providerBox.hidden=!(platformSource(source)&&nativeTabs.length>1);
    if(!providerBox.hidden){const tabs=nativeTabs.some(t=>String(t.id)==='all')?nativeTabs:[{id:'all',name:'All'},...nativeTabs];StableDOM.patch(providerBox,tabs.map(t=>{const id=String(t.id),count=markets.filter(m=>inProviderTab(m,id)).length;return tabButton('provider-tab',id,providerTabLabel(t),count,providerTab);}).join(''));}else StableDOM.patch(providerBox,'');
    const scopeCounts=new Map();for(const x of providerVisible)scopeCounts.set(x.d.period,(scopeCounts.get(x.d.period)||0)+1);
    StableDOM.patch($('bookScopes'),tabButton('scope','all','Все',providerVisible.length,scope)+scopes.map(p=>tabButton('scope',String(p),MarketCanonical.scopeLabel(p),scopeCounts.get(p)||0,scope)).join(''));

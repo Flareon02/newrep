@@ -17,6 +17,7 @@ _Состояния — на исходной точке `main`; исправл�
 | F2 | Сбор «Линии» AstekBet (каталог, bulk, по лигам) | prematch.js | HTTP → состояние prematch | PREMATCH_* | Работает | логи |
 | F3 | Сбор Fonbet (listBase + delta, resync) | fonbet.js, fonbet-parser.js | HTTP → LIVE/prematch | FONBET_* | Работает | логи |
 | F4 | GGBET LIVE (GraphQL‑WS, bootstrap через relay) | ggbet.js | WS → LIVE; детали | ws, relay секреты | Работает | логи |
+| F4b | DataBet LIVE (GraphQL‑WS, гостевой токен со страницы demo.data.bet, лёгкие подписки + полные рынки по запросу) | databet.js | WS → LIVE‑вариант `provider=databet`; детали | ws | Работает (4.5.0) | — |
 | F5 | Pinnacle линия/LIVE + live‑детали и SSE | pinnacle.js | HTTP → состояния, `/api/pinnacle/*` | ключ Pinnacle (runtime) | Работает | логи |
 | F6 | Сопоставление матчей между конторами, связи лиг | entity-resolver.js, matcher-*.js, league-*.js | события → логические события | worker_threads | Работает | — |
 | F7 | Результаты (Astek/Fonbet), архив по дням, прогрев 7 дней | results.js | даты → страницы результатов | SQLite archive | Работает | логи |
@@ -44,6 +45,7 @@ _Состояния — на исходной точке `main`; исправл�
 | X2 | Service worker: SSE‑поток, опрос‑страховка, backoff, кэш лент, рассылка портам | EXT background.js, feed-push.js | Работает | адрес/токен |
 | X3 | Уведомления о новых матчах (LIVE/линия, избранное, дедупликация, звук), будильник | EXT background.js | Работает | — |
 | X4 | Детали матча и рынки (Astek/GGBET/Pinnacle), канонизация рынков | EXT app.js, market-canonical.js, astek-market-names.js | Работает | — |
+| X4b | Источник LIVE‑коэффициентов «GGBET \| DataBet» (один активный, хранится в prefs, без смешивания; явное состояние «временно недоступен») | EXT app.js, background.js, odds-provider.js, view-model.js | Работает (8.3.0) | — |
 | X5 | История коэффициентов книги, временная шкала, история счёта | EXT book-dialog.js, odds-timeline.js, score-history.* | Работает | — |
 | X6 | Генератор коэффициентов (odds.html): HLTV, свой состав, ручной режим, импорт HAR, экспорт JSON | EXT odds.js, manual-controls.js, hltv-*.js, har-stream.js | Работает | токен |
 | X7 | Live‑генератор в диалоге матча | EXT live-generator.js | Работает | токен |

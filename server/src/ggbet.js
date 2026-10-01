@@ -11,8 +11,10 @@ const MARKETS_TABS_HASH='04ade0f69bd806382c2abb909f935c1ef69962c8295fb8084e737da
 const MARKETS_TAB_HASH='c832d7cf75eeab4ff086ce452afa3a02c8d86a4cce3e0970724f30857b37891a';
 const UPDATE_TAB_HASH='eb7b979e4b6fbaf87be18efcce15047677fbe856c5cc602fd9768be6dc77d228';
 const MARKET_STATUSES=['ACTIVE','SUSPENDED'];
-const MATCH_STATUSES=['LIVE','SUSPENDED'];
-const LIVE_SPORTS=Object.freeze([
+// GGBET runs on the DATA.BET sportsbook platform. The pure schema/market helpers below are
+// exported so the DataBet collector (databet.js) normalizes the same platform data identically.
+export const MATCH_STATUSES=['LIVE','SUSPENDED'];
+export const LIVE_SPORTS=Object.freeze([
   'esports_counter_strike','esports_dota_2','esports_league_of_legends','esports_valorant',
   'esports_rainbow_six','esports_overwatch','esports_mobile_legends_bang_bang','esports_rocket_league',
   'esports_starcraft','esports_starcraft_1','esports_warcraft_3','esports_call_of_duty','esports_call_of_duty_mobile',
@@ -36,13 +38,13 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const text=v=>String(v??'').trim();
 const finite=v=>{if(v==null||String(v).trim()==='')return null;const n=Number(v);return Number.isFinite(n)?n:null;};
 const safeUuid=id=>text(id).replace(/^\d+:/,'').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,100);
-const absoluteAsset=value=>{const v=text(value);if(!v)return'';if(/^https:\/\//i.test(v))return v;if(/^\/\//.test(v))return'https:'+v;if(/^cdn\.gin\.bet\//i.test(v))return'https://'+v;return'';};
+export const absoluteAsset=value=>{const v=text(value);if(!v)return'';if(/^https:\/\//i.test(v))return v;if(/^\/\//.test(v))return'https:'+v;if(/^cdn\.gin\.bet\//i.test(v))return'https://'+v;return'';};
 const spec=(market,name)=>text((market?.specifiers||[]).find(x=>text(x?.name)===name)?.value);
 const meta=(row,name)=>text((row?.meta||[]).find(x=>text(x?.name)===name)?.value);
 const isAuthError=value=>/auth|token|unauthor|forbidden|permission|401|403/i.test(text(value));
 const isPersistedError=value=>/persistedquery|persisted query|not found/i.test(text(value));
 
-function scoreParts(fixture={}){
+export function scoreParts(fixture={}){
   const competitors=Array.isArray(fixture.competitors)?fixture.competitors:[];
   const home=competitors.find(c=>c?.homeAway==='HOME')||competitors[0]||{},away=competitors.find(c=>c?.homeAway==='AWAY')||competitors[1]||{};
   const points=(c,type,number)=>finite((c?.score||[]).find(s=>s?.type===type&&(number==null||Number(s?.number)===number))?.points);
@@ -57,14 +59,14 @@ function scoreParts(fixture={}){
   return {home,away,seriesScore:series,mapScores,activeMap,scoreText,scoreObserved:!!(series||mapScores.length||text(fixture.score))};
 }
 
-function marketPeriod(market={}){
+export function marketPeriod(market={}){
   const p=finite(spec(market,'mapnr'));if(p!=null&&p>=1&&p<=20)return p;
   const name=text(market.name);
   let m=name.match(/(?:карта|map|mapa)\s*(\d+)/i);
   if(!m)m=name.match(/(\d+)(?:st|nd|rd|th)?\s*(?:карта|map|mapa)\b/i);
   return m?Number(m[1]):0;
 }
-function marketType(market={}){
+export function marketType(market={}){
   const name=text(market.name),tags=(market.tags||[]).map(x=>text(x).toLowerCase()),period=marketPeriod(market),rawType=Number(market?.typeId)||0;
   // Keep semantic families before generic hcp/total detection. GGBET reuses
   // the same specifier tags for very different markets, so raw title/typeId is
@@ -95,7 +97,7 @@ function marketType(market={}){
 
 const POLISH_TEXT=/[ąćęłńóśźż]|\b(?:zwyci[eę]zca|suma|rund|rundy|mapa|powyżej|poniżej|remis|dogrywk[aą]|włącznie|tak|nie)\b/i;
 const overtimeSuffix=raw=>/overtimes?\s+not\s+include|nie\s+obejmuj\w*\s+dogrywk|bez\s+dogrywk|без учета овертайм|без учёта овертайм/i.test(raw)?' (без овертайма)':/incl\.?\s*overtime|including overtime|włącznie\s+z\s+dogrywk|включ.*овертайм/i.test(raw)?' (с овертаймом)':'';
-function localizedMarketTitle(market={},type='other',period=0){
+export function localizedMarketTitle(market={},type='other',period=0){
   const raw=text(market?.name),rawType=Number(market?.typeId)||0,mapPrefix=period?`Карта ${period} — `:'',half=Number(spec(market,'halfnr'))||Number(raw.match(/(?:half|половин)\s*(\d+)/i)?.[1])||0,round=Number(spec(market,'roundnr'))||0,ot=overtimeSuffix(raw);
   if(!raw)return type==='other'?`Рынок ${rawType||''}`.trim():({moneyline:'Победитель','map-handicap':'Фора по картам',spread:'Фора','map-total':'Тотал карт',total:'Тотал'}[type]||'Рынок');
   if(type==='half-exact-score')return `${mapPrefix}${half?`половина ${half} — `:'половина — '}точный счёт`;
@@ -139,7 +141,7 @@ function localizedMarketTitle(market={},type='other',period=0){
   if(type==='total')return period?`${mapPrefix}тотал`:'Тотал';
   return `Market ${rawType||text(market?.id)||''}`.trim();
 }
-function outcomeDesignation(name='',current=''){
+export function outcomeDesignation(name='',current=''){
   const value=text(name);
   // Total markets often carry the team competitor id on both Over and Under
   // outcomes. Explicit outcome text is therefore stronger than competitorIds.
@@ -153,7 +155,7 @@ function outcomeDesignation(name='',current=''){
   if(current)return current;
   return'';
 }
-function localizedOutcomeLabel(name='',designation='',points){
+export function localizedOutcomeLabel(name='',designation='',points){
   const raw=text(name),num=raw.match(/([+-]?\d+(?:[.,]\d+)?)\s*$/)?.[1]?.replace(',','.');
   const value=num??(Number.isFinite(Number(points))?String(Number(points)):'');
   if(designation==='over')return `Больше${value?` ${value}`:''}`;
@@ -168,7 +170,7 @@ function localizedOutcomeLabel(name='',designation='',points){
   if(POLISH_TEXT.test(raw)&&!raw.match(/[A-Z0-9_.-]{2,}/))return designation||'Outcome';
   return raw||designation;
 }
-function pricePoint(odd,market){
+export function pricePoint(odd,market){
   // GGBET handicap specifiers describe the market line, while the individual
   // outcome names carry the signed side (+/-). Parse the outcome first so the
   // away side never inherits the home handicap by mistake. Totals can safely

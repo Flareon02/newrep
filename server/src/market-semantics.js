@@ -58,13 +58,17 @@ function scopeOf(p,h,r,forced=''){
   return'match';
 }
 
-export function canonicalizeGgbetMarket(market={},teams={}){
+// GGBET and DataBet are both DATA.BET sportsbook platform feeds: the same typeIds describe the
+// same market families, so one table serves both. `provider` only labels the result.
+const PLATFORM_PROVIDERS={ggbet:'GGBET',databet:'DataBet'};
+export function canonicalizeGgbetMarket(market={},teams={},provider='ggbet'){
   const rawType=Number(market?.rawType??market?.typeId??0)||0,p=period(market),h=half(market),r=round(market),def=GGBET[rawType],sp=specs(market),ln=line(market),rawTitle=text(market?.rawTitle||market?.name||market?.title),score=text(sp.score);
+  const source=PLATFORM_PROVIDERS[provider]?provider:'ggbet';
   if(!def){
-    return {provider:'ggbet',rawType,family:'special',category:'specials',scope:scopeOf(p,h,r),map:p||null,half:h||null,round:r||null,line:ln,score:score||null,overtime:'',title:rawTitle||`GGBET market ${rawType||'unknown'}`,unknown:true};
+    return {provider:source,rawType,family:'special',category:'specials',scope:scopeOf(p,h,r),map:p||null,half:h||null,round:r||null,line:ln,score:score||null,overtime:'',title:rawTitle||`${PLATFORM_PROVIDERS[source]} market ${rawType||'unknown'}`,unknown:true};
   }
   const ctx={p,h,r,team1:text(teams.team1),team2:text(teams.team2),sp,score};
-  return {provider:'ggbet',rawType,family:def.family,category:def.category,scope:scopeOf(p,h,r,def.scope),map:p||null,half:h||null,round:r||null,line:ln,score:score||null,side:def.side||'',overtime:def.overtime||'',title:def.title(ctx),unknown:false};
+  return {provider:source,rawType,family:def.family,category:def.category,scope:scopeOf(p,h,r,def.scope),map:p||null,half:h||null,round:r||null,line:ln,score:score||null,side:def.side||'',overtime:def.overtime||'',title:def.title(ctx),unknown:false};
 }
 
 const TYPE_MAP={
@@ -81,7 +85,7 @@ export function canonicalizeGenericMarket(market={},teams={}){
   return {provider:'generic',rawType:Number(market?.rawType)||0,family,category,scope:scopeOf(p,h,r),map:p||null,half:h||null,round:r||null,line:ln,score:text(spec(market,'score'))||null,overtime:'',title:raw||'Дополнительный рынок',unknown:!mapped};
 }
 export function canonicalizeMarket(market={},source='',teams={}){
-  return source==='ggbet'?canonicalizeGgbetMarket(market,teams):canonicalizeGenericMarket(market,teams);
+  return PLATFORM_PROVIDERS[source]?canonicalizeGgbetMarket(market,teams,source):canonicalizeGenericMarket(market,teams);
 }
 export function enrichOddsSemantics(odds={},source='',teams={}){
   if(!odds||typeof odds!=='object')return odds;

@@ -68,22 +68,29 @@ function decorateLive(event) {
   return { ...event, enteredLiveAt: Number(event.enteredLiveAt || event.firstSeenAt || 0) };
 }
 
-const pairs=(a,b,p,g)=>[['astek',a],['fonbet',b],...(p?[['pinnacle',p]]:[]),...(g?[['ggbet',g]]:[])];
+// LIVE odds come from exactly one DATA.BET-platform provider at a time: GGBET (the default, unchanged
+// behaviour) or DataBet. Each provider gets its own resolved LIVE variant ("live" / "live~databet"), so the
+// two sources are never merged into one view and a request without `provider` keeps today's GGBET result.
+export const LIVE_ODDS_PROVIDERS=Object.freeze(['ggbet','databet']);
+export const liveOddsSourceOf=state=>/databet/i.test(String(state?.name||''))?'databet':'ggbet';
+const variantSuffix=g=>g&&liveOddsSourceOf(g)!=='ggbet'?`~${liveOddsSourceOf(g)}`:'';
+const variantKey=(mode,g)=>mode+variantSuffix(g);
+const pairs=(a,b,p,g)=>[['astek',a],['fonbet',b],...(p?[['pinnacle',p]]:[]),...(g?[[liveOddsSourceOf(g),g]]:[])];
 async function combinedSnapshot(mode,a,b,p,g){
  const providers=Object.fromEntries(pairs(a,b,p,g).map(([source,state])=>{const snap=state.publicSnapshot(),events=snap.events.map(mode==='live'?decorateLive:e=>e);return [source,{...snap,events,logicalEvents:events}];})),raw=Object.values(providers).flatMap(r=>r.events),capturedRules=leagueStore.rules(),capturedRevision=matcherRevision();
  const events=await matchAsync('resolve',{events:raw,mode});events.sort((a,b)=>Number(mode==='live'?a.enteredLiveAt||a.firstSeenAt:a.startAt)-Number(mode==='live'?b.enteredLiveAt||b.firstSeenAt:b.startAt));
- const statePairs=pairs(a,b,p,g),structureRevision=statePairs.map(([,state])=>matchStateRevision(state)).join('-')+'-'+capturedRevision;
- return {serverVersion:config.version,features:{bookOdds:1,statistics:4,liveGenerator:3,feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,realtimePriority:1,pagedHistoryWorker:1},leagueRules:capturedRules,revision:statePairs.map(([,state])=>state.revision).join('-')+'-'+capturedRevision,structureRevision,generatedAt:Object.values(providers).map(r=>r.generatedAt).filter(Boolean).sort().at(-1)||null,stale:Object.values(providers).some(r=>r.stale),count:events.length,rawCount:raw.length,events,providers};
+ const statePairs=pairs(a,b,p,g),structureRevision=statePairs.map(([,state])=>matchStateRevision(state)).join('-')+'-'+capturedRevision+variantSuffix(g);
+ return {serverVersion:config.version,features:{bookOdds:1,statistics:4,liveGenerator:3,feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,realtimePriority:1,pagedHistoryWorker:1},leagueRules:capturedRules,revision:statePairs.map(([,state])=>state.revision).join('-')+'-'+capturedRevision+variantSuffix(g),structureRevision,generatedAt:Object.values(providers).map(r=>r.generatedAt).filter(Boolean).sort().at(-1)||null,stale:Object.values(providers).some(r=>r.stale),count:events.length,rawCount:raw.length,events,providers};
 }
 const combinedCache=new Map(),historyCache=new Map(),pendingSnapshots=new Map();
 const matchStateRevision=state=>Number.isFinite(Number(state?.matchRevision))?Number(state.matchRevision):Number(state?.revision||0);
 function refreshSnapshot(mode,a,b,p,g){
  // Pairing depends on fixture identity, teams, league and start time, not on
  // every score/odds tick. Volatile provider state is overlaid below.
- const key=pairs(a,b,p,g).map(([,state])=>matchStateRevision(state)).join(':')+':'+matcherRevision();
- if(combinedCache.get(mode)?.key===key)return Promise.resolve();
- if(pendingSnapshots.has(mode))return pendingSnapshots.get(mode);
- const run=combinedSnapshot(mode,a,b,p,g).then(value=>combinedCache.set(mode,{key,value})).finally(()=>pendingSnapshots.delete(mode));pendingSnapshots.set(mode,run);return run;
+ const key=pairs(a,b,p,g).map(([,state])=>matchStateRevision(state)).join(':')+':'+matcherRevision(),cacheKey=variantKey(mode,g);
+ if(combinedCache.get(cacheKey)?.key===key)return Promise.resolve();
+ if(pendingSnapshots.has(cacheKey))return pendingSnapshots.get(cacheKey);
+ const run=combinedSnapshot(mode,a,b,p,g).then(value=>combinedCache.set(cacheKey,{key,value})).finally(()=>pendingSnapshots.delete(cacheKey));pendingSnapshots.set(cacheKey,run);return run;
 }
 export function freshenResolvedEvents(events,statePairs){
  const latest=new Map();
@@ -95,21 +102,21 @@ export function freshenResolvedEvents(events,statePairs){
  });
 }
 async function cachedCombinedSnapshot(mode,a,b,p,g){
- const statePairs=pairs(a,b,p,g),wantedKey=statePairs.map(([,state])=>matchStateRevision(state)).join(':')+':'+matcherRevision();
+ const statePairs=pairs(a,b,p,g),wantedKey=statePairs.map(([,state])=>matchStateRevision(state)).join(':')+':'+matcherRevision(),cacheKey=variantKey(mode,g);
  // Structural invalidations (new/removed fixtures, team/league/start changes)
  // must not return an old logical event list with a new revision. Await the
  // matcher only when the structural key changed; score/odds pushes still use
  // the cheap volatile overlay path below.
- if(!combinedCache.has(mode)||combinedCache.get(mode)?.key!==wantedKey)await refreshSnapshot(mode,a,b,p,g);
+ if(!combinedCache.has(cacheKey)||combinedCache.get(cacheKey)?.key!==wantedKey)await refreshSnapshot(mode,a,b,p,g);
  else refreshSnapshot(mode,a,b,p,g).catch(e=>log.error('[snapshot]',e.message));
- const cached=combinedCache.get(mode).value,providers={...cached.providers};
+ const cached=combinedCache.get(cacheKey).value,providers={...cached.providers};
  for(const [source,state] of statePairs){const fresh=state.publicSnapshot(),events=fresh.events||[];providers[source]={...providers[source],...fresh,...state.status(),events,logicalEvents:events};}
  // Matching can legitimately take longer than one feed tick. Overlay the
  // newest provider payload onto already-resolved identities so scores/odds do
  // not wait for the next expensive resolver pass.
  const events=freshenResolvedEvents(cached.events,statePairs);
- const resolverRevision=matcherRevision(),revision=statePairs.map(([,state])=>state.revision).join('-')+'-'+resolverRevision,structureRevision=statePairs.map(([,state])=>matchStateRevision(state)).join('-')+'-'+resolverRevision;
- return {...cached,revision,structureRevision,events,providers,generatedAt:Object.values(providers).map(r=>r.generatedAt).filter(Boolean).sort().at(-1)||null,features:{bookOdds:1,statistics:4,liveGenerator:3,feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,realtimePriority:1,pagedHistoryWorker:1},stale:Object.values(providers).some(r=>r.stale),updating:pendingSnapshots.has(mode)};
+ const resolverRevision=matcherRevision(),revision=statePairs.map(([,state])=>state.revision).join('-')+'-'+resolverRevision+variantSuffix(g),structureRevision=statePairs.map(([,state])=>matchStateRevision(state)).join('-')+'-'+resolverRevision+variantSuffix(g);
+ return {...cached,revision,structureRevision,events,providers,generatedAt:Object.values(providers).map(r=>r.generatedAt).filter(Boolean).sort().at(-1)||null,features:{bookOdds:1,statistics:4,liveGenerator:3,feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,realtimePriority:1,pagedHistoryWorker:1},stale:Object.values(providers).some(r=>r.stale),updating:pendingSnapshots.has(cacheKey)};
 }
 
 function snapshotResponse(req, res, snapshot) {
@@ -142,7 +149,7 @@ export function feedMetaSnapshot(mode,a,b,p,g){
   const statePairs=pairs(a,b,p,g),providers=Object.fromEntries(statePairs.map(([source,state])=>[source,state.status()]));
   const successful=statePairs.map(([,state])=>Number(state.lastSuccessfulUpdateAt||0)).filter(Boolean);
   const resolverRevision=matcherRevision();
-  return {serverVersion:config.version,features:{bookOdds:1,statistics:4,liveGenerator:3,feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,realtimePriority:1,pagedHistoryWorker:1},leagueRules:leagueStore.rules(),revision:statePairs.map(([,state])=>state.revision).join('-')+'-'+resolverRevision,structureRevision:statePairs.map(([,state])=>matchStateRevision(state)).join('-')+'-'+resolverRevision,generatedAt:successful.length?new Date(Math.max(...successful)).toISOString():null,stale:Object.values(providers).some(r=>r.stale),updating:Object.values(providers).some(r=>r.updating),providers};
+  return {serverVersion:config.version,features:{bookOdds:1,statistics:4,liveGenerator:3,feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,realtimePriority:1,pagedHistoryWorker:1},leagueRules:leagueStore.rules(),revision:statePairs.map(([,state])=>state.revision).join('-')+'-'+resolverRevision+variantSuffix(g),structureRevision:statePairs.map(([,state])=>matchStateRevision(state)).join('-')+'-'+resolverRevision+variantSuffix(g),generatedAt:successful.length?new Date(Math.max(...successful)).toISOString():null,stale:Object.values(providers).some(r=>r.stale),updating:Object.values(providers).some(r=>r.updating),providers};
 }
 
 
@@ -174,7 +181,7 @@ export function sseEventWire(event,payload){
   return `event: ${String(event||'message')}\ndata: ${JSON.stringify(payload??{})}\n\n`;
 }
 
-export function createApi({ authToken=config.apiToken, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
+export function createApi({ authToken=config.apiToken, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState=null,databetCollector=null,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
   const authorizer=createAuthorizer(authToken);
   if(!authorizer.enabled)log.warn('[api] API_TOKEN is not set: write and compute endpoints are open to any client that can reach this port');
   if(authorizer.misconfigured)log.error(`[api] API_TOKEN is shorter than ${MIN_TOKEN_LENGTH} characters: protected endpoints are refused until it is fixed`);
@@ -182,15 +189,52 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
   const lagTimer=setInterval(()=>lag.reset(),60000);lagTimer.unref();
   // Build current views in the background; GET reads the prepared snapshot.
   const snapshotErrorLog=new Map();
+  const logSnapshotError=(mode,e)=>{const now=Date.now(),last=snapshotErrorLog.get(mode)||0;if(now-last>=10000){snapshotErrorLog.set(mode,now);log.error('[snapshot '+mode+']',e.message);}};
+  // LIVE odds provider selection. GGBET is the default; a non-default variant is resolved only while someone
+  // uses it (a request in the last VARIANT_IDLE_MS or an open feed stream), so an unused DataBet costs nothing.
+  const feedClients=new Set();
+  const liveOddsStates={ggbet:ggbetLiveState,databet:databetLiveState},liveOddsCollectors={ggbet:ggbetCollector,databet:databetCollector};
+  const VARIANT_IDLE_MS=15*60*1000,ODDS_PROVIDER_GRACE_MS=45000,variantRequests=new Map();
+  const providerLabel=provider=>({ggbet:'GGBET',databet:'DataBet'})[provider]||provider;
+  const liveProvider=url=>{
+    const raw=String(url.searchParams.get('provider')||'').trim().toLowerCase();if(!raw)return 'ggbet';
+    if(!LIVE_ODDS_PROVIDERS.includes(raw))throw Object.assign(Error('Неизвестный источник коэффициентов LIVE'),{status:400});
+    if(!liveOddsStates[raw])throw Object.assign(Error(`${providerLabel(raw)} не подключён на этом сервере`),{status:503});
+    return raw;
+  };
+  const touchVariant=provider=>{if(provider&&provider!=='ggbet')variantRequests.set(provider,Date.now());};
+  const activeVariants=()=>LIVE_ODDS_PROVIDERS.filter(provider=>provider!=='ggbet'&&liveOddsStates[provider]&&(Date.now()-(variantRequests.get(provider)||0)<VARIANT_IDLE_MS||[...feedClients].some(client=>client.provider===provider&&client.modes.has('live'))));
+  const refreshLiveVariant=provider=>refreshSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,liveOddsStates[provider]).catch(e=>logSnapshotError('live'+variantSuffix(liveOddsStates[provider]),e));
+  const liveSnapshot=(provider='ggbet')=>{touchVariant(provider);return cachedCombinedSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,liveOddsStates[provider]);};
+  // One status vocabulary for both LIVE odds providers: connected / reconnecting / unavailable / disabled.
+  const oddsProviderStatus=provider=>{
+    const state=liveOddsStates[provider],collector=liveOddsCollectors[provider];if(!state)return {provider,name:providerLabel(provider),available:false,connectionState:'disabled',events:0,markets:0,lastUpdateAt:null,lastError:''};
+    const c=collector?.status?.()||{},events=state.events||[],markets=events.reduce((n,e)=>n+(e?.odds?.markets?.length||0),0);
+    const connectionState=c.connectionState||(c.enabled===false?'disabled':c.acknowledged?'connected':c.connected||c.failures||c.lastError?'reconnecting':'unavailable');
+    const lastUpdateAt=state.lastSuccessfulUpdateAt?new Date(state.lastSuccessfulUpdateAt).toISOString():null,stale=!!state.publicSnapshot().stale;
+    // A scheduled token refresh reconnects within a second or two: data younger than the grace window still counts.
+    const recent=!!state.lastSuccessfulUpdateAt&&Date.now()-state.lastSuccessfulUpdateAt<ODDS_PROVIDER_GRACE_MS;
+    const available=!stale&&(connectionState==='connected'||(connectionState==='reconnecting'&&recent));
+    return {provider,name:providerLabel(provider),available,connectionState,events:events.length,markets,lastUpdateAt,lastError:String(c.lastError||state.lastError||''),stale};
+  };
+  const oddsProvidersStatus=()=>Object.fromEntries(LIVE_ODDS_PROVIDERS.filter(provider=>liveOddsStates[provider]).map(provider=>[provider,oddsProviderStatus(provider)]));
+  // UI payloads name their odds provider and carry its live status so the extension can show
+  // "DataBet временно недоступен" instead of an endless spinner.
+  const withOddsProvider=(snap,provider)=>({...snap,liveOddsProvider:provider,providers:{...(snap.providers||{}),[provider]:{...(snap.providers?.[provider]||{}),oddsProvider:oddsProviderStatus(provider)}}});
   const prepare=()=>{for(const [mode,a,b] of [['live',liveState,fonbetLiveState],['prematch',prematchState,fonbetPrematchState]]){
     if(pendingSnapshots.has(mode))continue;
-    refreshSnapshot(mode,a,b,mode==='prematch'?pinnaclePrematchState:pinnacleLiveState,mode==='live'?ggbetLiveState:null).catch(e=>{const now=Date.now(),last=snapshotErrorLog.get(mode)||0;if(now-last>=10000){snapshotErrorLog.set(mode,now);log.error('[snapshot '+mode+']',e.message);}});
-  }};
+    refreshSnapshot(mode,a,b,mode==='prematch'?pinnaclePrematchState:pinnacleLiveState,mode==='live'?ggbetLiveState:null).catch(e=>logSnapshotError(mode,e));
+  }
+    const active=activeVariants();
+    for(const provider of active)if(!pendingSnapshots.has(variantKey('live',liveOddsStates[provider])))refreshLiveVariant(provider);
+    // Drop an unused variant so its resolved event list does not stay in RAM.
+    for(const provider of LIVE_ODDS_PROVIDERS)if(provider!=='ggbet'&&liveOddsStates[provider]&&!active.includes(provider))combinedCache.delete(variantKey('live',liveOddsStates[provider]));
+  };
   // Structural changes also trigger an immediate refresh below. The timer is a
   // low-frequency watchdog now; polling the matcher every second added CPU/GC
   // pressure even when no fixture identity changed.
   prepare();const snapshotTimer=setInterval(prepare,10000);snapshotTimer.unref();
-  const states=[liveState,prematchState,fonbetLiveState,fonbetPrematchState,pinnaclePrematchState,pinnacleLiveState,ggbetLiveState].filter(Boolean);
+  const states=[liveState,prematchState,fonbetLiveState,fonbetPrematchState,pinnaclePrematchState,pinnacleLiveState,ggbetLiveState,databetLiveState].filter(Boolean);
   const rememberCatalog=()=>leagueStore.remember([
     ...states.flatMap(s=>s.events||[]),
     ...(pinnacleCollector?.catalog||[]),
@@ -211,8 +255,7 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
       set(ip,ids){const now=Date.now();prune(now);if(ids.length){rows.delete(ip);rows.set(ip,{ids,at:now});while(rows.size>MAX_CLIENTS)rows.delete(rows.keys().next().value);}else rows.delete(ip);return {ok:true,accepted:ids.length,ttlMs:TTL,warming:false};},
       status(){prune(Date.now());return {clients:rows.size,ids:new Set([...rows.values()].flatMap(r=>r.ids)).size,warming:false};}
     };})();
-  const feedClients=new Set();
-  const feedMeta=mode=>mode==='live'?feedMetaSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState):feedMetaSnapshot('prematch',prematchState,fonbetPrematchState,pinnaclePrematchState);
+  const feedMeta=(mode,provider='ggbet')=>mode==='live'?feedMetaSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,liveOddsStates[provider]||ggbetLiveState):feedMetaSnapshot('prematch',prematchState,fonbetPrematchState,pinnaclePrematchState);
   const writeSse=(res,wire)=>{safeWrite(res,wire);};
 
   // Thin-client views are revisioned separately from raw provider feeds. The
@@ -232,31 +275,50 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
     const wire=sseEventWire('ui-invalidate',payload);
     for(const client of feedClients)if(client.modes.has(view))try{writeSse(client.res,wire);}catch{}
   };
-  const refreshMode=mode=>refreshSnapshot(mode,mode==='live'?liveState:prematchState,mode==='live'?fonbetLiveState:fonbetPrematchState,mode==='live'?pinnacleLiveState:pinnaclePrematchState,mode==='live'?ggbetLiveState:null).catch(e=>{const now=Date.now(),last=snapshotErrorLog.get(mode)||0;if(now-last>=10000){snapshotErrorLog.set(mode,now);log.error('[snapshot '+mode+']',e.message);}});
+  const refreshMode=mode=>{
+    const run=refreshSnapshot(mode,mode==='live'?liveState:prematchState,mode==='live'?fonbetLiveState:fonbetPrematchState,mode==='live'?pinnacleLiveState:pinnaclePrematchState,mode==='live'?ggbetLiveState:null).catch(e=>logSnapshotError(mode,e));
+    if(mode==='live')for(const provider of activeVariants())refreshLiveVariant(provider);
+    return run;
+  };
+  const clientLiveProvider=client=>client?.provider||'ggbet';
   const broadcastModeInvalidate=(mode,reason='server')=>{
     refreshMode(mode);
     if(!feedClients.size)return;
-    const payload={mode,provider:'server',meta:feedMeta(mode),at:Date.now(),error:'',patches:[],reason};
-    const wire=sseEventWire('invalidate',payload);
-    for(const client of feedClients)if(client.modes.has(mode))try{writeSse(client.res,wire);}catch{}
+    const wires=new Map();
+    for(const client of feedClients){
+      if(!client.modes.has(mode))continue;
+      const provider=mode==='live'?clientLiveProvider(client):'ggbet';
+      if(!wires.has(provider))wires.set(provider,sseEventWire('invalidate',{mode,provider:'server',meta:feedMeta(mode,provider),at:Date.now(),error:'',patches:[],reason}));
+      try{writeSse(client.res,wires.get(provider));}catch{}
+    }
   };
   const broadcastFeed=(mode,provider,change)=>{
+    const oddsProvider=mode==='live'&&LIVE_ODDS_PROVIDERS.includes(provider);
     // New/removed fixtures should be resolved immediately instead of waiting for
     // the watchdog tick. Volatile score/odds patches continue to use the cheap
     // overlay path and never wake the matcher.
     if(change?.structuralChanged){
-      refreshMode(mode);
-      broadcastUi('history',`feed:${mode}:${provider}`);
-      broadcastUi('leagues',`feed:${mode}:${provider}`);
+      if(oddsProvider&&provider!=='ggbet'){if(activeVariants().includes(provider))refreshLiveVariant(provider);}
+      else{
+        refreshMode(mode);
+        broadcastUi('history',`feed:${mode}:${provider}`);
+        broadcastUi('leagues',`feed:${mode}:${provider}`);
+      }
     }
     if(!feedClients.size)return;
-    const normal=feedPushPayload(mode,provider,change,feedMeta(mode));
-    const thin=thinFeedPushPayload(mode,provider,change,feedMeta(mode));
-    const normalWire=sseEventWire(normal.event,normal.payload),thinWire=sseEventWire(thin.event,thin.payload);
-    for(const client of feedClients)if(client.modes.has(mode))try{writeSse(client.res,client.thin?thinWire:normalWire);}catch{}
+    const wires=new Map();
+    for(const client of feedClients){
+      if(!client.modes.has(mode))continue;
+      const selected=mode==='live'?clientLiveProvider(client):'ggbet';
+      // A client receives the LIVE patches of exactly one odds provider: never GGBET and DataBet together.
+      if(oddsProvider&&provider!==selected)continue;
+      const key=selected+(client.thin?':thin':':full');
+      if(!wires.has(key)){const meta=feedMeta(mode,selected),payload=client.thin?thinFeedPushPayload(mode,provider,change,meta):feedPushPayload(mode,provider,change,meta);wires.set(key,sseEventWire(payload.event,payload.payload));}
+      try{writeSse(client.res,wires.get(key));}catch{}
+    }
   };
   const feedUnsub=[
-    liveState.onChange?.(c=>broadcastFeed('live','astek',c)),fonbetLiveState.onChange?.(c=>broadcastFeed('live','fonbet',c)),pinnacleLiveState?.onChange?.(c=>broadcastFeed('live','pinnacle',c)),ggbetLiveState?.onChange?.(c=>broadcastFeed('live','ggbet',c)),
+    liveState.onChange?.(c=>broadcastFeed('live','astek',c)),fonbetLiveState.onChange?.(c=>broadcastFeed('live','fonbet',c)),pinnacleLiveState?.onChange?.(c=>broadcastFeed('live','pinnacle',c)),ggbetLiveState?.onChange?.(c=>broadcastFeed('live','ggbet',c)),databetLiveState?.onChange?.(c=>broadcastFeed('live','databet',c)),
     prematchState.onChange?.(c=>broadcastFeed('prematch','astek',c)),fonbetPrematchState.onChange?.(c=>broadcastFeed('prematch','fonbet',c)),pinnaclePrematchState?.onChange?.(c=>broadcastFeed('prematch','pinnacle',c)),
     resultsService?.onChange?.(c=>broadcastUi('results','results-service',{date:c?.date||'',updatedAt:Number(c?.updatedAt||0),complete:c?.complete!==false,count:Number(c?.count||0)}))
   ].filter(Boolean);
@@ -415,7 +477,7 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
         intervalsMs: {
           astekLive: config.liveIntervalMs,
           fonbetLive: config.fonbetLiveIntervalMs,
-          ggbetLiveSnapshot: config.ggbetSnapshotIntervalMs,
+          ggbetLiveSnapshot: config.ggbetSnapshotIntervalMs,databetLiveSnapshot: config.databetSnapshotIntervalMs,
           astekPrematch: config.prematchCatalogIntervalMs,
           fonbetPrematch: config.fonbetPrematchIntervalMs,pinnaclePrematch:60000,pinnacleLive:15000,pinnacleLiveDetail:pinnacleCollector?.detailInterval||2000
         },
@@ -423,22 +485,26 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
         runtime:{...memoryStatus(),history:(()=>{const capacity=historyCapacity(states.reduce((n,state)=>n+(state.historyIndex?.size||state.history?.length||0),0),undefined,states.reduce((n,state)=>n+(state.historyTotal||0),0));warnHistoryCapacity(capacity);return capacity;})(),eventLoopMaxMs:Math.round(lag.max/1e6),matcher:matcherStatus(),astekGate:astekRequestStatus(),priority:{order:['live','prematch','odds','results','history'],singleCore:true,historyMode:'paged-worker-idle-only',historyAutoWarm:false,historyPagesCached:historyPageCache.size,resultsYield:true},storage:await storageStatus()},upstreamRequests:upstreamStatus(),apiTraffic:apiTrafficStatus(),oddsWatch:oddsWatch.status(),sse:{open:sseTotal,limit:config.apiSseLimitTotal,feedClients:feedClients.size},
         hltv:hltvService?.status(),
         statistics:{archivedMatches:Object.keys(statistics.store.index).length,lastError:statistics.lastError,providers:{dota2:statistics.providers.hawk||{},cs2:statistics.providers.crossbet||{}},sources:{dota2:hawkService.status(),cs2:crossbetService?.status?.()||{enabled:false,available:false}},running:statistics.running,lastSweepAt:statistics.lastSweepAt,currentAvailability:statistics.currentAvailability?.size||0},
-        live: { astek: liveState.status(), fonbet: fonbetLiveState.status(),...(pinnacleLiveState?{pinnacle:{...pinnacleLiveState.status(),...pinnacleCollector?.status()}}:{}),...(ggbetLiveState?{ggbet:{...ggbetLiveState.status(),...ggbetCollector?.status()}}:{}) },
+        live: { astek: liveState.status(), fonbet: fonbetLiveState.status(),...(pinnacleLiveState?{pinnacle:{...pinnacleLiveState.status(),...pinnacleCollector?.status()}}:{}),...(ggbetLiveState?{ggbet:{...ggbetLiveState.status(),...ggbetCollector?.status()}}:{}),...(databetLiveState?{databet:{...databetLiveState.status(),...databetCollector?.status()}}:{}) },
         prematch: { astek: { ...prematchState.status(), ...(prematchCollector?.status?.()||{}) }, fonbet: fonbetPrematchState.status(),...(pinnaclePrematchState?{pinnacle:{...pinnaclePrematchState.status(),...pinnacleCollector?.status()}}:{}) },
         fonbetCollector: fonbetCollector?.status?.()||{enabled:false},
         ggbetCollector: ggbetCollector?.status?.()||{enabled:false},
+        databetCollector: databetCollector?.status?.()||{enabled:false},
+        oddsProviders: oddsProvidersStatus(),
         results: resultsService?.status?.()||{enabled:false}
         ,leagueRules:{revision:leagueStore.revision(),groups:leagueStore.state.links.length,catalogLeagues:leagueStore.catalog.size,hiddenLeagueKeys:leagueStore.state.visibility.excludedLeagueKeys.length,publishAuth:'one-time-challenge'},security:{cors:'extension-only',writeAuth:authorizer.mode,getRateLimitPerMinute:config.apiRateLimitPerMinute,postRateLimitPerMinute:config.apiPostRateLimitPerMinute,sseLimitPerIp:config.apiSseLimitPerIp,upstreamMaxBytes:config.upstreamMaxBytes}
       });
     }
 
     if(url.pathname==='/api/feed-stream'){
+      let streamProvider;try{streamProvider=liveProvider(url);}catch(error){return sendJson(req,res,error.status||400,{error:error.message});}
+      touchVariant(streamProvider);
       const releaseSse=acquireSse(req);if(!releaseSse)return sendJson(req,res,429,{error:'Слишком много потоковых соединений'});
       const allowed=new Set(['live','prematch','results','history','leagues']);
       const requested=new Set(String(url.searchParams.get('modes')||'live,prematch,results,history,leagues').split(',').filter(x=>allowed.has(x)));if(!requested.size){releaseSse();return sendJson(req,res,400,{error:'Неверный режим потока'});}
       res.statusCode=200;res.setHeader('Content-Type','text/event-stream; charset=utf-8');res.setHeader('Cache-Control','no-cache, no-transform');res.setHeader('Connection','keep-alive');res.setHeader('X-Accel-Buffering','no');applyCommonHeaders(req,res);res.flushHeaders?.();
-      const client={res,modes:requested,thin:url.searchParams.get('thin')==='1'},hello={serverVersion:config.version,features:{feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,realtimePriority:1,pagedHistoryWorker:1},feeds:{},ui:{},thin:client.thin};
-      for(const mode of requested){if(mode==='live'||mode==='prematch')hello.feeds[mode]=feedMeta(mode);else hello.ui[mode]={revision:uiRevisions[mode]||0};}
+      const client={res,modes:requested,thin:url.searchParams.get('thin')==='1',provider:streamProvider},hello={serverVersion:config.version,features:{feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,liveOddsProviders:1,realtimePriority:1,pagedHistoryWorker:1},feeds:{},ui:{},thin:client.thin,liveOddsProvider:streamProvider};
+      for(const mode of requested){if(mode==='live'||mode==='prematch')hello.feeds[mode]=feedMeta(mode,mode==='live'?streamProvider:'ggbet');else hello.ui[mode]={revision:uiRevisions[mode]||0};}
       feedClients.add(client);writeSse(res,sseEventWire('hello',hello));
       const heartbeat=setInterval(()=>{safeWrite(res,`: ping ${Date.now()}\n\n`);},15000);heartbeat.unref?.();let closed=false;const close=()=>{if(closed)return;closed=true;clearInterval(heartbeat);feedClients.delete(client);releaseSse();};req.on('close',close);res.on('close',close);return;
     }
@@ -499,8 +565,9 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
       try{return sendJson(req,res,200,await crossbetService.get({team1,team2}));}catch(error){return sendJson(req,res,502,{matched:false,error:error.message});}
     }
     if (url.pathname === "/api/live") {
-      if(url.searchParams.get('meta')==='1')return sendJson(req,res,200,feedMetaSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState));
-      return snapshotResponse(req, res, await cachedCombinedSnapshot("live", liveState, fonbetLiveState,pinnacleLiveState,ggbetLiveState));
+      let provider;try{provider=liveProvider(url);}catch(error){return sendJson(req,res,error.status||400,{error:error.message});}
+      if(url.searchParams.get('meta')==='1'){touchVariant(provider);return sendJson(req,res,200,feedMetaSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,liveOddsStates[provider]));}
+      return snapshotResponse(req, res, await liveSnapshot(provider));
     }
     if (url.pathname === "/api/prematch") {
       if(url.searchParams.get('meta')==='1')return sendJson(req,res,200,feedMetaSnapshot('prematch',prematchState,fonbetPrematchState,pinnaclePrematchState));
@@ -512,10 +579,10 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
 
     if(req.method==='GET'&&url.pathname==='/api/ui/live'){
       try{
-        const rules=uiRuleState(),snap=await cachedCombinedSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState);
-        const payload={...snap,events:(snap.events||[]).map(e=>decorateUiEvent(e,rules.links||[])),serverUi:true,uiSchemaVersion:2,serverVersion:config.version,features:{...(snap.features||{}),thinClient:2,marketSemantics:1,ggbetNativeTabs:1}};
+        const provider=liveProvider(url),rules=uiRuleState(),snap=withOddsProvider(await liveSnapshot(provider),provider);
+        const payload={...snap,events:(snap.events||[]).map(e=>decorateUiEvent(e,rules.links||[])),serverUi:true,uiSchemaVersion:2,serverVersion:config.version,features:{...(snap.features||{}),thinClient:2,marketSemantics:1,ggbetNativeTabs:1,liveOddsProviders:1}};
         return snapshotResponse(req,res,url.searchParams.get('thin')==='1'?compactUiPayload(payload):payload);
-      }catch(error){return sendJson(req,res,500,{error:error?.message||String(error)});}
+      }catch(error){return sendJson(req,res,error?.status||500,{error:error?.message||String(error)});}
     }
     if(req.method==='GET'&&url.pathname==='/api/ui/prematch'){
       try{
@@ -528,8 +595,8 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
       try{
         const view=String(url.searchParams.get('view')||''),id=String(url.searchParams.get('id')||'');
         if(!['live','prematch'].includes(view)||!id||id.length>300)return sendJson(req,res,400,{error:'Неверный матч'});
-        const rules=uiRuleState(),snap=view==='live'
-          ?await cachedCombinedSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,ggbetLiveState)
+        const provider=liveProvider(url),rules=uiRuleState(),snap=view==='live'
+          ?await liveSnapshot(provider)
           :await uiPrematchSnapshot();
         let event=(snap.events||[]).find(e=>String(e.id)===id);
         if(!event)return sendJson(req,res,404,{error:'Матч уже не доступен'});
@@ -553,6 +620,12 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
                 if(fresh)return {...ref,...fresh,scoreReversed:ref.scoreReversed||false,aliases:ref.aliases||fresh.aliases,lifecycle:ref.lifecycle||fresh.lifecycle,firstSeenAt:ref.firstSeenAt||fresh.firstSeenAt,enteredLiveAt:ref.enteredLiveAt||fresh.enteredLiveAt};
               }catch(error){marketDetailErrors.ggbet=error?.message||String(error);log.warn('[ggbet-detail]',marketDetailErrors.ggbet);}
             }
+            if(ref?.source==='databet'&&databetCollector?.detail){
+              try{
+                const fresh=await databetCollector.detail(ref.sourceEventId||ref.id,{timeoutMs:6500});
+                if(fresh)return {...ref,...fresh,scoreReversed:ref.scoreReversed||false,aliases:ref.aliases||fresh.aliases,lifecycle:ref.lifecycle||fresh.lifecycle,firstSeenAt:ref.firstSeenAt||fresh.firstSeenAt,enteredLiveAt:ref.enteredLiveAt||fresh.enteredLiveAt};
+              }catch(error){marketDetailErrors.databet=error?.message||String(error);log.warn('[databet-detail]',marketDetailErrors.databet);}
+            }
             return ref;
           }));
           event=event.sourceRefs?.length?{...event,sourceRefs:hydrated}:hydrated[0];
@@ -563,8 +636,8 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
         if(event?.sourceRefs?.length)event={...event,[phaseKey]:true,sourceRefs:event.sourceRefs.map(ref=>({...ref,[phaseKey]:true}))};
         else if(event)event={...event,[phaseKey]:true};
         event=enrichEventMarketSemantics(event);
-        return sendJson(req,res,200,{ok:true,view,event:decorateUiEvent(event,rules.links||[]),marketDetailErrors,serverVersion:config.version,uiSchemaVersion:3,marketSemantics:1,ggbetNativeTabs:1});
-      }catch(error){return sendJson(req,res,500,{error:error?.message||String(error)});}
+        return sendJson(req,res,200,{ok:true,view,liveOddsProvider:view==='live'?provider:null,event:decorateUiEvent(event,rules.links||[]),marketDetailErrors,serverVersion:config.version,uiSchemaVersion:3,marketSemantics:1,ggbetNativeTabs:1});
+      }catch(error){return sendJson(req,res,error?.status||500,{error:error?.message||String(error)});}
     }
     if(req.method==='GET'&&url.pathname==='/api/ui/results'){
       const from=Number(url.searchParams.get('from')||0),to=Number(url.searchParams.get('to')||0),date=String(url.searchParams.get('date')||'').trim();
@@ -600,6 +673,8 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
     if (url.pathname === "/api/live/astek") return snapshotResponse(req,res,{...singleProviderSnapshot(liveState,'live'),providers:{astek:singleProviderSnapshot(liveState,'live')}});
     if (url.pathname === "/api/live/fonbet") return snapshotResponse(req,res,{...singleProviderSnapshot(fonbetLiveState,'live'),providers:{fonbet:singleProviderSnapshot(fonbetLiveState,'live')}});
     if (url.pathname === "/api/live/ggbet" && ggbetLiveState) return snapshotResponse(req,res,{...singleProviderSnapshot(ggbetLiveState,'live'),providers:{ggbet:singleProviderSnapshot(ggbetLiveState,'live')}});
+    if (url.pathname === "/api/live/databet" && databetLiveState) return snapshotResponse(req,res,{...singleProviderSnapshot(databetLiveState,'live'),providers:{databet:singleProviderSnapshot(databetLiveState,'live')}});
+    if(req.method==='GET'&&url.pathname==='/api/ui/odds-providers')return sendJson(req,res,200,{defaultProvider:'ggbet',providers:oddsProvidersStatus(),serverVersion:config.version});
 
     if(url.pathname==='/api/score-history'){
       const keys=(url.searchParams.get('ids')||'').split(',').filter(Boolean);
@@ -665,14 +740,16 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
         intervalsMs: {
           astekLive: config.liveIntervalMs,
           fonbetLive: config.fonbetLiveIntervalMs,
-          ggbetLiveSnapshot: config.ggbetSnapshotIntervalMs,
+          ggbetLiveSnapshot: config.ggbetSnapshotIntervalMs,databetLiveSnapshot: config.databetSnapshotIntervalMs,
           astekPrematch: config.prematchCatalogIntervalMs,
           fonbetPrematch: config.fonbetPrematchIntervalMs,pinnaclePrematch:60000,pinnacleLive:15000,pinnacleLiveDetail:pinnacleCollector?.detailInterval||2000
         },
-        live: { astek: liveState.status(), fonbet: fonbetLiveState.status(),...(pinnacleLiveState?{pinnacle:{...pinnacleLiveState.status(),...pinnacleCollector?.status()}}:{}),...(ggbetLiveState?{ggbet:{...ggbetLiveState.status(),...ggbetCollector?.status()}}:{}) },
+        live: { astek: liveState.status(), fonbet: fonbetLiveState.status(),...(pinnacleLiveState?{pinnacle:{...pinnacleLiveState.status(),...pinnacleCollector?.status()}}:{}),...(ggbetLiveState?{ggbet:{...ggbetLiveState.status(),...ggbetCollector?.status()}}:{}),...(databetLiveState?{databet:{...databetLiveState.status(),...databetCollector?.status()}}:{}) },
         prematch: { astek: { ...prematchState.status(), ...(prematchCollector?.status?.()||{}) }, fonbet: fonbetPrematchState.status(),...(pinnaclePrematchState?{pinnacle:{...pinnaclePrematchState.status(),...pinnacleCollector?.status()}}:{}) },
         fonbetCollector: fonbetCollector?.status?.()||{enabled:false},
         ggbetCollector: ggbetCollector?.status?.()||{enabled:false},
+        databetCollector: databetCollector?.status?.()||{enabled:false},
+        oddsProviders: oddsProvidersStatus(),
         results: resultsService?.status?.()||{enabled:false}
       });
     }

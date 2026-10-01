@@ -60,6 +60,9 @@ python3 tools/package-release.py     # dist/Esports-Monitor-server-4.4.0.zip и 
 | `HISTORY_MAX` / `HISTORY_TTL_MS` | 100000 / 1 год | Размер History в памяти (≈1,1 КБ на строку, 7 снимков) |
 | `API_SSE_LIMIT_TOTAL` / `API_SSE_LIMIT_PER_IP` / `API_MAX_CONNECTIONS` | 64 / 24 / 256 | Защита от исчерпания соединений |
 | `GGBET_BOOTSTRAP_RELAY_URL` | пусто | Адрес relay (создаётся `configure-ggbet-relay.sh`) |
+| `DATABET_LIVE_ENABLED` | `1` | LIVE‑коэффициенты DataBet (публичный demo.data.bet, гостевой токен со страницы, только в памяти). `0` — выключить |
+| `DATABET_ORIGIN` / `DATABET_LOCALE` | `https://demo.data.bet` / `en` | Страница, с которой берётся гостевая сессия DataBet (только хосты `*.data.bet`) |
+| `DATABET_FULL_MARKETS_TTL_MS` / `DATABET_MAX_FULL_EVENTS` | 180000 / 4 | Полное дерево рынков DataBet держится только для матчей с открытым диалогом коэффициентов |
 | `HOST_DATA_DIR`, `COMPOSE_PROJECT_NAME` | пишет `upgrade.sh` | Каталог данных на хосте и имя проекта Compose |
 | `PINNACLE_API_KEY` | получается автоматически | Необязательное переопределение ключа Pinnacle |
 

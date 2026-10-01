@@ -79,3 +79,17 @@
 2. `deltaSince` у `/api/ui/results` — расширение отправляет, сервер игнорирует (клиент принимает полный ответ).
 3. `fresh=1` у `/api/ui/event-detail` — игнорируется (деталь и так запрашивается у апстрима по требованию).
 4. Форматы ошибок разнородны (`{error}`, `{ok:false,error}`, `{matched:false,error}`).
+
+## Изменения 4.5.0: источник LIVE‑коэффициентов (`provider`)
+
+| Метод | URL | Что добавлено |
+|---|---|---|
+| GET | `/api/ui/live`, `/api/live` | `provider=ggbet\|databet` (по умолчанию `ggbet` — ответ как в 4.4.0). Каждый провайдер — отдельный разрешённый вариант LIVE, источники не смешиваются; `revision`/ETag варианта DataBet оканчивается на `~databet`. В UI‑ответе `liveOddsProvider` и `providers.<provider>.oddsProvider` (статус источника). 400 — неизвестный провайдер, 503 — провайдер не запущен на сервере |
+| GET | `/api/ui/event-detail` | `provider` для `view=live`: детали рынков берутся у коллектора выбранного провайдера (`marketDetailErrors.databet` при ошибке) |
+| GET (SSE) | `/api/feed-stream` | `provider`: `hello.liveOddsProvider`, мета LIVE варианта провайдера, патчи LIVE только своего провайдера |
+| GET | `/api/live/databet` | лента одного провайдера DataBet |
+| GET | `/api/ui/odds-providers` | `{defaultProvider,providers:{ggbet,databet}}`: `connectionState`, `available`, `events`, `markets`, `lastUpdateAt`, `lastError` |
+| GET | `/health`, `/api/status` | `live.databet`, `databetCollector`, `oddsProviders` |
+
+Цены DataBet в `odds.markets[].prices[]` дополнительно несут `probability` (как пришла с апстрима, число) и `rawValue`
+(исходная строка `value`); `decimal` = `value` для открытого исхода и `null` для закрытого.

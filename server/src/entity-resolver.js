@@ -328,7 +328,7 @@ function prepareAutomaticLinks(events,mode){
 export function eventMatchScore(a,b,{mode='prematch',inferredLeague=0,allowSwapped=true,manualLeague=false}={}){
   const ca=canonicalCategory(a.category||a.sportName), cb=canonicalCategory(b.category||b.sportName);
   if(norm(ca)!==norm(cb)||eventKind(a)!==eventKind(b))return null;
-  const relation=['astek','fonbet','pinnacle','ggbet'].includes(a.source)&&['astek','fonbet','pinnacle','ggbet'].includes(b.source)&&a.source!==b.source?leagueStore.relation(a,b):{blocked:false,linked:false};if(relation.blocked)return null;
+  const relation=['astek','fonbet','pinnacle','ggbet','databet'].includes(a.source)&&['astek','fonbet','pinnacle','ggbet','databet'].includes(b.source)&&a.source!==b.source?leagueStore.relation(a,b):{blocked:false,linked:false};if(relation.blocked)return null;
   manualLeague=manualLeague||relation.linked;inferredLeague=Math.max(inferredLeague,inferredLeagueScore(a,b),...(a.sourceRefs||[]).map(r=>leagueSimilarity(r.league,b.league,r.category,b.category)));if(manualLeague)inferredLeague=1;
   const teams=pairTeamSimilarity(a,b),time=timeSimilarity(a.startAt,b.startAt,mode==='past'?'prematch':mode);
   if(!Number.isFinite(time.minutes)||time.score===0)return null;
@@ -617,7 +617,8 @@ export function resolveEvents(events,options={}){
  // Keep the original Astek/Fonbet bipartite core intact, then attach additional
  // bookmakers one at a time. GGBET is LIVE-only today; keeping it out of the
  // core prevents a fourth source from changing established A/F matching.
- const extras=['pinnacle','ggbet'];
+ // DataBet (an alternative LIVE odds provider to GGBET) attaches the same way and never enters the core.
+ const extras=['pinnacle','ggbet','databet'];
  let base=resolveCore(rows.filter(e=>!extras.includes(e.source)),options);
  for(const source of extras)base=attachProvider(base,rows.filter(e=>e.source===source),options);
  return base;

@@ -5,6 +5,7 @@ import { createApi } from "./api.js";
 import { FonbetCollector } from "./fonbet.js";
 import { LiveCollector } from "./live.js";
 import { GgbetLiveCollector } from "./ggbet.js";
+import { DatabetLiveCollector } from "./databet.js";
 import { PrematchCollector } from "./prematch.js";
 import { SnapshotState } from "./state.js";
 import { ResultsService } from "./results.js";
@@ -30,16 +31,19 @@ const prematchState = new SnapshotState("prematch", Math.max(config.prematchCata
 const fonbetLiveState = new SnapshotState("fonbet-live", Math.max(config.fonbetLiveIntervalMs * 4, 60000));
 const fonbetPrematchState = new SnapshotState("fonbet-prematch", Math.max(config.fonbetPrematchIntervalMs * 4, 300000));
 const ggbetLiveState = new SnapshotState("ggbet-live", Math.max(config.ggbetSnapshotIntervalMs * 4, 120000));
+// DataBet is a second, independent LIVE odds provider; the extension shows either GGBET or DataBet, never both.
+const databetLiveState = new SnapshotState("databet-live", Math.max(config.databetSnapshotIntervalMs * 4, 120000));
 // Load persistent generations sequentially. On a 1 GB VPS, parsing all large
 // history JSON files in parallel briefly duplicates hundreds of MiB and can
 // hit the cgroup limit before the API even starts.
-for (const state of [liveState,prematchState,fonbetLiveState,fonbetPrematchState,ggbetLiveState,pinnaclePrematchState,pinnacleLiveState]) await state.load();
+for (const state of [liveState,prematchState,fonbetLiveState,fonbetPrematchState,ggbetLiveState,databetLiveState,pinnaclePrematchState,pinnacleLiveState]) await state.load();
 
 const liveCollector = new LiveCollector(liveState);
 const prematchCollector = new PrematchCollector(prematchState);
 const pinnacleCollector=new PinnacleCollector(pinnaclePrematchState,{liveState:pinnacleLiveState});
 const fonbetCollector = new FonbetCollector(fonbetLiveState, fonbetPrematchState);
 const ggbetCollector = new GgbetLiveCollector(ggbetLiveState);
+const databetCollector = new DatabetLiveCollector(databetLiveState);
 // GGBET is LIVE-only until its ENDED/final-result transport is verified against production.
 const resultsService = new ResultsService(liveState, fonbetLiveState, prematchState, fonbetPrematchState);
 resultsService.setPriorityProbe(()=>{const gate=astekRequestStatus();return !!(liveCollector.running||prematchCollector.running||fonbetCollector.running||['live','prematch','detail'].includes(gate.activeKind));});
@@ -49,15 +53,16 @@ await prematchCollector.load();
 const hltvService=new HltvService();
 const oddsService=new OddsService(hltvService);
 const crossbetService=new CrossbetService();
-const server = createApi({ liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt });
+const server = createApi({ liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState,databetCollector,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt });
 server.listen(config.port, "0.0.0.0", () => {
   log.info(`[api] listening on 0.0.0.0:${config.port}`);
   log.info(`[api] AstekBet upstream ${config.origins.join(", ")}`);
   log.info(`[api] Fonbet upstream ${config.fonbetUrls.join(", ")}`);
   log.info(`[api] GGBET LIVE bootstrap ${config.ggbetBootstrapRelayUrl?`relay ${config.ggbetBootstrapRelayUrl}`:config.ggbetOrigins.join(", ")}`);
+  log.info(`[api] DataBet LIVE ${config.databetLiveEnabled?`bootstrap ${config.databetOrigin}/${config.databetLocale}/esports/live`:"disabled (DATABET_LIVE_ENABLED=0)"}`);
   liveCollector.start();
   prematchCollector.start();
-  fonbetCollector.start();ggbetCollector.start();pinnacleCollector.start();
+  fonbetCollector.start();ggbetCollector.start();databetCollector.start();pinnacleCollector.start();
   resultsService.start();
   retention=startRetention({statistics:server.statistics,activeKeys:server.activeEventKeys});
 });
@@ -68,11 +73,11 @@ async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   log.info(`[api] shutting down (${reason}${persist?'':' / no-persist'})`);
   const deadline=setTimeout(() => process.exit(exitCode||1), persist?30000:5000);deadline.unref();
   const closed=new Promise(resolve=>server.close(()=>resolve()));
-  await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);
+  await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),databetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);
   await retention?.stop();
   await Promise.allSettled([server.stopStatistics(),oddsService.stop()]);
   if(persist){
-    await Promise.allSettled([liveState.save(),prematchState.save(),fonbetLiveState.save(),fonbetPrematchState.save(),ggbetLiveState.save(),pinnaclePrematchState.save(),pinnacleLiveState.save(),flushMatcherAliases()]);
+    await Promise.allSettled([liveState.save(),prematchState.save(),fonbetLiveState.save(),fonbetPrematchState.save(),ggbetLiveState.save(),databetLiveState.save(),pinnaclePrematchState.save(),pinnacleLiveState.save(),flushMatcherAliases()]);
     await flushJsonWrites();
     checkpointSqliteStorage();
   }

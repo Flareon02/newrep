@@ -26,7 +26,7 @@ const MarketCanonical=(()=>{
   // A GGBET market without server canonical metadata is deliberately *not*
   // guessed from two home/away outcomes or localized text. Showing the raw
   // bookmaker title is safer than silently turning Race-to-rounds into Winner.
-  if(/^ggbet:/i.test(String(m?.key||'')))return'special';
+  if(/^(?:ggbet|databet):/i.test(String(m?.key||'')))return'special';
   const type=typeOf(m),title=norm(nativeTitle(m)),ds=new Set(designations(m)),ls=labels(m).join(' | ');
   // Specific semantics first. Generic `spread`/`total` types are intentionally
   // last because GGBET uses the same hcp/total tags for many distinct markets.
