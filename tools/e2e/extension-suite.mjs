@@ -208,10 +208,13 @@ scenario('E07', 'X3', 'a new LIVE fixture raises exactly one browser notificatio
   await page.evaluate(async () => { prefs.notifications = { ...prefs.notifications, live: true }; await chrome.storage.local.set({ prefs }); });
   await sleep(2000);
   mockState.extraEvents = 1;
-  const ids = await until(async () => { const all = Object.keys(await swEval(() => chrome.notifications.getAll())).filter((id) => id.startsWith('live-')); return all.length ? all : null; }, { timeout: 60000, what: 'a live notification' });
-  await sleep(8000);
-  const after = Object.keys(await swEval(() => chrome.notifications.getAll())).filter((id) => id.startsWith('live-'));
-  if (after.length !== 1) throw new Error(`expected exactly one notification, found ${after.length} (first wait saw ${ids.length})`);
+  // Headless Chrome closes a notification by itself after a few seconds, so a single getAll() after a pause can see
+  // none. Collect every live-* id that is ever shown instead: the new fixture must raise exactly one.
+  const shown = new Set();
+  const collect = async () => { for (const id of Object.keys(await swEval(() => chrome.notifications.getAll()))) if (id.startsWith('live-')) shown.add(id); return shown.size ? [...shown] : null; };
+  await until(collect, { timeout: 90000, every: 250, what: 'a live notification' });
+  for (const end = Date.now() + 8000; Date.now() < end;) { await collect(); await sleep(250); }
+  if (shown.size !== 1) throw new Error(`expected exactly one notification, saw ${shown.size}: ${[...shown].join(', ')}`);
   mockState.extraEvents = 0;
   await swEval(async () => { for (const id of Object.keys(await chrome.notifications.getAll())) await chrome.notifications.clear(id); });
   await page.evaluate(async () => { prefs.notifications = { ...prefs.notifications, live: false }; await chrome.storage.local.set({ prefs }); });
