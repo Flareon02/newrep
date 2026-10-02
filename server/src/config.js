@@ -26,7 +26,7 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.11.0",
+  version: "4.12.0",
   port: intEnv("PORT", 8080),
   // Listen address. Unset: 0.0.0.0 (Docker). 127.0.0.1 / localhost when only a local reverse proxy or tunnel may reach
   // the API. Any other value that is not an IP literal binds 127.0.0.1 (fails closed, never public) and is logged.
@@ -68,6 +68,10 @@ export const config = {
   ggbetWatchdogMs: intEnv("GGBET_WATCHDOG_MS", 90000, 30000),
   ggbetMaxBackoffMs: intEnv("GGBET_MAX_BACKOFF_MS", 60000, 5000),
   // GGBET_NETWORK_MODE=netns: the CONNECT socket of the isolated egress namespace and its status file (ggbet-egress.sh).
+  // Bounded pricing observer: one LIVE Dota 2 event's light stream also carries its typeId 96 (odd/even) markets.
+  ggbetPricingMonitor: !/^(?:0|false|off|no)$/i.test(String(process.env.GGBET_PRICING_MONITOR || "1")),
+  ggbetPricingMonitorNoDataMs: intEnv("GGBET_PRICING_MONITOR_NO_DATA_MS", 5 * 60 * 1000, 60 * 1000),
+  ggbetPricingMonitorMaxMs: intEnv("GGBET_PRICING_MONITOR_MAX_MS", 3 * 60 * 60 * 1000, 10 * 60 * 1000),
   ggbetEgressSocket: String(process.env.GGBET_EGRESS_SOCKET || "/run/ggbet-egress/connect.sock").trim(),
   ggbetEgressStatusFile: String(process.env.GGBET_EGRESS_STATUS_FILE || "/run/ggbet-egress/status.json").trim(),
   // Sanitized GGBET forensic log (ggbet-forensics.js): 24 h rolling, size cap, free-disk floor; raw frames off by default.

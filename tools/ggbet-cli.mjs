@@ -44,6 +44,14 @@ export function vpnRows(state, configs, pool = null) {
 function out(data, text) { process.stdout.write(json ? JSON.stringify(data, null, 1) + '\n' : text + '\n'); }
 
 const cmd = pos[0] || 'status', state = loadState(), pool = loadPool();
+if (cmd === 'reset-session') {
+  // Operator: clean GGBET session on the SAME egress; the service picks the request up within ~10 s and classifies the fresh
+  // session (SESSION_DEGRADED / EGRESS_SUSPECT / INCONCLUSIVE) without switching anything.
+  const d = path.join(DIR, 'control'), f = path.join(d, 'reset-session.json'), reason = pos.slice(1).join(' ') || 'operator request';
+  fs.writeFileSync(f, JSON.stringify({ requestedAt: new Date().toISOString(), reason }), { mode: 0o600 });
+  try { const st = fs.statSync(d); fs.chownSync(f, st.uid, st.gid); } catch {}
+  out({ requested: true, reason }, `reset-session requested (${reason}); see \`esports-monitor-ggbet status\` in ~10-20 s`); process.exit(0);
+}
 if (cmd === 'select') {
   const name = pos[1]; if (!name) { console.error('usage: select <config.conf>'); process.exit(2); }
   execFileSync('/usr/local/bin/esports-monitor-ggbet-egress', ['select', name], { stdio: 'inherit' }); process.exit(0);
@@ -64,12 +72,14 @@ if (cmd === 'status') {
     `Pricing guard (${g.mode}${g.enforceIgnored ? ', enforce requested but ignored' : ''}): ${g.state}  samples ${g.samples} unusual ${g.unusual}  last good ${ago(g.lastGoodAt)}  first suspect ${t(g.firstSuspectAt)}`,
     `Last typeId 96: ${last ? `${t(last.at)} ${last.eventId} ${last.marketId} odd ${last.odd?.price} / even ${last.even?.price} (ratio ${last.ratio})` : 'none yet'}`,
     `Last good pricing: ${t(g.lastGoodAt)}   incidents: ${(state.incidents || []).length || '-'}`,
+    `Pricing observer: ${state.monitor ? (state.monitor.state === 'monitoring' ? `monitoring ${state.monitor.eventId} since ${t(state.monitor.since)}, ${state.monitor.samples} typeId 96 updates, last ${t(state.monitor.lastSampleAt)}` : state.monitor.state + (state.monitor.lastEnded ? ` (last: ${state.monitor.lastEnded.eventId} ended: ${state.monitor.lastEnded.reason})` : '')) : '-'}`,
+    `Session verification: ${state.verification ? `running since ${t(state.verification.requestedAt)} (old ${state.verification.oldSessionId}, age ${dur(state.verification.oldSessionAgeMs)})` : (state.verifications || []).length ? `last ${state.verifications.at(-1).result} at ${t(state.verifications.at(-1).decidedAt)}` : 'none'}`,
     `Fallback candidate: ${pool?.nextCandidate || '-'}   switches last hour ${pool?.switchesLastHour ?? '-'}${pool?.fallback ? `   fallback since ${t(pool.fallback.startedAt)}` : ''}`,
     `Forensic log: ${state.log?.level} ${(state.log?.bytes / 1048576 || 0).toFixed(1)} MiB, ${state.log?.files} files, raw ${state.log?.raw ? 'on' : 'off'}   state ${ago(state.updatedAt)}`,
   ].join('\n'));
 } else if (cmd === 'vpns') {
   const configs = discoverConfigs(), rows = vpnRows(state, configs.length ? configs : Object.values(pool?.vpns || {}).map((v) => ({ configFile: v.configFile, id: v.id })), pool);
-  out(rows, table(rows, [['ID', (r) => (r.current ? '*' : ' ') + r.id], ['Config', (r) => r.configFile], ['Exit', (r) => [r.exitIp, r.country, r.city].filter(Boolean).join(' ')], ['State', (r) => r.state], ['Last activated', (r) => t(r.lastActivatedAt)], ['Healthy run', (r) => dur(r.currentHealthyRunMs)], ['Longest', (r) => dur(r.longestHealthyRunMs)], ['Total healthy', (r) => dur(r.totalHealthyRuntimeMs)], ['Activations', (r) => r.activationCount ?? 0], ['Sessions', (r) => r.service?.sessions ?? 0], ['Pricing susp/conf', (r) => `${r.service?.pricingSuspects ?? 0}/${r.service?.pricingConfirmed ?? 0}`], ['Net fail', (r) => r.networkFailures ?? 0], ['Cooldown', (r) => (r.cooldownLeftMs ? dur(r.cooldownLeftMs) : '-')], ['Last reason', (r) => r.lastFailureReason || r.service?.lastFailureReason]]));
+  out(rows, table(rows, [['ID', (r) => (r.current ? '*' : ' ') + r.id], ['Config', (r) => r.configFile], ['Exit', (r) => [r.exitIp || r.transport?.exitIp, r.country || r.transport?.country, r.city || r.transport?.city].filter(Boolean).join(' ')], ['State', (r) => r.state], ['Last activated', (r) => t(r.lastActivatedAt)], ['Healthy run', (r) => dur(r.currentHealthyRunMs)], ['Longest', (r) => dur(r.longestHealthyRunMs)], ['Total healthy', (r) => dur(r.totalHealthyRuntimeMs)], ['Activations', (r) => r.activationCount ?? 0], ['Sessions', (r) => r.service?.sessions ?? 0], ['Pricing susp/conf', (r) => `${r.service?.pricingSuspects ?? 0}/${r.service?.pricingConfirmed ?? 0}`], ['Sess degr', (r) => r.service?.sessionDegradations ?? 0], ['Net fail', (r) => r.networkFailures ?? 0], ['Transport check', (r) => (r.transport ? `${r.transport.ok ? 'ok' : 'FAIL'} ${t(r.transport.checkedAt)}` : '-')], ['Cooldown', (r) => (r.cooldownLeftMs ? dur(r.cooldownLeftMs) : '-')], ['Last reason', (r) => r.lastFailureReason || r.service?.lastFailureReason]]));
 } else if (cmd === 'sessions') {
   const rows = (state.sessions || []).slice().reverse();
   out(rows, table(rows, [['Session', (r) => r.id], ['Egress', (r) => r.egressId], ['Started', (r) => t(r.startedAt)], ['Age/lifetime', (r) => dur((r.endedAt ? Date.parse(r.endedAt) : now) - Date.parse(r.startedAt))], ['First good', (r) => t(r.firstGoodAt)], ['Last good', (r) => t(r.lastGoodAt)], ['Guard', (r) => r.guardState], ['WS', (r) => r.wsConnects], ['Reconn', (r) => r.reconnects], ['Suspect/conf', (r) => `${r.pricingSuspects}/${r.pricingConfirmed}`], ['JWE', (r) => (r.jwe ? `${r.jwe.locale}/${r.jwe.label}` : '-')], ['End', (r) => r.endReason || (r.endedAt ? 'ended' : 'active')]]));
@@ -89,4 +99,4 @@ if (cmd === 'status') {
 } else if (cmd === 'tail') {
   const rows = tail(DIR, Number(opt('n', 30)) || 30);
   out(rows, rows.map((r) => `${r.at} ${r.kind.padEnd(10)} ${JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => !['at', 'kind'].includes(k)))).slice(0, 220)}`).join('\n'));
-} else { console.error('commands: status | vpns | sessions | history | switches | qualification | incidents [id] | tail [--n N] | select <config.conf>   (--json)'); process.exit(2); }
+} else { console.error('commands: status | vpns | sessions | history | switches | qualification | incidents [id] | tail [--n N] | select <config.conf> | reset-session [reason]   (--json)'); process.exit(2); }

@@ -94,6 +94,14 @@ async function fallback(reason) {
   note('fallback', { reason }); save();
 }
 
+// One transport qualification of another config at a time, at most every 10 min, only while the active egress is healthy.
+let lastQualify = 0;
+async function qualifyOne() {
+  if (pool.mode !== 'mullvad' || pool.failing || Date.now() - lastQualify < 600000) return;
+  const v = pool.nextTransportCheck(); if (!v) return; lastQualify = Date.now();
+  let r; try { const { stdout } = await run(O.egress, ['qualify', v.configFile], { timeout: 90000 }); r = JSON.parse(stdout.trim().split('\n').pop()); } catch (e) { r = { ok: false, error: `qualify failed (exit ${e.code ?? '?'})`, checkedAt: new Date().toISOString() }; }
+  pool.transportChecked(v.id, r); note('transport-check', { id: v.id, ok: r.ok, exitIp: r.exitIp, country: r.country, city: r.city, hostname: r.hostname, error: r.error }); save();
+}
 let lastTick = Date.now(), lastProbe = 0, stopping = false;
 async function tick() {
   discover();
@@ -114,6 +122,7 @@ async function tick() {
   if (decision?.action === 'select' && !decision.to) decision = pool.enterFallback('no usable Mullvad config at startup');
   if (decision?.action === 'fallback') await fallback(decision.reason);
   else if (['select', 'switch', 'restore', 'reestablish'].includes(decision?.action)) await activate(decision);
+  else if (decision?.action === 'none' && !decision.reason) await qualifyOne();
   save();
 }
 async function loop() { while (!stopping) { try { await tick(); } catch (e) { note('error', { error: String(e.message).slice(0, 200) }); } await new Promise((r) => setTimeout(r, O.intervalMs)); } }

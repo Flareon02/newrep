@@ -38,7 +38,8 @@ export class VpnPool {
   event(type, data = {}) { const e = { at: this.iso(), type, ...data }; this.history.push(e); if (this.history.length > 1000) this.history.shift(); return e; }
   available(excludeId = null) {
     const now = this.now();
-    return Object.values(this.vpns).filter((v) => !v.missing && v.id !== excludeId && !(v.cooldownUntil > now));
+    // A failed transport qualification (separate namespace) keeps a config out of selection for 6 h.
+    return Object.values(this.vpns).filter((v) => !v.missing && v.id !== excludeId && !(v.cooldownUntil > now) && !(v.transport && v.transport.ok === false && now - Date.parse(v.transport.checkedAt) < 6 * 3600000));
   }
   // 1 last known good, 2 longest proven healthy run, 3 fewest network failures, 4 the preferred config, 5 untested.
   rank(list) {
@@ -106,6 +107,10 @@ export class VpnPool {
     f.lastTryAt = this.iso(now); this.fallback = f; this.event('restore-attempt', { to: c.id });
     return { action: 'restore', to: c.id, configFile: c.configFile, reason: 'retry Mullvad after fallback' };
   }
+  // Transport qualification result (handshake + exit metadata, no GGBET traffic) for a config that is not active.
+  transportChecked(id, r = {}) { const v = this.vpns[id]; if (!v) return; v.transport = { checkedAt: r.checkedAt || this.iso(), ok: !!r.ok, exitIp: r.exitIp || null, country: r.country || null, city: r.city || null, hostname: r.hostname || null, error: r.error || null }; this.event('transport-check', { id, ok: !!r.ok, exitIp: r.exitIp || null }); }
+  // Next config to transport-check: not active, never checked or checked > 24 h ago.
+  nextTransportCheck() { const now = this.now(); return Object.values(this.vpns).filter((v) => !v.missing && v.id !== this.active && (!v.transport || now - Date.parse(v.transport.checkedAt) > 24 * 3600000)).sort((a, b) => a.id.localeCompare(b.id))[0] || null; }
   snapshot() { return { mode: this.mode, active: this.active, fallback: this.fallback, preferred: this.preferred, switchesLastHour: this.switchesLastHour(), switches: this.switches.slice(-50), lastKnownGood: this.lastKnownGood(), nextCandidate: this.candidate(this.active)?.id || null, options: this.o, vpns: this.vpns, history: this.history.slice(-500), updatedAt: this.iso() }; }
 }
 const pick = (e) => Object.fromEntries(['exitIp', 'country', 'city', 'hostname'].filter((k) => e[k] != null).map((k) => [k, e[k]]));

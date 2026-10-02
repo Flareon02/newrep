@@ -3,6 +3,8 @@
 #   esports-monitor-ggbet-egress discover            configs in /root/.secrets/mullvad (name, mode, size; never contents)
 #   esports-monitor-ggbet-egress select <name.conf>  (re)create namespace ggbet-egress with that config + CONNECT proxy
 #   esports-monitor-ggbet-egress status | down
+#   esports-monitor-ggbet-egress qualify <name.conf>  TRANSPORT check only, in a SEPARATE namespace (ggbet-qual): WireGuard
+#                                                    handshake + exit metadata; no proxy, no GGBET traffic; torn down after
 # The host namespace is never changed: default route, SSH, cloudflared and every other collector stay as they are.
 # Inside the namespace runs tools/ggbet-egress-proxy.mjs as the service user (transient unit esports-monitor-ggbet-egress),
 # listening only on /run/ggbet-egress/connect.sock. The service uses it with GGBET_NETWORK_MODE=netns.
@@ -51,5 +53,22 @@ case "${1:-}" in
       '{id:$id,configFile:$cf,namespace:$ns,activatedAt:$at,exitIp:$i.ip,country:$i.country,city:$i.city,hostname:$i.mullvad_exit_ip_hostname,mullvad:$i.mullvad_exit_ip}')
     if [ "$NO_STATUS" != 1 ]; then printf '%s\n' "$STATUS" > "$RUN/status.json.tmp"; chown root:"$SVC_USER" "$RUN/status.json.tmp"; chmod 640 "$RUN/status.json.tmp"; mv -f "$RUN/status.json.tmp" "$RUN/status.json"; echo "active egress:"; fi
     printf '%s\n' "$STATUS"; echo "outside default route unchanged: $(ip route show default)" >&2 ;;
+  qualify)
+    NAME=$(basename "${2:?config name}"); CONF="$DIR/$NAME"; QNS=ggbet-qual QIF=wgqq0; perms
+    [ -f "$CONF" ] || { echo "no such config: $NAME" >&2; exit 2; }
+    R0="$(route_sig)"; ip netns del "$QNS" 2>/dev/null || true; rm -rf /etc/netns/"$QNS"; umask 077
+    qdown(){ ip netns del "$QNS" 2>/dev/null || true; rm -rf /etc/netns/"$QNS"; }
+    trap qdown EXIT
+    ip netns add "$QNS"; ip link add "$QIF" type wireguard; ip link set "$QIF" netns "$QNS"
+    wg-quick strip "$CONF" | ip netns exec "$QNS" wg setconf "$QIF" /dev/stdin
+    awk -F'=' 'tolower($1)~/^[ \t]*address[ \t]*$/{gsub(/[ \t]/,"",$2);n=split($2,a,",");for(i=1;i<=n;i++)print a[i]}' "$CONF" | while read -r a; do ip -n "$QNS" addr add "$a" dev "$QIF"; done
+    install -d -m 755 /etc/netns/"$QNS"
+    awk -F'=' 'tolower($1)~/^[ \t]*dns[ \t]*$/{gsub(/[ \t]/,"",$2);n=split($2,a,",");for(i=1;i<=n;i++)print "nameserver " a[i]}' "$CONF" > /etc/netns/"$QNS"/resolv.conf; chmod 644 /etc/netns/"$QNS"/resolv.conf
+    ip -n "$QNS" link set lo up; ip -n "$QNS" link set "$QIF" up; ip -n "$QNS" route add default dev "$QIF"
+    if [ "$R0" != "$(route_sig)" ]; then echo "ISOLATION BROKEN - tearing down" >&2; exit 3; fi
+    INFO=$(ip netns exec "$QNS" curl -s --max-time 15 https://am.i.mullvad.net/json || echo '{}')
+    HS=$(ip netns exec "$QNS" wg show "$QIF" latest-handshakes | awk '{print $2}' | head -1)
+    jq -cn --arg cf "$NAME" --arg at "$(date -u +%FT%T.%3NZ)" --argjson i "$INFO" --arg hs "${HS:-0}" \
+      '{configFile:$cf,checkedAt:$at,ok:(($i.ip//"")!="" and ($hs|tonumber)>0),exitIp:$i.ip,country:$i.country,city:$i.city,hostname:$i.mullvad_exit_ip_hostname,mullvad:$i.mullvad_exit_ip,handshake:(($hs|tonumber)>0)}' ;;
   *) sed -n '2,9p' "$0"; exit 2 ;;
 esac

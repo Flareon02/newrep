@@ -32,10 +32,14 @@ export class GgbetSupervisor {
     this.log = log || new ForensicLog({ dir, now, raw, bufferMs, ...(maxBytes ? { maxBytes } : {}), ...(minFreeMiB ? { minFreeMiB } : {}) });
     // timeline: compact recent events (pricing, ws, session, graphql, egress) for incident context (10 min before / 5 after).
     this.timeline = []; this.pendingAfter = []; this.transport = { failures: [], lastSuccessAt: null };
+    this.controlDir = path.join(dir, 'control'); fs.mkdirSync(this.controlDir, { recursive: true, mode: 0o700 });
+    this.verification = null; this.verifyMs = 15 * 60000; this.lastConfirmedIncident = null;
     this.guard = guard || new PricingGuard({ config: guardConfig(), now, onTransition: (t) => this.guardTransition(t), onIncident: (i) => this.incident(i) });
     this.stateFile = path.join(dir, 'state.json');
     const saved = (() => { try { return JSON.parse(fs.readFileSync(this.stateFile, 'utf8')); } catch { return {}; } })();
+    this.verifications = saved.verifications || [];
     this.egresses = saved.egresses || {}; this.sessions = saved.sessions || []; this.history = saved.history || []; this.seq = Number(saved.seq) || 0;
+    for (const e of Object.values(this.egresses)) if (e.state === 'ACTIVE') { e.state = 'INACTIVE'; e.currentActive = false; } // re-marked by checkEgress below
     for (const s of this.sessions) if (!s.endedAt) { s.endedAt = saved.updatedAt || new Date(now()).toISOString(); s.endReason = s.endReason || 'process restart'; }
     this.session = null; this.collector = null; this.egress = null; this.lastMessageAt = 0;
     if (this.guard.config.enforceIgnored) this.log.write('guard', { note: 'GGBET_PRICING_GUARD_MODE=enforce requested but this release only observes' });
@@ -66,9 +70,9 @@ export class GgbetSupervisor {
     if (next.kind === 'proxy-fallback') this.log.write('egress', { note: 'last-resort proxy fallback', fallbackReason: next.fallbackReason, fallbackStartedAt: next.fallbackStartedAt });
     if (!changed) return false;
     const at = this.iso();
-    if (prev) { const st = this.egressStats(prev.id); st.totalActiveDurationMs += this.age(prev.activatedAtLocal) || 0; st.lastDeactivatedAt = at; st.currentActive = false; }
+    if (prev) { const st = this.egressStats(prev.id); st.totalActiveDurationMs += this.age(prev.activatedAtLocal) || 0; st.lastDeactivatedAt = at; st.currentActive = false; if (st.state === 'ACTIVE') st.state = 'INACTIVE'; }
     this.egress = { ...next, activatedAtLocal: at, activatedAt: next.activatedAt || at };
-    const st = this.egressStats(next.id); Object.assign(st, { configFile: next.configFile ?? st.configFile ?? null, exitIp: next.exitIp ?? null, country: next.country ?? null, city: next.city ?? null, hostname: next.hostname ?? null, lastActivatedAt: this.egress.activatedAt, currentActive: true, state: st.state === 'UNTESTED' ? 'ACTIVE' : st.state }); st.activationCount++;
+    const st = this.egressStats(next.id); Object.assign(st, { configFile: next.configFile ?? st.configFile ?? null, exitIp: next.exitIp ?? null, country: next.country ?? null, city: next.city ?? null, hostname: next.hostname ?? null, lastActivatedAt: this.egress.activatedAt, currentActive: true, state: ['UNTESTED', 'INACTIVE'].includes(st.state) ? 'ACTIVE' : st.state }); st.activationCount++;
     const entry = { at, from: prev?.id || null, to: next.id, reason: prev ? 'operator selected another egress' : reason, oldSessionId: this.session?.id || null, oldSessionAgeMs: this.age(this.session?.startedAt), oldEgressAgeMs: prev ? this.age(prev.activatedAtLocal) : null, pricingState: this.guard.state };
     this.history.push(entry); if (this.history.length > 500) this.history.shift();
     this.remember('egress', { from: entry.from, to: entry.to, reason: entry.reason });
@@ -130,13 +134,46 @@ export class GgbetSupervisor {
   }
   incident(record) {
     const c = this.collector, s = this.session;
+    if (record.classification === 'PRICING_CONFIRMED') record = { ...record, operatorHint: 'observe-only. To test SESSION vs EGRESS: `esports-monitor-ggbet reset-session` (clean session on the SAME egress; the result is classified here). To change the egress: `esports-monitor-ggbet select <config.conf>`.' };
     const id = this.log.incident({ ...record, ...this.context(), egress: this.egress && { id: this.egress.id, configFile: this.egress.configFile, exitIp: this.egress.exitIp, country: this.egress.country, city: this.egress.city, activatedAt: this.egress.activatedAt },
       session: s && { id: s.id, startedAt: s.startedAt, jwe: s.jwe, bootstrap: s.bootstrap, wsConnects: s.wsConnects, reconnects: s.reconnects, lastClose: s.lastClose, firstGoodAt: s.firstGoodAt, lastGoodAt: s.lastGoodAt },
       collector: c && { connected: !!c.lastAckAt, lastMessageAgeMs: c.lastMessageAt ? this.now() - c.lastMessageAt : null, failures: c.failures, reconnects: c.reconnects, bootstrapFetches: c.bootstrapFetches, bootstrapFailures: c.bootstrapFailures, wsConnectionsCreated: c.wsConnectionsCreated, ...(c.fullMarketStatus ? c.fullMarketStatus() : {}) },
       recentOddEven: this.guard.recent.slice(-20), guard: this.guard.snapshot(), timelineBefore: this.timeline.map(({ t, ...e }) => e), afterPendingUntil: this.iso(this.now() + this.afterMs) });
-    (this.incidents = this.incidents || []).push(id); this.pendingAfter.push({ id, from: this.now() }); this.persist(); return id;
+    (this.incidents = this.incidents || []).push(id); this.pendingAfter.push({ id, from: this.now() }); if (record.classification === 'PRICING_CONFIRMED') this.lastConfirmedIncident = { id, at: this.now() }; this.persist(); return id;
   }
   endSession(reason) { const s = this.session; if (!s || s.endedAt) return; s.endedAt = this.iso(); s.endReason = reason; this.log.write('session', { event: 'ended', sessionId: s.id, egressId: s.egressId, reason, ageMs: this.age(s.startedAt), reconnects: s.reconnects, firstGoodAt: s.firstGoodAt, lastGoodAt: s.lastGoodAt, guardState: s.guardState }); }
+  // OPERATOR-requested clean session on the SAME egress (CLI `reset-session` writes control/reset-session.json). The old
+  // session ends, token/agent/WebSocket are dropped, the next connect bootstraps afresh. The fresh session is then
+  // classified from NEW samples only - SESSION_DEGRADED (healthy), EGRESS_SUSPECT (anomaly confirmed again) or
+  // INCONCLUSIVE (too few samples) - and recorded. Nothing switches automatically.
+  checkControl() {
+    const file = path.join(this.controlDir, 'reset-session.json'); if (!fs.existsSync(file)) return false;
+    let req = {}; try { req = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {} try { fs.unlinkSync(file); } catch {}
+    return this.operatorReset(String(req.reason || 'operator request').slice(0, 200));
+  }
+  operatorReset(reason) {
+    const now = this.now(), old = this.session, ctx = this.context(), inc = this.lastConfirmedIncident && now - this.lastConfirmedIncident.at < 6 * 3600000 ? this.lastConfirmedIncident.id : null;
+    this.log.write('operator', { action: 'reset-session', reason, ...ctx, guard: this.guard.snapshot(), incidentId: inc }); this.remember('operator', { action: 'reset-session', reason });
+    this.endSession(`operator reset: ${reason}`);
+    this.verification = { requestedAt: this.iso(now), startedMs: now, reason, oldSessionId: old?.id || null, oldSessionAgeMs: ctx.sessionAgeMs, egressId: this.egress?.id || null, egressAgeMs: ctx.egressAgeMs, incidentId: inc, oldGuard: this.guard.snapshot() };
+    this.collector?.resetForEgressChange?.('operator session reset');
+    this.persist(); return true;
+  }
+  checkVerification() {
+    const v = this.verification; if (!v) return null; const now = this.now(), g = this.guard, fresh = this.session && this.session.id !== v.oldSessionId;
+    let result = null;
+    if (fresh && g.state === 'CONFIRMED') result = 'EGRESS_SUSPECT';
+    else if (fresh && g.samples >= g.config.minSamples && g.unusual === 0 && now - Date.parse(this.session.startedAt) >= g.config.windowMs) result = 'SESSION_DEGRADED';
+    else if (now - v.startedMs > this.verifyMs) result = 'INCONCLUSIVE';
+    if (!result) return null;
+    const out = { ...v, result, decidedAt: this.iso(now), newSessionId: fresh ? this.session.id : null, newSamples: fresh ? g.samples : 0, newUnusual: fresh ? g.unusual : 0, action: 'none (observe-only; operator decides)' };
+    delete out.startedMs; this.verification = null; this.verifications.push(out); if (this.verifications.length > 100) this.verifications.shift();
+    const st = v.egressId ? this.egressStats(v.egressId) : null;
+    if (st) { if (result === 'SESSION_DEGRADED') st.sessionDegradations = (st.sessionDegradations || 0) + 1; if (result === 'EGRESS_SUSPECT') { st.egressSuspects = (st.egressSuspects || 0) + 1; st.state = 'EGRESS_SUSPECT'; } st.lastVerification = { result, at: out.decidedAt }; }
+    this.log.write('verification', out); this.remember('verification', { result });
+    if (v.incidentId) this.log.updateIncident(v.incidentId, { verification: out });
+    this.persist(); return out;
+  }
   // Appends the timeline of the AFTER window to incidents whose window has passed (called by the periodic tick).
   completeIncidents() {
     const now = this.now();
@@ -148,11 +185,12 @@ export class GgbetSupervisor {
     return { updatedAt: this.iso(), version: this.version, release: this.release, mode: this.mode, seq: this.seq,
       egress: this.egress && { ...this.egress, ageMs: this.age(this.egress.activatedAt) }, session: this.session && { ...this.session, ageMs: this.age(this.session.startedAt), wsAgeMs: this.age(this.session.wsConnectedAt) },
       collector: c && { connected: !!c.lastAckAt && !!c.ws, dataAgeMs: c.lastMessageAt ? this.now() - c.lastMessageAt : null, reconnects: c.reconnects, failures: c.failures, bootstrapFetches: c.bootstrapFetches, wsConnectionsCreated: c.wsConnectionsCreated, ...(c.fullMarketStatus ? (({ ggbetLightSubscriptions: light, ggbetActiveFullMarketSubscriptions: full, ggbetActiveFullMarketLeases: leases }) => ({ light, full, leases }))(c.fullMarketStatus()) : {}) },
+      monitor: c?.monitorStatus ? c.monitorStatus() : null, verification: this.verification, verifications: this.verifications.slice(-20),
       guard: this.guard.snapshot(), log: this.log.status(), transport: { ...this.transport, failures: this.transport.failures.slice(-20) }, networkMode: this.networkMode(), egresses: this.egresses, sessions: this.sessions.slice(-100), history: this.history.slice(-200) };
   }
   persist() {
     try { const tmp = `${this.stateFile}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(this.stateSnapshot(), null, 1), { mode: 0o600 }); fs.renameSync(tmp, this.stateFile); } catch {}
   }
-  start(intervalMs = 10000) { let n = 0; this.timer = setInterval(() => { try { this.checkEgress(); this.completeIncidents(); if (++n % 6 === 0) this.stats(); this.persist(); } catch {} }, intervalMs); this.timer.unref?.(); return this; }
+  start(intervalMs = 10000) { let n = 0; this.timer = setInterval(() => { try { this.checkEgress(); this.checkControl(); this.checkVerification(); this.completeIncidents(); if (++n % 6 === 0) this.stats(); this.persist(); } catch {} }, intervalMs); this.timer.unref?.(); return this; }
   stop() { clearInterval(this.timer); this.endSession('process stop'); this.persist(); this.log.flushSync(); }
 }

@@ -147,7 +147,8 @@ test('collector follows GGBET All market tab and keeps the complete market set a
   // Not opened: only the light subscription (the snapshot's top markets), no tab catalog.
   assert.equal(CatalogSocket.last.sent.filter(x=>x.payload?.operationName==='GetMarketsTab').length,0);
   const light=CatalogSocket.last.sent.find(x=>x.payload?.operationName==='OnUpdateSportEvent');
-  assert.ok(light);assert.deepEqual(light.payload.variables.marketIds,top.markets.map(m=>m.id));
+  // 4.12 pricing observer: the ONE monitored LIVE Dota event's light stream also lists its odd/even markets (96m1..96m5).
+  assert.ok(light);assert.deepEqual(light.payload.variables.marketIds,[...top.markets.map(m=>m.id),'96m1','96m2','96m3','96m4','96m5']);
   // Opened in a detail panel: the full tree is leased inside the same WebSocket.
   const socket=CatalogSocket.last;assert.equal(collector.lease('panel-lease-1',full.id).ok,true);await wait(20);assert.equal(CatalogSocket.last,socket);
   const catalog=CatalogSocket.last.sent.find(x=>x.payload?.operationName==='GetMarketsTab');
