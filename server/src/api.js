@@ -456,6 +456,11 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
       const body=await readBody(req,512000);if(!Array.isArray(body.events)||body.events.length>500)return sendJson(req,res,400,{error:'Слишком много матчей'});
       return sendJson(req,res,200,await statistics.availability(body.events));
     }
+    if(req.method==='GET'&&url.pathname==='/api/admin/ggbet-bootstrap'){
+      // Token-protected (auth.js): per-origin outcome of the last GGBET bootstrap attempts - hosts, status, redirect
+      // chain, Set-Cookie presence, body kind/size, token-extraction reason. Never a token, cookie, header or body.
+      return sendJson(req,res,200,ggbetCollector?.bootstrapDiagnostics?ggbetCollector.bootstrapDiagnostics():{enabled:false});
+    }
     if(req.method==='POST'&&url.pathname==='/api/ui/full-markets'){
       // Lease of the GGBET full market tree for the match open in a detail panel (extension 9.1+): acquire/renew while
       // the panel is open (every renewal extends the TTL), release on close. Never touches the GGBET session.

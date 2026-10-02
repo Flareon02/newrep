@@ -61,7 +61,7 @@ server.listen(config.port, config.host, () => {
   log.info(`[api] AstekBet upstream ${config.origins.join(", ")}`);
   log.info(`[api] Fonbet upstream ${config.fonbetUrls.join(", ")}`);
   const proxy=proxyDiagnostics(),via=mode=>mode==='proxy'?`proxy ${proxy.proxyHost}:${proxy.proxyPort}`:mode;
-  log.info(`[api] GGBET LIVE network ${via(config.ggbetNetworkMode)}: ${config.ggbetNetworkMode==='relay'?`bootstrap relay ${config.ggbetBootstrapRelayUrl}`:`bootstrap ${config.ggbetOrigins.join(", ")} + WebSocket`}`);
+  log.info(`[api] GGBET LIVE network ${via(config.ggbetNetworkMode)}: ${config.ggbetNetworkMode==='relay'?`bootstrap relay ${config.ggbetBootstrapRelayUrl}`:`bootstrap ${config.ggbetOrigins.join(", ")} (trusted only) + WebSocket`}`);
   log.info(`[api] DataBet LIVE ${config.databetLiveEnabled?`network ${via(config.databetNetworkMode)}: bootstrap ${config.databetOrigin}/${config.databetLocale}/esports/live + WebSocket`:"disabled (DATABET_LIVE_ENABLED=0)"}`);
   log.info(`[storage] odds history ${config.oddsHistoryEnabled?'enabled':'disabled (ODDS_HISTORY_ENABLED=0): no odds journal, no current-snapshot rows, LIVE starts empty'}`);
   if([config.ggbetNetworkMode,config.databetNetworkMode].includes('proxy'))startEgressCheck();

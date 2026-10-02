@@ -234,10 +234,17 @@ function normalizeWsUrl(endpoint){
   if(!/^wss:\/\/([a-z0-9-]+\.)*gg\.bet(?::443)?\/graphql$/i.test(wsUrl))throw Error('GGBET: неожиданный betting endpoint');
   return wsUrl;
 }
-function bootstrapResult({token,endpoint,wsUrl,scoreboardEndpoint='',origin='https://gg.bet',at=Date.now(),source='direct'}={}){
-  if(!token||String(token).length<100)throw Error('GGBET: guest token не найден');
-  const normalizedOrigin=text(origin)||'https://gg.bet';if(!/^https:\/\/([a-z0-9-]+\.)*gg\.bet$/i.test(normalizedOrigin))throw Error(`GGBET: неожиданный origin (${normalizedOrigin.slice(0,80)})`);
-  return {token:String(token),wsUrl:normalizeWsUrl(wsUrl||endpoint),scoreboardEndpoint:text(scoreboardEndpoint),origin:normalizedOrigin,at:Number(at)||Date.now(),expiresAt:ggbetTokenExpiry(token),source};
+// Origins the bootstrap may use, exact (scheme + host): the public LIVE page that issues the guest token. A configured
+// origin outside this list is ignored (and reported), and a redirect may only lead to one of these hosts. The mirrors of
+// the old default list (gg397.bet, gg253.bet, gg284.bet, ggbets.co, ggbet242.com, ggbet24.com) never passed the
+// origin check (it only accepted *.gg.bet): each was fetched and then rejected, so they were removed.
+export const GGBET_TRUSTED_ORIGINS=Object.freeze(['https://gg.bet']);
+const extractionError=(message,reason)=>Object.assign(Error(message),{tokenExtraction:reason});
+function bootstrapResult({token,endpoint,wsUrl,scoreboardEndpoint='',origin='https://gg.bet',at=Date.now(),source='direct'}={},trusted=GGBET_TRUSTED_ORIGINS){
+  if(!token||String(token).length<100)throw extractionError('GGBET: guest token не найден',token?'token-short':'token-missing');
+  const normalizedOrigin=(text(origin)||'https://gg.bet').replace(/\/+$/,'').toLowerCase();if(!trusted.includes(normalizedOrigin))throw extractionError(`GGBET: неожиданный origin (${normalizedOrigin.slice(0,80)})`,'origin-untrusted');
+  let ws;try{ws=normalizeWsUrl(wsUrl||endpoint);}catch(e){throw extractionError(e.message,'endpoint-invalid');}
+  return {token:String(token),wsUrl:ws,scoreboardEndpoint:text(scoreboardEndpoint),origin:normalizedOrigin,at:Number(at)||Date.now(),expiresAt:ggbetTokenExpiry(token),source};
 }
 // Expiry the guest token itself declares, if any: `exp` in the public JWE/JWT protected header, or in the payload of a
 // plain (3-part, unencrypted) JWT. Nothing else of the token is read, logged or exposed. 0 = none declared.
@@ -246,11 +253,18 @@ export function ggbetTokenExpiry(token){
   const exp=Number(json(parts[0])?.exp??(parts.length===3?json(parts[1])?.exp:undefined));
   return Number.isFinite(exp)&&exp>1e9?(exp<1e12?exp*1000:exp):0;
 }
-function bootstrapFromHtml(html,origin){
-  const marker='"bettingClientOptions"',i=html.indexOf(marker);if(i<0)throw Error('GGBET: bettingClientOptions не найден');const block=html.slice(i,i+12000);
+function bootstrapFromHtml(html,origin,trusted=GGBET_TRUSTED_ORIGINS){
+  const marker='"bettingClientOptions"',i=html.indexOf(marker);if(i<0)throw extractionError('GGBET: bettingClientOptions не найден','marker-missing');const block=html.slice(i,i+12000);
   const token=block.match(/"token"\s*:\s*"([^"]+)"/)?.[1],endpoint=block.match(/"endpoint"\s*:\s*"([^"]+)"/)?.[1],scoreboardEndpoint=block.match(/"scoreboardEndpoint"\s*:\s*"([^"]+)"/)?.[1];
-  return bootstrapResult({token,endpoint,scoreboardEndpoint,origin,source:'html'});
+  return bootstrapResult({token,endpoint,scoreboardEndpoint,origin,source:'html'},trusted);
 }
+// Bootstrap diagnostics read headers only: never a cookie name or value, never the body beyond its kind and size.
+const headerOf=(res,name)=>{const h=res?.headers;if(!h)return '';if(typeof h.get==='function')return text(h.get(name));const v=h[name];return Array.isArray(v)?v.join(', '):text(v);};
+const setCookiesOf=res=>{const h=res?.headers;if(!h)return [];if(typeof h.getSetCookie==='function')return h.getSetCookie();if(typeof h.get==='function'){const v=h.get('set-cookie');return v?[v]:[];}const v=h['set-cookie'];return Array.isArray(v)?v:v?[String(v)]:[];};
+// Would a browser send this Set-Cookie to `toHost` on the next request? Only its Domain attribute is read.
+const cookieReaches=(setCookie,fromHost,toHost)=>{const domain=String(setCookie).split(';').slice(1).map(x=>x.trim().split('=')).find(([k])=>k.toLowerCase()==='domain')?.[1]?.trim().toLowerCase().replace(/^\./,'');return domain?(toHost===domain||toHost.endsWith('.'+domain)):toHost===fromHost;};
+const bodyKind=(body,contentType)=>{const t=String(body||'').trim();if(!t)return 'empty';if(/json/i.test(contentType)||/^[[{]/.test(t))return 'json';if(/html/i.test(contentType)||/^<(!doctype|html)/i.test(t)||/<html[\s>]/i.test(t.slice(0,4000)))return 'html';return 'other';};
+const REDIRECT_STATUSES=new Set([301,302,303,307,308]);
 function relayJson(url,{secret,ca,force=false,timeoutMs=12000,maxBytes=128*1024}={}){
   return new Promise((resolve,reject)=>{let parsed;try{parsed=new URL(url);}catch{return reject(Error('GGBET relay URL invalid'));}if(parsed.protocol!=='https:')return reject(Error('GGBET relay requires HTTPS'));
     const req=https.request(parsed,{method:'GET',headers:{Authorization:`Bearer ${secret}`,'X-Relay-Force':force?'1':'0',Accept:'application/json','User-Agent':'astek-monitor/3.5.3'},ca,rejectUnauthorized:true,timeout:timeoutMs},res=>{
@@ -260,7 +274,8 @@ function relayJson(url,{secret,ca,force=false,timeoutMs=12000,maxBytes=128*1024}
 }
 
 export class GgbetLiveCollector {
-  constructor(state,{fetchImpl=globalThis.fetch,WebSocketImpl=null,now=()=>Date.now(),relayRequestImpl=null}={}){
+  constructor(state,{fetchImpl=globalThis.fetch,WebSocketImpl=null,now=()=>Date.now(),relayRequestImpl=null,trustedOrigins=GGBET_TRUSTED_ORIGINS}={}){
+    this.trusted=[...trustedOrigins].map(o=>String(o).replace(/\/+$/,'').toLowerCase());this.bootstrapLog=[];
     this.state=state;this.fetch=fetchImpl;this.WebSocket=WebSocketImpl;this.WebSocketPromise=null;this.now=now;this.ws=null;this.stopped=true;this.connecting=null;this.bootstrap=null;this.originIndex=0;this.failures=0;this.reconnects=0;this.snapshots=0;this.pushes=0;this.snapshotSeq=0;this.subSeq=1000;this.catalogSeq=0;this.events=new Map();this.subscriptions=new Map();this.marketTabs=new Map();this.requests=new Map();this.lastMessageAt=0;this.lastConnectAt=0;this.lastAckAt=0;this.lastSnapshotAt=0;this.lastPushAt=0;this.lastError='';this.lastClose='';this.degradedPolling=false;this.catalogPushFallback=false;this.bootstrapFetches=0;this.bootstrapFailures=0;this.authRefreshes=0;this.scheduledRefreshes=0;this.plainSnapshots=0;this.pushFallbacks=0;this.marketCatalogFetches=0;this.marketCatalogFailures=0;this.marketCatalogUpdates=0;this.fullMarketSubscriptions=0;this.relayFetches=0;this.relayFailures=0;this.lastRelayAt=0;this.lastRelayError='';this.relayRequestImpl=relayRequestImpl;this.metadataPublishTimer=null;this.shortSessions=0;
     // Full market trees are leased by clients (an open detail panel): lease id -> {eventId, until}; events with a
     // lease get the full subscription, every other LIVE event only a light one (its top markets from the snapshot).
@@ -277,17 +292,55 @@ export class GgbetLiveCollector {
   }
   async fetchRelayBootstrap(force=false){
     const secretPath=config.ggbetBootstrapRelaySecretFile,caPath=config.ggbetBootstrapRelayCaFile;let secret='',ca='';try{secret=fs.readFileSync(secretPath,'utf8').trim();ca=fs.readFileSync(caPath,'utf8');}catch(e){throw Error(`GGBET relay credentials unavailable: ${e.code||e.message}`);}if(secret.length<32||!ca.includes('BEGIN CERTIFICATE'))throw Error('GGBET relay credentials invalid');
-    try{const payload=this.relayRequestImpl?await this.relayRequestImpl(config.ggbetBootstrapRelayUrl,{secret,ca,force}):await relayJson(config.ggbetBootstrapRelayUrl,{secret,ca,force,timeoutMs:config.ggbetRequestTimeoutMs});const data=bootstrapResult({token:payload?.token,wsUrl:payload?.wsUrl||payload?.endpoint,origin:payload?.origin||payload?.sourceOrigin||'https://gg.bet',at:this.now(),source:'relay'});this.relayFetches++;this.lastRelayAt=this.now();this.lastRelayError='';this.bootstrapFetches++;this.bootstrap=data;return data;}catch(e){this.relayFailures++;this.bootstrapFailures++;this.lastRelayError=e?.message||String(e);throw e;}
+    try{const payload=this.relayRequestImpl?await this.relayRequestImpl(config.ggbetBootstrapRelayUrl,{secret,ca,force}):await relayJson(config.ggbetBootstrapRelayUrl,{secret,ca,force,timeoutMs:config.ggbetRequestTimeoutMs});const data=bootstrapResult({token:payload?.token,wsUrl:payload?.wsUrl||payload?.endpoint,origin:payload?.origin||payload?.sourceOrigin||'https://gg.bet',at:this.now(),source:'relay'},this.trusted);this.relayFetches++;this.lastRelayAt=this.now();this.lastRelayError='';this.bootstrapFetches++;this.bootstrap=data;return data;}catch(e){this.relayFailures++;this.bootstrapFailures++;this.lastRelayError=e?.message||String(e);throw e;}
   }
-  // viaProxy: the bootstrap page is fetched through the Czech proxy agent - the same agent the WebSocket uses.
-  async fetchDirectBootstrap(viaProxy=false,agent=null){let error;if(viaProxy)agent=agent||await proxyAgent();const get=viaProxy?(url,options)=>proxyFetch(url,{headers:options.headers,signal:options.signal,timeoutMs:config.ggbetRequestTimeoutMs,agent}):(url,options)=>this.fetch(url,options);
-    for(let n=0;n<config.ggbetOrigins.length;n++){
-      const idx=(this.originIndex+n)%config.ggbetOrigins.length,origin=config.ggbetOrigins[idx];try{
-        const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),config.ggbetRequestTimeoutMs);timer.unref?.();let res;try{res=await get(origin.replace(/\/+$/,'')+'/ru/live',{headers:{'user-agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/153 Safari/537.36','accept-language':'ru-RU,ru;q=0.9,en;q=0.8','accept':'text/html,application/xhtml+xml'},redirect:'follow',signal:ctrl.signal});}finally{clearTimeout(timer);}if(!res?.ok)throw Object.assign(Error(`GGBET bootstrap HTTP ${res?.status||0}`),{status:res?.status||0,originWide:ORIGIN_WIDE_STATUSES.has(Number(res?.status))});
-        const html=await res.text();if(/not accepting visitors from your region|dummy-country/i.test(html))throw Object.assign(Error('GGBET bootstrap blocked by region'),{geoBlocked:true});if(html.length>2_500_000)throw Error('GGBET: bootstrap HTML слишком большой');const data=bootstrapFromHtml(html,origin);this.originIndex=idx;this.bootstrap=data;this.bootstrapAgent=agent;this.bootstrapFetches++;return data;
-      }catch(e){this.bootstrapFailures++;error=e;if(e?.geoBlocked)break;
-        // One request per attempt when the failure is not about this mirror (or the proxy itself failed).
-        if(e?.originWide||(viaProxy&&!e?.status)){this.originIndex=(idx+1)%config.ggbetOrigins.length;break;}}
+  // Bootstrap origins = GGBET_ORIGINS ∩ the trusted list (exact); the rest is ignored and shown in the diagnostics.
+  bootstrapOrigins(){const all=config.ggbetOrigins.map(o=>String(o).replace(/\/+$/,'').toLowerCase());return {use:all.filter(o=>this.trusted.includes(o)),ignored:all.filter(o=>!this.trusted.includes(o))};}
+  recordBootstrap(row){this.bootstrapLog.push(row);if(this.bootstrapLog.length>10)this.bootstrapLog.shift();}
+  // Admin-only (token-protected endpoint): the last bootstrap attempts, per origin. No token, cookie or body.
+  bootstrapDiagnostics(){const o=this.bootstrapOrigins();return {trustedOrigins:this.trusted,configuredOrigins:config.ggbetOrigins,usedOrigins:o.use,ignoredOrigins:o.ignored,networkMode:config.ggbetNetworkMode,bootstrapFetches:this.bootstrapFetches,bootstrapFailures:this.bootstrapFailures,attempts:this.bootstrapLog.map(x=>({...x,redirectChain:[...x.redirectChain]}))};}
+  // One GET of the public LIVE page, redirects followed by hand: each hop only to a trusted host (an untrusted target is
+  // never requested). viaProxy: through the session's proxy agent - the same agent the WebSocket uses.
+  async bootstrapPage(origin,get,diag){
+    const trustedHosts=new Set(this.trusted.map(o=>new URL(o).hostname));
+    let url=origin+'/ru/live',host=new URL(url).hostname;
+    for(;;){
+      const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),config.ggbetRequestTimeoutMs);timer.unref?.();let res;
+      try{res=await get(url,{headers:{'user-agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/153 Safari/537.36','accept-language':'ru-RU,ru;q=0.9,en;q=0.8','accept':'text/html,application/xhtml+xml'},signal:ctrl.signal});}
+      catch(e){diag.reason=ctrl.signal.aborted||/abort|timeout/i.test(`${e?.name} ${e?.message}`)?'timeout':'network';diag.detail=redact(String(e?.message||e)).slice(0,160);throw e;}
+      finally{clearTimeout(timer);}
+      const status=Number(res?.status)||0,cookies=setCookiesOf(res);diag.status=status;diag.finalHost=host;if(cookies.length)diag.setCookie=true;
+      const location=REDIRECT_STATUSES.has(status)?headerOf(res,'location'):'';
+      if(location){
+        let next=null;try{next=new URL(location,url);}catch{}
+        diag.redirects++;diag.redirectChain.push(next?next.hostname.toLowerCase():'(invalid)');
+        if(next&&cookies.some(c=>cookieReaches(c,host,next.hostname.toLowerCase())))diag.cookieOnRedirect=true;
+        if(!next||next.protocol!=='https:'||!trustedHosts.has(next.hostname.toLowerCase())){diag.reason='redirect-untrusted';throw Object.assign(Error(`GGBET bootstrap: redirect to an untrusted host (${next?next.hostname.slice(0,80):'invalid'})`),{status,redirectRejected:true});}
+        if(diag.redirects>5){diag.reason='too-many-redirects';throw Object.assign(Error('GGBET bootstrap: too many redirects'),{status,redirectRejected:true});}
+        url=next.href;host=next.hostname.toLowerCase();continue;
+      }
+      diag.contentType=headerOf(res,'content-type').split(';')[0].trim().slice(0,60);
+      const body=String(await res.text());diag.bodyBytes=Buffer.byteLength(body);diag.bodyKind=bodyKind(body,diag.contentType);
+      if(!res.ok){diag.reason='http-status';throw Object.assign(Error(`GGBET bootstrap HTTP ${status}`),{status,originWide:ORIGIN_WIDE_STATUSES.has(status)});}
+      if(/not accepting visitors from your region|dummy-country/i.test(body)){diag.reason='geo-blocked';throw Object.assign(Error('GGBET bootstrap blocked by region'),{geoBlocked:true});}
+      if(body.length>2_500_000){diag.reason='too-large';throw Error('GGBET: bootstrap HTML слишком большой');}
+      try{const data=bootstrapFromHtml(body,origin,this.trusted);diag.tokenExtraction='ok';return data;}
+      catch(e){diag.tokenExtraction=e.tokenExtraction||'failed';diag.reason='token-extraction';throw e;}
+    }
+  }
+  async fetchDirectBootstrap(viaProxy=false,agent=null){let error;if(viaProxy)agent=agent||await proxyAgent();
+    const origins=this.bootstrapOrigins().use;if(!origins.length)throw Error('GGBET: в GGBET_ORIGINS нет доверенного origin');
+    const get=viaProxy?(url,options)=>proxyFetch(url,{headers:options.headers,signal:options.signal,timeoutMs:config.ggbetRequestTimeoutMs,agent,followRedirects:false}):(url,options)=>this.fetch(url,{...options,redirect:'manual'});
+    for(let n=0;n<origins.length;n++){
+      const idx=(this.originIndex+n)%origins.length,origin=origins[idx],started=Date.now();
+      const diag={at:new Date(this.now()).toISOString(),via:viaProxy?'proxy':'direct',requestedHost:new URL(origin).hostname,finalHost:'',status:0,redirects:0,redirectChain:[],setCookie:false,cookieOnRedirect:false,contentType:'',bodyKind:'',bodyBytes:0,tokenExtraction:'',reason:'',detail:'',elapsedMs:0};
+      try{const data=await this.bootstrapPage(origin,get,diag);diag.reason='ok';this.originIndex=idx;this.bootstrap=data;this.bootstrapAgent=agent;this.bootstrapFetches++;return data;}
+      catch(e){this.bootstrapFailures++;error=e;if(!diag.reason)diag.reason='failed';if(!diag.detail)diag.detail=redact(String(e?.message||e)).slice(0,160);
+        if(e?.geoBlocked)break;
+        // One request per attempt unless the failure is this mirror's own HTTP answer (404/5xx) or, direct only, its
+        // network: a proxy failure, an origin-wide status, a page without the token or a refused redirect never walks the list.
+        if(e?.originWide||e?.tokenExtraction||e?.redirectRejected||(viaProxy&&!e?.status)){this.originIndex=(idx+1)%origins.length;break;}}
+      finally{diag.elapsedMs=Date.now()-started;this.recordBootstrap(diag);}
     }throw error||Error('GGBET: bootstrap недоступен');
   }
   // agent: proxy sessions reuse a cached token only if it was fetched through the same agent (= the same egress IP).

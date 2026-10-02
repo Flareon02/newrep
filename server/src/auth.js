@@ -12,6 +12,7 @@ const PROTECTED_GET = new Set([
   "/api/hltv/search",            // each of these can trigger an outbound HLTV request
   "/api/hltv/team",
   "/api/hltv/player",
+  "/api/admin/ggbet-bootstrap",  // per-attempt GGBET bootstrap diagnostics (operators only)
 ]);
 
 const digest = (value) => createHash("sha256").update(String(value)).digest();

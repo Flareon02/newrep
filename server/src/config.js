@@ -48,10 +48,8 @@ export const config = {
   ggbetBootstrapRelayUrl: String(process.env.GGBET_BOOTSTRAP_RELAY_URL || "").trim(),
   ggbetBootstrapRelaySecretFile: String(process.env.GGBET_BOOTSTRAP_RELAY_SECRET_FILE || "/run/secrets/ggbet-relay-secret").trim(),
   ggbetBootstrapRelayCaFile: String(process.env.GGBET_BOOTSTRAP_RELAY_CA_FILE || "/run/secrets/ggbet-relay-ca.pem").trim(),
-  ggbetOrigins: listEnv(
-    "GGBET_ORIGINS",
-    "https://gg.bet,https://gg397.bet,https://gg253.bet,https://gg284.bet,https://ggbets.co,https://ggbet242.com,https://ggbet24.com"
-  ).map((value) => value.replace(/\/+$/, "")),
+  // Only origins in GGBET_TRUSTED_ORIGINS (ggbet.js, exact) are used; anything else is ignored and reported.
+  ggbetOrigins: listEnv("GGBET_ORIGINS", "https://gg.bet").map((value) => value.replace(/\/+$/, "")),
   ggbetRequestTimeoutMs: intEnv("GGBET_REQUEST_TIMEOUT_MS", 12000, 3000),
   ggbetSnapshotIntervalMs: intEnv("GGBET_SNAPSHOT_INTERVAL_MS", 30000, 5000),
   ggbetDegradedSnapshotMs: intEnv("GGBET_DEGRADED_SNAPSHOT_MS", 7000, 3000),

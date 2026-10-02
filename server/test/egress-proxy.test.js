@@ -137,6 +137,22 @@ test('proxy mode fails closed: with the proxy disabled nothing is fetched or ope
   } finally { await gg.stop(); await db.stop(); restoreModes(); restoreEnv(); await proxy.close(); }
 });
 
+test('proxyFetch followRedirects=false returns the 3xx itself (Location, Set-Cookie) through the tunnel; the default still follows', async () => {
+  const target = http.createServer((req, res) => {
+    if (req.url === '/start') { res.writeHead(302, { location: '/page', 'set-cookie': ['sid=SECRET-COOKIE-VALUE; Path=/; HttpOnly'] }); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html>ok</html>');
+  });
+  await new Promise((resolve) => target.listen(0, '127.0.0.1', resolve));
+  const hostPort = `127.0.0.1:${target.address().port}`;
+  const proxy = await fakeProxy({ tunnel: { [hostPort]: target.address().port } }); const restoreEnv = useProxy(proxy.port);
+  try {
+    const hop = await proxyFetch(`http://${hostPort}/start`, { timeoutMs: 4000, followRedirects: false });
+    assert.equal(hop.status, 302); assert.equal(hop.ok, false); assert.equal(hop.headers.location, '/page'); assert.equal(hop.headers['set-cookie'].length, 1);
+    const followed = await proxyFetch(`http://${hostPort}/start`, { timeoutMs: 4000 });
+    assert.equal(followed.status, 200);
+  } finally { restoreEnv(); await proxy.close(); await new Promise((resolve) => target.close(resolve)); }
+});
+
 test('the proxy agent carries HTTP (redirects, gzip) and WebSocket traffic end to end through CONNECT tunnels', async () => {
   const target = http.createServer((req, res) => {
     if (req.url === '/start') { res.writeHead(302, { location: '/page' }); res.end(); return; }

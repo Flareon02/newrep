@@ -12,6 +12,9 @@ Code/protocol analysis and mocks only; no upstream requests were made for it.
 | One `OnUpdateSportEvent` stream per LIVE event — **light**: the snapshot's top market ids | while the event is LIVE | that WebSocket |
 | Leased event (open detail panel): `GetMarketsTab "all"` + `OnUpdateTab` + `OnUpdateSportEvent` with every market id (replaces the light one) | lease acquire … last release / TTL | that WebSocket |
 
+Bootstrap origins are an exact static allowlist (`https://gg.bet`); redirects are followed by the collector only to
+trusted hosts, and every attempt is recorded for operators (`GET /api/admin/ggbet-bootstrap`, token required).
+
 There is no cookie and no root-page step: the token comes from the server-rendered LIVE page and the socket authenticates
 with the header. That path produced working, acknowledged sessions (saved diagnostics of the last proxied session).
 

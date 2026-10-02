@@ -112,7 +112,9 @@ function decode(res, body) {
 
 // Minimal fetch() for GET requests through the proxy agent: follows redirects (each hop is a new CONNECT through the
 // same agent), decodes gzip/deflate/br, enforces a size limit. Returns {ok, status, url, headers, text()}.
-export async function proxyFetch(target, { headers = {}, timeoutMs = 12000, maxBytes = 8 * 1024 * 1024, maxRedirects = 5, signal = null, agent = null } = {}) {
+// followRedirects=false returns a 3xx response as is (its Location / Set-Cookie headers included) so the caller can
+// decide per hop whether the target is trusted; the default (follow) is unchanged for every existing caller.
+export async function proxyFetch(target, { headers = {}, timeoutMs = 12000, maxBytes = 8 * 1024 * 1024, maxRedirects = 5, signal = null, agent = null, followRedirects = true } = {}) {
   const viaAgent = agent || await proxyAgent();
   const run = (url, redirectsLeft) => new Promise((resolve, reject) => {
     let parsed; try { parsed = new URL(url); } catch { reject(Error('proxy fetch: invalid URL')); return; }
@@ -121,7 +123,7 @@ export async function proxyFetch(target, { headers = {}, timeoutMs = 12000, maxB
     const fail = (error) => reject(Error(redact(error?.message || String(error))));
     const req = lib.request(parsed, { method: 'GET', agent: viaAgent, headers: { 'accept-encoding': 'gzip, deflate, br', ...headers } }, (res) => {
       const status = res.statusCode || 0;
-      if ([301, 302, 303, 307, 308].includes(status) && res.headers.location) {
+      if (followRedirects && [301, 302, 303, 307, 308].includes(status) && res.headers.location) {
         res.resume();
         if (redirectsLeft <= 0) { fail(Error('proxy fetch: too many redirects')); return; }
         resolve(run(new URL(res.headers.location, parsed).href, redirectsLeft - 1)); return;

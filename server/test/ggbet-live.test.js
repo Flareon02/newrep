@@ -61,7 +61,7 @@ test('collector rotates bootstrap mirrors and never exposes the guest token in d
   const previous=[...config.ggbetOrigins];config.ggbetOrigins=['https://first.invalid','https://gg.bet'];
   const token='z'.repeat(389),html=`<script>"bettingClientOptions":{"token":"${token}","endpoint":"//gg-b-gql.gg.bet","scoreboardEndpoint":"//score-board.databet.cloud"}</script>`;
   const calls=[],state={async success(){},async failure(){}};
-  const collector=new GgbetLiveCollector(state,{fetchImpl:async url=>{calls.push(url);if(url.startsWith('https://first.invalid'))return {ok:false,status:503,text:async()=>''};return {ok:true,status:200,text:async()=>html};},WebSocketImpl:FakeSocket});
+  const collector=new GgbetLiveCollector(state,{fetchImpl:async url=>{calls.push(url);if(url.startsWith('https://first.invalid'))return {ok:false,status:503,text:async()=>''};return {ok:true,status:200,text:async()=>html};},WebSocketImpl:FakeSocket,trustedOrigins:['https://first.invalid','https://gg.bet']});
   try{
     const boot=await collector.fetchBootstrap(true);
     assert.equal(boot.origin,'https://gg.bet');assert.equal(calls.length,2);assert.equal(collector.status().bootstrapFailures,1);assert.equal(collector.status().bootstrapFetches,1);

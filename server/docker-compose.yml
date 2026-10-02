@@ -62,7 +62,7 @@ services:
       GGBET_BOOTSTRAP_RELAY_URL: "${GGBET_BOOTSTRAP_RELAY_URL:-}"
       GGBET_BOOTSTRAP_RELAY_SECRET_FILE: "/run/secrets/ggbet-relay-secret"
       GGBET_BOOTSTRAP_RELAY_CA_FILE: "/run/secrets/ggbet-relay-ca.pem"
-      GGBET_ORIGINS: "https://gg.bet,https://gg397.bet,https://gg253.bet,https://gg284.bet,https://ggbets.co,https://ggbet242.com,https://ggbet24.com"
+      GGBET_ORIGINS: "https://gg.bet"
       GGBET_SNAPSHOT_INTERVAL_MS: "30000"
       GGBET_DEGRADED_SNAPSHOT_MS: "7000"
       # 0 = no timed session refresh (a healthy GGBET session stays open; renewal on close/auth/watchdog/token expiry).

@@ -66,7 +66,7 @@ test('GGBET bootstrap: 403/407/429 or a proxy failure cost one request per attem
   try {
     for (const status of [403, 407, 429]) {
       const calls = [];
-      const h = harness(GgbetLiveCollector, { fetchImpl: async (url) => { calls.push(new URL(url).hostname); return { ok: false, status, text: async () => '' }; } });
+      const h = harness(GgbetLiveCollector, { trustedOrigins: config.ggbetOrigins, fetchImpl: async (url) => { calls.push(new URL(url).hostname); return { ok: false, status, text: async () => '' }; } });
       await assert.rejects(() => h.c.fetchBootstrap(true), new RegExp(`HTTP ${status}`));
       assert.deepEqual(calls, ['a.gg.bet'], `${status}: one request`);
       await assert.rejects(() => h.c.fetchBootstrap(true));
@@ -74,7 +74,7 @@ test('GGBET bootstrap: 403/407/429 or a proxy failure cost one request per attem
     }
     // A mirror-specific failure (404, network error) still falls through to the other mirrors within one attempt.
     const calls = [];
-    const h = harness(GgbetLiveCollector, { fetchImpl: async (url) => { calls.push(new URL(url).hostname); if (calls.length === 1) throw new Error('getaddrinfo ENOTFOUND'); return { ok: false, status: 404, text: async () => '' }; } });
+    const h = harness(GgbetLiveCollector, { trustedOrigins: config.ggbetOrigins, fetchImpl: async (url) => { calls.push(new URL(url).hostname); if (calls.length === 1) throw new Error('getaddrinfo ENOTFOUND'); return { ok: false, status: 404, text: async () => '' }; } });
     await assert.rejects(() => h.c.fetchBootstrap(true));
     assert.deepEqual(calls, ['a.gg.bet', 'b.gg.bet', 'c.gg.bet']);
   } finally { config.ggbetOrigins = old.origins; config.ggbetNetworkModeSetting = old.mode; config.ggbetBootstrapRelayUrl = old.relay; }
