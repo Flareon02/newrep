@@ -163,11 +163,17 @@ function rules(){return [settingsState.catalog,snapshots.live?.leagueRules,snaps
 function hiddenKeys(view){return [...(prefs.hiddenLeagues||[]),...(prefs.hiddenLeaguesByView?.[view]||[])];}
 function canonicalEventCategory(e){if(!GameCategories.generic(e.category)&&GameCategories.info(e.category).key!=='other')return e.category;const exact=refs(e).map(r=>r.category).find(c=>!GameCategories.generic(c)&&GameCategories.info(c).key!=='other');return exact||GameCategories.resolve(e.category,e.league);}
 const rowsCache={live:{key:'',rows:[]},prematch:{key:'',rows:[]}};
+// Per-object memos (a feed patch replaces only the events it touches): derived feed row, view projection, row html.
+const derivedRows={live:new WeakMap(),prematch:new WeakMap()};
+const projectionMemo=new WeakMap(),rowHtmlMemo=new WeakMap();
+const projectionSig=view=>view+'|'+BOOKS.map(b=>prefs[b]===false?0:1).join('')+'|'+OddsProvider.selected(prefs);
+function projectRow(e,view){const sig=projectionSig(view);let m=projectionMemo.get(e);if(!m||m.sig!==sig){m={sig,value:MatchView.project(e,prefs,view)};projectionMemo.set(e,m);}return m.value;}
 function invalidateRows(kind){if(rowsCache[kind])rowsCache[kind].key='';}
 function feedRows(kind){
  const s=snapshots[kind],key=JSON.stringify([s?.structureRevision??s?.revision,s?.receivedAt,s?.events?.length,rules().revision,s?.persisted]);
  if(rowsCache[kind].key===key)return rowsCache[kind].rows;
- const rows=(s?.events||[]).map(event=>{const sourceRefs=refs(event).map(r=>kind==='live'?{...r,inLive:true,enteredLiveAt:Number(r.enteredLiveAt||r.firstSeenAt||0)}:r);return {...event,sourceRefs,...(kind==='live'?{inLive:true}:{inPrematch:true}),category:canonicalEventCategory({...event,sourceRefs})};});
+ const memo=derivedRows[kind];
+ const rows=(s?.events||[]).map(event=>{const hit=memo.get(event);if(hit)return hit;const sourceRefs=refs(event).map(r=>kind==='live'?{...r,inLive:true,enteredLiveAt:Number(r.enteredLiveAt||r.firstSeenAt||0)}:r);const row={...event,sourceRefs,...(kind==='live'?{inLive:true}:{inPrematch:true}),category:canonicalEventCategory({...event,sourceRefs})};memo.set(event,row);return row;});
  rowsCache[kind]={key,rows};return rows;
 }
 const favoriteKeys=e=>[...(e.entityAliases||[]),...refs(e).flatMap(r=>[...(r.aliases||[]),`${r.source}:${r.sourceEventId||r.id}`])];
@@ -184,7 +190,7 @@ function inStartWindow(e,view,f){if(view==='live'||!f.startWindow)return true;co
 function visible(rows,view=tab,{ignoreCategory=false}={}){
  const rule=rules(),f=filters(view),state={publishedLeagueLinks:rule.links||[],excludedLeagueKeys:[...hiddenKeys(view),...(rule.visibility?.excludedLeagueKeys||[])],excludedCategoryKeys:rule.visibility?.excludedCategoryKeys||[]};
  const q=norm(f.search).split(' ').filter(Boolean),category=ignoreCategory?'':f.category,availability=f.availability,projectView=view==='compare'?(prefs.compareScope==='live'?'live':'prematch'):view;
- return (rows||[]).map(e=>MatchView.project(e,prefs,projectView)).filter(e=>{if(!e)return false;const sources=new Set(refs(e).map(r=>r.source));const available=availability==='all'||(availability==='both'&&sources.size>1)||(availability==='unique'&&sources.size===1)||(sources.size===1&&sources.has(availability));
+ return (rows||[]).map(e=>projectRow(e,projectView)).filter(e=>{if(!e)return false;const sources=new Set(refs(e).map(r=>r.source));const available=availability==='all'||(availability==='both'&&sources.size>1)||(availability==='unique'&&sources.size===1)||(sources.size===1&&sources.has(availability));
   return inStartWindow(e,view,f)&&available&&(!category||norm(e.category)===category)&&!LeagueModel.hidden(e,state)&&(!prefs.onlyFavorites||favorite(e))&&(prefs.showExtras!==false||!isExtraEvent(e))&&q.every(t=>norm([e.category,e.league,e.team1,e.team2,...refs(e).map(r=>r.league)].join(' ')).includes(t));});
 }
 const leagueText=value=>{let text=(ScheduleImport.leagueInfo(value).league||value||'').replace(/\bbo\s*\d+\b/gi,'').replace(/^[\s.,:;–—-]+|[\s.,:;–—-]+$/g,'').trim();text=text.replace(/\bUnited\s+21\b/gi,'United21');const suffix=/(?:\s*[:.–—-]\s*)(?:division|div\.?|season|stage|group|groups|playoffs?|qualifiers?|qualification|regular season|swiss stage|upper bracket|lower bracket)\b.*$/i;if(suffix.test(text))text=text.replace(suffix,'').trim();text=text.replace(/\s+series$/i,'').trim();return text||String(value||'').trim();};
@@ -232,6 +238,11 @@ function teamsCell(e,{meta=true}={}){
  return `<div class="teams">${meta?`<div class="meta">${gameIcon(e.category)}<span>${esc(e.category||'')} · ${esc(leagueTitle(e))}</span>${isExtraEvent(e)?'<span class="extra-tag">доп.</span>':''}</div>`:''}<div class="team">${logo(l1)}<span class="name">${esc(e.team1)}</span></div><div class="team">${logo(l2)}<span class="name">${esc(e.team2)}</span></div></div>`;
 }
 function sourcesCell(e,view){return `<div class="sources-col">${refs(e).filter(r=>bookVisible(r.source)).map(r=>`<span class="chip" data-source-ref="${esc(r.source+':'+(r.sourceEventId||r.id))}"><span class="book-mark ${esc(r.source)}" aria-hidden="true"></span>${esc(providerName(r.source))}</span>`).join('')}</div>`;}
+function cachedRow(e,view,opts){
+ const sig=[view,opts.meta!==false,opts.books.join(','),selectedId(view)===String(e.id),matchFavorite(e),prefs.hideOdds,prefs.teamLogos,BASE].join('|');
+ const hit=rowHtmlMemo.get(e);if(hit&&hit.sig===sig)return hit.html;
+ const html=matchRow(e,view,opts);if(!/class="chg |changed/.test(html))rowHtmlMemo.set(e,{sig,html});else rowHtmlMemo.delete(e);return html;
+}
 function matchRow(e,view,{meta=true,books=[]}={}){
  const sel=selectedId(view)===String(e.id),fav=matchFavorite(e),odds=!prefs.hideOdds&&books.length&&['live','prematch'].includes(view);
  let tail='';
@@ -278,9 +289,41 @@ function morphInto(parent,html){
  })(parent,t.content);
 }
 
+// Keyed patch of a list described as data: a leaf {key,html} or a group {key,tag,attrs,children}. A leaf is parsed
+// only when its html differs from the html it was built from, so a feed update that changes one price touches one row;
+// unchanged rows keep their nodes (focus, hover, images, scroll). A focused row that changed is morphed, not replaced.
+function patchTree(parent,items){
+ // Pass 1: find the leaves whose html changed and parse them all at once (one template, not one per row).
+ const stale=[];
+ (function collect(node,list){
+  const existing=new Map();if(node)for(const n of node.children)if(n.__key!=null)existing.set(n.__key,n);
+  for(const item of list){const cur=existing.get(item.key);if(item.children)collect(cur&&cur.localName===item.tag?cur:null,item.children);else if(!cur||cur.__html!==item.html)stale.push(item);}
+ })(parent,items);
+ if(stale.length){const t=document.createElement('template');t.innerHTML=stale.map(x=>x.html).join('');const nodes=[...t.content.children];stale.forEach((x,i)=>{x.fresh=nodes[i];});}
+ // Pass 2: reuse unchanged nodes, place everything in order, drop what is gone.
+ (function place(parent,items){
+  const existing=new Map();for(const n of parent.children)if(n.__key!=null)existing.set(n.__key,n);
+  items.forEach((item,i)=>{
+   let node=existing.get(item.key);existing.delete(item.key);
+   if(item.children){
+    if(!node||node.localName!==item.tag){const fresh=document.createElement(item.tag);fresh.__key=item.key;if(node)node.remove();node=fresh;}
+    for(const [k,v] of Object.entries(item.attrs||{}))if(node.getAttribute(k)!==v)node.setAttribute(k,v);
+   }else if(item.fresh){
+    const fresh=item.fresh;item.fresh=null;
+    if(node&&node.contains(document.activeElement)&&node.localName===fresh.localName){morphInto(node,fresh.innerHTML);for(const a of [...node.attributes])if(!fresh.hasAttribute(a.name))node.removeAttribute(a.name);for(const a of fresh.attributes)if(node.getAttribute(a.name)!==a.value)node.setAttribute(a.name,a.value);}
+    else{if(node)node.remove();node=fresh;}
+    node.__key=item.key;node.__html=item.html;
+   }
+   const at=parent.children[i];if(at!==node)parent.insertBefore(node,at||null);
+   if(item.children)place(node,item.children);
+  });
+  while(parent.children.length>items.length)parent.lastElementChild.remove();
+ })(parent,items);
+}
+
 function renderView(view,force=false){
  if(view!==tab||$('settingsView').hidden===false)return;
- const started=performance.now();
+ const started=performance.now();invalidateNav();
  if(view==='live')renderLive(force);else if(view==='prematch')renderLine(force);else if(view==='results')renderResults(force);else if(view==='history')renderHistory(force);else if(view==='compare')renderCompare(force);
  renderChrome();Perf.measure('render.'+view,started);
 }
@@ -306,23 +349,26 @@ function categoryOptions(rows,facets=null,view=tab){
  select.value=groups.has(value)?value:'';
 }
 
-function liveRowsVisible(){const all=visible(feedRows('live'),'live',{ignoreCategory:true});return {all,rows:filters('live').category?all.filter(e=>norm(e.category)===filters('live').category):all};}
+let liveVisibleMemo={key:null,value:null};
+function liveRowsVisible(){const rows=feedRows('live'),key=JSON.stringify([rowsCache.live.key,projectionSig('live'),filters('live'),prefs.onlyFavorites,prefs.favorites.length,prefs.showExtras,rules().revision,hiddenKeys('live').length]);if(liveVisibleMemo.rows===rows&&liveVisibleMemo.key===key)return liveVisibleMemo.value;const all=visible(rows,'live',{ignoreCategory:true});const value={all,rows:filters('live').category?all.filter(e=>norm(e.category)===filters('live').category):all};liveVisibleMemo={rows,key,value};return value;}
 function renderLive(force){
  const el=viewEl('live'),s=snapshots.live,{all,rows}=liveRowsVisible();categoryOptions(all,null,'live');
  const books=viewBooks('live').filter(bookVisible);
- const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.liveSort,prefs.hideOdds,books,prefs.favorites.length,filters('live'),prefs.onlyFavorites,prefs.teamLogos,selectedId('live')]);
+ const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.liveSort,prefs.hideOdds,books,prefs.favorites.length,filters('live'),prefs.onlyFavorites,prefs.teamLogos]);
  if(!force&&viewSignatures.get('live')===sig)return;viewSignatures.set('live',sig);
  el.style.setProperty('--books',books.length);
  if(!rows.length){if(!s)skeleton(el);else renderState(el,emptyFor('live',s));updateListHead('live',0);return;}
  const order=prefs.liveSort==='asc'?1:-1;
- const sorted=[...rows].sort((a,b)=>Number(matchFavorite(b))-Number(matchFavorite(a))||order*(MatchView.clock(a,'live')-MatchView.clock(b,'live'))||alphabet.compare(String(a.id),String(b.id)));
- let html=listHeader('live',books);
+ const fav=new Map(rows.map(e=>[e,matchFavorite(e)?1:0])),clock=new Map(rows.map(e=>[e,MatchView.clock(e,'live')]));
+ const sorted=[...rows].sort((a,b)=>fav.get(b)-fav.get(a)||order*(clock.get(a)-clock.get(b))||alphabet.compare(String(a.id),String(b.id)));
+ const items=[{key:'head',html:listHeader('live',books)}],row=e=>({key:'r:'+e.id,html:cachedRow(e,'live',{books})});
  if(prefs.liveSort==='league'){
   const groups=new Map();for(const e of sorted){const key=norm(e.category)+'|'+norm(leagueTitle(e));if(!groups.has(key))groups.set(key,[]);groups.get(key).push(e);}
-  const ordered=[...groups.values()].sort((a,b)=>Number(b.some(matchFavorite))-Number(a.some(matchFavorite))||alphabet.compare(a[0].category||'',b[0].category||'')||alphabet.compare(leagueTitle(a[0]),leagueTitle(b[0])));
-  html+=ordered.map(list=>{const e=list[0],lk=e.leagueKey||LeagueModel.id(refs(e)[0]),lf=prefs.favorites.includes(lk);return `<section data-group="g:${esc(norm(e.category)+'|'+norm(leagueTitle(e)))}"><div class="group-head">${gameIcon(e.category)}<span>${esc(e.category||'')}</span><span class="league">${esc(leagueTitle(e))}</span><span class="n">${list.length}</span><button class="icon-btn" data-league-fav="${esc(lk)}" aria-pressed="${lf}" aria-label="${lf?'Убрать лигу из избранного':'Лига в избранное'}">${starIcon(lf)}</button></div>${list.map(x=>matchRow(x,'live',{meta:false,books})).join('')}</section>`;}).join('');
- }else html+=`<section data-group="flat">${sorted.map(e=>matchRow(e,'live',{books})).join('')}</section>`;
- morphInto(el,html);
+  const ordered=[...groups.values()].sort((a,b)=>Number(b.some(x=>fav.get(x)))-Number(a.some(x=>fav.get(x)))||alphabet.compare(a[0].category||'',b[0].category||'')||alphabet.compare(leagueTitle(a[0]),leagueTitle(b[0])));
+  for(const list of ordered){const e=list[0],lk=e.leagueKey||LeagueModel.id(refs(e)[0]),lf=prefs.favorites.includes(lk),gk='g:'+norm(e.category)+'|'+norm(leagueTitle(e));
+   items.push({key:gk,tag:'section',attrs:{'data-group':gk},children:[{key:'h',html:`<div class="group-head">${gameIcon(e.category)}<span>${esc(e.category||'')}</span><span class="league">${esc(leagueTitle(e))}</span><span class="n">${list.length}</span><button class="icon-btn" data-league-fav="${esc(lk)}" aria-pressed="${lf}" aria-label="${lf?'Убрать лигу из избранного':'Лига в избранное'}">${starIcon(lf)}</button></div>`},...list.map(x=>({key:'r:'+x.id,html:cachedRow(x,'live',{meta:false,books})}))]});}
+ }else items.push({key:'flat',tag:'section',attrs:{'data-group':'flat'},children:sorted.map(row)});
+ patchTree(el,items);
  updateListHead('live',rows.length);
  scheduleOddsWatch(sorted);
  StatisticsClient.observe(rows);
@@ -335,7 +381,7 @@ const plural=(n,[one,few,many])=>{const m=n%10,h=n%100;return `${n} ${m===1&&h!=
 function renderLine(force){
  const el=viewEl('prematch'),s=snapshots.prematch,all=visible(feedRows('prematch'),'prematch',{ignoreCategory:true});categoryOptions(all,null,'prematch');
  const cat=filters('prematch').category,rows=cat?all.filter(e=>norm(e.category)===cat):all,books=viewBooks('prematch').filter(bookVisible);
- const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.lineMode,prefs.hideOdds,books,prefs.favorites.length,filters('prematch'),prefs.onlyFavorites,[...lineClosed].join('|'),lineSchedulePages,prefs.teamLogos,selectedId('prematch'),Math.floor(Date.now()/60000)]);
+ const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.lineMode,prefs.hideOdds,books,prefs.favorites.length,filters('prematch'),prefs.onlyFavorites,[...lineClosed].join('|'),lineSchedulePages,prefs.teamLogos,Math.floor(Date.now()/60000)]);
  if(!force&&viewSignatures.get('prematch')===sig)return;viewSignatures.set('prematch',sig);
  el.style.setProperty('--books',books.length);
  if(!rows.length){if(!s)skeleton(el);else renderState(el,emptyFor('prematch',s));updateListHead('prematch',0);return;}
@@ -393,7 +439,7 @@ function renderResults(force){
  if(!entry||!entry.fresh)loadResults(false);
  const rows=(current?.events||[]).map(e=>MatchView.project(e,prefs,'results')).filter(Boolean).sort((a,b)=>MatchView.clock(b,'results')-MatchView.clock(a,'results')||alphabet.compare(String(a.id),String(b.id)));
  categoryOptions(rows,current?.facets?.categories,'results');
- const sig=JSON.stringify([key,current?.uiRevision,current?.receivedAt,current?.status,resultsError,rows.length,prefs.favorites.length,selectedId('results'),prefs.teamLogos]);
+ const sig=JSON.stringify([key,current?.uiRevision,current?.receivedAt,current?.status,resultsError,rows.length,prefs.favorites.length,prefs.teamLogos]);
  if(!force&&viewSignatures.get('results')===sig)return;viewSignatures.set('results',sig);
  if(!rows.length){
   const loading=!current||!current.complete||['loading','queued','preparing'].includes(current.status);
@@ -432,7 +478,7 @@ function renderHistory(force){
  const {rows:raw,meta}=historyRows(),rows=raw.map(e=>MatchView.project(e,prefs,'history')).filter(Boolean).sort((a,b)=>MatchView.appearance(b)-MatchView.appearance(a)||alphabet.compare(String(a.id),String(b.id)));
  categoryOptions(rows,meta?.facets?.categories,'history');
  const total=Number(meta?.total||meta?.totalHint||rows.length);
- const sig=JSON.stringify([base,historyPagesShown,meta?.receivedAt,rows.length,historyError,prefs.favorites.length,selectedId('history'),prefs.teamLogos]);
+ const sig=JSON.stringify([base,historyPagesShown,meta?.receivedAt,rows.length,historyError,prefs.favorites.length,prefs.teamLogos]);
  if(!force&&viewSignatures.get('history')===sig)return;viewSignatures.set('history',sig);
  if(!rows.length){if(!meta&&!historyError)skeleton(el,10);else if(historyError&&!meta)renderState(el,{kind:historyError.includes('готовится')?'':'bad',icon:historyError.includes('готовится')?'…':'!',title:historyError.includes('готовится')?'История готовится':'История не загрузилась',text:historyError.includes('готовится')?'Сервер собирает историю, страница появится автоматически.':historyError,actions:'<button class="btn" data-retry-history>Повторить</button>'});else renderState(el,emptyFor('history',meta));updateListHead('history',0);return;}
  const more=rows.length<total;
@@ -595,6 +641,40 @@ function scheduleOddsWatch(rows){const sel=selectedId('live'),ids=[...new Set([.
 async function pushOddsWatch(){const ids=tab==='live'&&!document.hidden&&!prefs.hideOdds?oddsWatchIds:[];try{await client.post('/api/ui/odds-watch',{ids});}catch{}}
 setInterval(()=>{if(tab==='live'&&!document.hidden&&oddsWatchIds.length)pushOddsWatch();},15000);
 
+// ---------------------------------------------------------------------------------------------------- keyboard --
+// Arrow navigation over long lists. A held key fires ~30 events a second: each one only adds to a pending step; once
+// per frame the focus moves (no layout reads per row, scroll only when the row left the viewport) and the selection
+// mark follows. The detail panel (render + network) catches up when the key is released or the repeat pauses.
+const nav={step:0,frame:0,rows:null,detailTimer:0,detailId:''};
+function navRows(){
+ if(nav.rows&&nav.rows.view===tab&&nav.rows.el===viewEl(tab))return nav.rows.list;
+ const el=viewEl(tab),list=[...el.querySelectorAll('article.match,tr[data-id]')].filter(n=>!n.closest('details:not([open])'));
+ nav.rows={view:tab,el,list};return list;
+}
+function invalidateNav(){nav.rows=null;}
+function revealRow(row){
+ const box=viewEl(tab),r=row.getBoundingClientRect(),b=box.getBoundingClientRect();
+ // sticky column + group headers cover the top of the list
+ const top=b.top+(box.querySelector('.col-head')?.offsetHeight||0)+(row.closest('section,details')?.querySelector('.group-head')?.offsetHeight||0);
+ if(r.top<top)box.scrollTop-=top-r.top;else if(r.bottom>b.bottom)box.scrollTop+=r.bottom-b.bottom;
+}
+function markSelected(id){
+ const el=viewEl(tab);for(const n of el.querySelectorAll('[aria-selected="true"]'))if(n.dataset.id!==id)n.setAttribute('aria-selected','false');
+ el.querySelector(`[data-id="${CSS.escape(id)}"]`)?.setAttribute('aria-selected','true');
+}
+function queueNav(step,repeat){
+ nav.step+=step;if(nav.frame)return;
+ nav.frame=requestAnimationFrame(()=>{
+  nav.frame=0;const rows=navRows();if(!rows.length){nav.step=0;return;}
+  let index=rows.indexOf(document.activeElement?.closest?.('[data-id]'));
+  if(index<0||!rows[index].isConnected){invalidateNav();const fresh=navRows();index=fresh.indexOf(document.activeElement?.closest?.('[data-id]'));if(index<0)index=nav.step>0?-1:fresh.length;}
+  const list=navRows(),next=list[Math.max(0,Math.min(list.length-1,index+nav.step))];nav.step=0;if(!next)return;
+  next.focus({preventScroll:true});revealRow(next);
+  if(DetailPanel.isOpen()){markSelected(next.dataset.id);selectedIds.set(tab,next.dataset.id);nav.detailId=next.dataset.id;clearTimeout(nav.detailTimer);nav.detailTimer=setTimeout(flushNavDetail,repeat?220:60);}
+ });
+}
+function flushNavDetail(){clearTimeout(nav.detailTimer);nav.detailTimer=0;const id=nav.detailId;nav.detailId='';if(id&&DetailPanel.isOpen()&&DetailPanel.currentId()!==id)selectMatch(id);}
+
 // ---------------------------------------------------------------------------------------------------- events ----
 $('tabs').addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(b)switchTab(b.dataset.tab);});
 document.addEventListener('keydown',event=>{
@@ -604,10 +684,11 @@ document.addEventListener('keydown',event=>{
  if(event.target.closest('input,textarea,select,[contenteditable="true"]'))return;
  if(event.target.closest('#tabs')&&['ArrowLeft','ArrowRight'].includes(event.key)){const pos=VIEWS.indexOf(tab),next=VIEWS[(pos+(event.key==='ArrowRight'?1:-1)+VIEWS.length)%VIEWS.length];event.preventDefault();switchTab(next,{focus:true});return;}
  if(!['ArrowDown','ArrowUp','Enter'].includes(event.key)||!event.target.closest('#content'))return;
- const rows=[...viewEl(tab).querySelectorAll('article.match,tr[data-id]')].filter(n=>n.offsetParent!==null),current=event.target.closest('[data-id]'),index=rows.indexOf(current);
- if(event.key==='Enter'){if(current&&!event.target.closest('button')){event.preventDefault();selectMatch(current.dataset.id,{focusPanel:true});}return;}
- event.preventDefault();const next=rows[Math.max(0,Math.min(rows.length-1,index+(event.key==='ArrowDown'?1:-1)))]||rows[0];if(!next)return;next.focus({preventScroll:false});next.scrollIntoView({block:'nearest'});if(DetailPanel.isOpen())selectMatch(next.dataset.id);
+ const current=event.target.closest('[data-id]');
+ if(event.key==='Enter'){if(current&&!event.target.closest('button')){event.preventDefault();flushNavDetail();selectMatch(current.dataset.id,{focusPanel:true});}return;}
+ event.preventDefault();queueNav(event.key==='ArrowDown'?1:-1,event.repeat);
 });
+document.addEventListener('keyup',event=>{if(['ArrowDown','ArrowUp'].includes(event.key))flushNavDetail();});
 $('content').addEventListener('click',event=>{
  const t=event.target;
  if(t.closest('[data-reset-filters]')){resetFilters();return;}
@@ -624,7 +705,7 @@ $('content').addEventListener('click',event=>{
  const cell=t.closest('[data-book]');selectMatch(row.dataset.id);
  if(cell&&DetailPanel.isOpen()){const e=projected(tab,findRow(tab,row.dataset.id));if(e)DetailPanel.show(e,detailView(tab,e),{source:cell.dataset.book});}
 });
-$('content').addEventListener('toggle',event=>{const d=event.target;if(!d.matches?.('details[data-group]'))return;const key=d.dataset.group.slice(2);if(d.open)lineClosed.delete(key);else lineClosed.add(key);prefs.lineCollapsed=[...lineClosed].slice(-400);savePrefs();d.dataset.userToggled='1';viewSignatures.delete('prematch');if(d.open&&!d.querySelector('article'))renderView('prematch',true);},true);
+$('content').addEventListener('toggle',event=>{const d=event.target;if(!d.matches?.('details[data-group]'))return;invalidateNav();const key=d.dataset.group.slice(2);if(d.open)lineClosed.delete(key);else lineClosed.add(key);prefs.lineCollapsed=[...lineClosed].slice(-400);savePrefs();d.dataset.userToggled='1';viewSignatures.delete('prematch');if(d.open&&!d.querySelector('article'))renderView('prematch',true);},true);
 for(const type of ['pointerover','focusin'])$('content').addEventListener(type,event=>{const row=event.target.closest?.('[data-id]');if(!row||!['live','prematch','compare'].includes(tab))return;clearTimeout(prefetchTimer);prefetchTimer=setTimeout(()=>{const e=findRow(tab,row.dataset.id);if(e)prefetchDetail(e,tab==='compare'?(e.inLive?'live':'prematch'):tab);},140);});
 $('content').addEventListener('pointerout',event=>{if(!event.relatedTarget?.closest?.('[data-id]'))clearTimeout(prefetchTimer);});
 $('drawerBackdrop').addEventListener('click',()=>DetailPanel.hide());

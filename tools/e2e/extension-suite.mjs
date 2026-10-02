@@ -475,6 +475,103 @@ scenario('E23', 'X4', 'GGBET full-market lease follows the detail panel: acquire
   await page.close();
 });
 
+// Holding ArrowDown over a long LIVE list: the handler must stay cheap (no full list render, no layout per row, no
+// network per keypress). 200 matches, 150 key repeats at the key-repeat cadence, measured inside the page.
+scenario('E24', 'P1', 'keyboard: holding ArrowDown over 200 LIVE matches stays responsive (no remount, no per-key network, no long stalls)', async () => {
+  mockState.extraEvents = 200;
+  const page = await openApp();
+  try {
+    await until(async () => (await cards(page)) >= 150, { timeout: 60000, what: '150+ rows' });
+    await sleep(1500);
+    const run = (withDetail) => page.evaluate(async ({ withDetail, n }) => {
+      const list = document.querySelector('#content .list[data-view="live"]');
+      const rows = [...list.querySelectorAll('article.match')];
+      rows.forEach((r, i) => { r.__probe = i; });
+      const first = rows[0]; first.focus();
+      if (withDetail) { first.click(); await new Promise((r) => setTimeout(r, 800)); first.focus(); }
+      const longTasks = []; const po = new PerformanceObserver((l) => { for (const e of l.getEntries()) longTasks.push(Math.round(e.duration)); });
+      try { po.observe({ type: 'longtask', buffered: false }); } catch {}
+      let frames = [], last = performance.now(), on = true;
+      const tick = (t) => { frames.push(t - last); last = t; if (on) requestAnimationFrame(tick); }; requestAnimationFrame(tick);
+      const handler = [];
+      for (let i = 0; i < n; i++) {
+        const target = document.activeElement || first;
+        const t0 = performance.now();
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true, cancelable: true, repeat: i > 0 }));
+        handler.push(performance.now() - t0);
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
+      await new Promise((r) => setTimeout(r, 700)); on = false; po.disconnect();
+      const now = [...list.querySelectorAll('article.match')], kept = now.filter((r) => r.__probe != null).length;
+      const active = document.activeElement?.closest?.('article.match'), sel = list.querySelector('article.match[aria-selected="true"]');
+      const sorted = [...handler].sort((a, b) => a - b);
+      return { rows: rows.length, kept, activeIndex: active ? now.indexOf(active) : -1, selectedIndex: sel ? now.indexOf(sel) : -1,
+        handlerMedian: Math.round(sorted[Math.floor(sorted.length / 2)] * 10) / 10, handlerP95: Math.round(sorted[Math.floor(sorted.length * 0.95)] * 10) / 10, handlerMax: Math.round(sorted.at(-1) * 10) / 10,
+        maxFrameGap: Math.round(Math.max(...frames.slice(1))), longTasks: longTasks.length, longTaskMax: Math.max(0, ...longTasks) };
+    }, { withDetail, n: 150 });
+    const before = { details: proxyState.details.length, leases: proxyState.fullMarkets.length };
+    const plain = await run(false);
+    const detailStart = { details: proxyState.details.length, leases: proxyState.fullMarkets.length };
+    const detail = await run(true);
+    const net = { details: proxyState.details.length - detailStart.details, leases: proxyState.fullMarkets.length - detailStart.leases, plainDetails: detailStart.details - before.details };
+    results.note = `list: ${JSON.stringify(plain)} | with detail: ${JSON.stringify(detail)} | network during the detail burst: ${JSON.stringify(net)}`;
+    const fails = [];
+    if (plain.kept !== plain.rows) fails.push(`rows remounted: ${plain.kept}/${plain.rows}`);
+    if (plain.activeIndex !== Math.min(150, plain.rows - 1)) fails.push(`focus at ${plain.activeIndex}`);
+    if (plain.handlerP95 > 8) fails.push(`handler p95 ${plain.handlerP95} ms`);
+    // one frame may be late on a loaded 1-vCPU host; the old handler stalled frames for 200-400 ms per key with the detail open
+    if (plain.maxFrameGap > 200) fails.push(`frame gap ${plain.maxFrameGap} ms`);
+    if (detail.handlerP95 > 8) fails.push(`with detail: handler p95 ${detail.handlerP95} ms`);
+    if (detail.selectedIndex !== detail.activeIndex) fails.push(`detail selection ${detail.selectedIndex} != focus ${detail.activeIndex}`);
+    // bounded (the open match may also refresh on its own feed patches), never one request per key repeat
+    if (net.details > 10 || net.leases > 6) fails.push(`network during the burst: ${JSON.stringify(net)}`);
+    if (fails.length) throw new Error(fails.join('; '));
+  } finally { mockState.extraEvents = 0; await page.close(); }
+});
+
+// A feed update (one price/score) re-renders the LIVE list: measure the full render of 200 rows and check that rows
+// keep their DOM nodes (focus/hover/scroll survive) and the shell is not rebuilt.
+/* eslint-disable no-undef -- the page.evaluate bodies below run inside app.html and call its own globals */
+scenario('E25', 'P1', 'render: a LIVE feed update over 200 matches is cheap and keeps row and shell nodes', async () => {
+  mockState.extraEvents = 200;
+  const page = await openApp();
+  try {
+    await until(async () => (await cards(page)) >= 150, { timeout: 60000, what: '150+ rows' });
+    await sleep(1500);
+    const r = await page.evaluate(async () => {
+      const list = document.querySelector('#content .list[data-view="live"]'), rows = [...list.querySelectorAll('article.match')];
+      rows.forEach((n, i) => { n.__probe = i; }); const shell = document.getElementById('toolbar'); shell.__probe = 1;
+      const t = [];
+      for (let i = 0; i < 20; i++) { const t0 = performance.now(); renderView('live', true); t.push(performance.now() - t0); await new Promise((r) => requestAnimationFrame(r)); }
+      t.sort((a, b) => a - b);
+      const kept = [...list.querySelectorAll('article.match')].filter((n) => n.__probe != null).length;
+      // one changed row: only that row is rebuilt
+      const one = list.querySelector('article.match'); one.__html = 'changed'; const t1 = performance.now(); renderView('live', true); const oneRow = Math.round((performance.now() - t1) * 10) / 10;
+      const onlyOne = [...list.querySelectorAll('article.match')].filter((n) => n.__probe == null).length;
+      const cold = []; for (let i = 0; i < 3; i++) { for (const n of list.querySelectorAll('article.match')) { n.__html = null; } const t0 = performance.now(); renderView('live', true); cold.push(performance.now() - t0); await new Promise((r) => requestAnimationFrame(r)); }
+      cold.sort((a, b) => a - b);
+      return { coldRebuild: Math.round(cold[1]), oneRow, rebuiltRows: onlyOne, rows: rows.length, kept, shellKept: document.getElementById('toolbar').__probe === 1, median: Math.round(t[10] * 10) / 10, max: Math.round(t[19] * 10) / 10 };
+    });
+    const parts = await page.evaluate(() => {
+      const m = (f) => { const t = []; for (let i = 0; i < 10; i++) { const t0 = performance.now(); f(); t.push(performance.now() - t0); } t.sort((a, b) => a - b); return Math.round(t[5] * 10) / 10; };
+      const el = document.querySelector('#content .list[data-view="live"]'), books = viewBooks('live').filter(bookVisible);
+      let rows; const vis = m(() => { rows = liveRowsVisible().rows; });
+      const html = m(() => rows.map((e) => matchRow(e, 'live', { books })).join(''));
+      const parse = m(() => { const t = document.createElement('template'); t.innerHTML = el.innerHTML; });
+      const morph = m(() => morphInto(el, el.innerHTML));
+      const rowsAll = liveRowsVisible();
+      const stats = m(() => StatisticsClient.observe(rowsAll.rows)), cats = m(() => categoryOptions(rowsAll.all, null, 'live')), chrome = m(() => renderChrome()), head = m(() => updateListHead('live', rowsAll.rows.length)), watch = m(() => scheduleOddsWatch(rowsAll.rows)), navc = m(() => updateNavCounts());
+      return { visible: vis, rowsHtml: html, parse, morphSame: morph, statsObserve: stats, categoryOptions: cats, renderChrome: chrome, listHead: head, oddsWatch: watch, navCounts: navc };
+    });
+    r.parts = parts;
+    results.note = JSON.stringify(r);
+    if (r.kept !== r.rows || !r.shellKept || r.rebuiltRows !== 1) throw new Error(`nodes replaced: ${JSON.stringify(r)}`);
+    if (r.median > 40) throw new Error(`full LIVE render median ${r.median} ms ${JSON.stringify(r.parts)}`);
+  } finally { mockState.extraEvents = 0; await page.close(); }
+});
+
+/* eslint-enable no-undef */
 scenario('E21', 'X1', 'filters and the chosen detail tab persist across sections and a reload', async () => {
   let page = await openApp();
   await until(async () => (await cards(page)) >= 1, { what: 'rows' });
