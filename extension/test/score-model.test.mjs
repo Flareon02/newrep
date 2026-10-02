@@ -48,3 +48,13 @@ test('canonical score: furthest plausible state wins; empty or implausible provi
   assert.equal(F.canonicalScore(same, { changedAt: (r) => (r.source === 'ggbet' ? 5 : 0) }).best.source, 'ggbet');
   assert.equal(F.canonicalScore([{ source: 'pinnacle' }]).best, null);
 });
+
+test('arbitrage: percent from the best prices; numeric stable sort both ways, rows without a value last', () => {
+  assert.equal(F.arbitragePct({ h: 2.1, a: 2.1 }), 4.76);
+  assert.equal(F.arbitragePct({ h: 1.8, a: 1.95 }), -6.84);
+  assert.equal(F.arbitragePct({ h: null, a: 2 }), null);
+  const rows = [{ id: 'a', arb: -3 }, { id: 'b', arb: 2.5 }, { id: 'c', arb: null }, { id: 'd', arb: 10 }, { id: 'e', arb: 2.5 }, { id: 'f', arb: -12 }];
+  assert.deepEqual(F.sortByArbitrage(rows, 'desc').map((r) => r.id), ['d', 'b', 'e', 'a', 'f', 'c']);
+  assert.deepEqual(F.sortByArbitrage(rows, 'asc').map((r) => r.id), ['f', 'a', 'b', 'e', 'd', 'c']);
+  assert.deepEqual(F.sortByArbitrage([{ arb: 9 }, { arb: 10 }, { arb: 100 }], 'desc').map((r) => r.arb), [100, 10, 9], 'numbers, not strings');
+});

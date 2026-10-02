@@ -80,6 +80,13 @@
   return {best:providers[0],providers,disagree};
  }
 
+ // Arbitrage of a 2-way market from the best prices: 100 - (1/home + 1/away) * 100, in percent (> 0 = a fork).
+ function arbitragePct(best){const h=openPrice(best?.h),a=openPrice(best?.a);if(h==null||a==null)return null;return Math.round((100-(1/h+1/a)*100)*100)/100;}
+ // Numeric, stable: rows without a value keep their order at the end. dir 'desc' = biggest fork first.
+ function sortByArbitrage(rows,dir='desc',value=r=>r.arb){
+  const sign=dir==='asc'?1:-1;
+  return rows.map((r,i)=>({r,i,v:value(r)})).sort((a,b)=>(a.v==null)-(b.v==null)||(a.v==null?0:sign*(a.v-b.v))||a.i-b.i).map(x=>x.r);
+ }
  // When the match first appeared at each bookmaker (line or LIVE, whichever was first) - not the last update.
  function firstSeen(refs=[]){
   return (refs||[]).map(r=>({source:r.source,at:Math.min(...[r.firstPrematchAt,r.firstSeenAt,r.enteredLiveAt].map(Number).filter(t=>t>0))})).filter(x=>Number.isFinite(x.at)).sort((a,b)=>a.at-b.at);
@@ -98,6 +105,6 @@
   return {track,clear:()=>last.clear(),size:()=>last.size};
  }
 
- const api={orientQuote,bestPrices,margin,formatPrice,scoreParts,displayScore,canonicalScore,validSeries,firstSeen,createPriceTracker,openPrice};
+ const api={orientQuote,bestPrices,margin,formatPrice,scoreParts,displayScore,canonicalScore,validSeries,firstSeen,arbitragePct,sortByArbitrage,createPriceTracker,openPrice};
  if(typeof module==='object'&&module.exports)module.exports=api;else root.MatchFormat=api;
 })(globalThis);

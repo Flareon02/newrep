@@ -541,6 +541,7 @@ scenario('E24', 'P1', 'keyboard: holding ArrowDown over 200 LIVE matches stays r
 
 // A feed update (one price/score) re-renders the LIVE list: measure the full render of 200 rows and check that rows
 // keep their DOM nodes (focus/hover/scroll survive) and the shell is not rebuilt.
+/* eslint-disable no-undef -- the page.evaluate bodies below run inside app.html and call its own globals */
 scenario('E27', 'X1', 'Line: game > league hierarchy with counts; a collapsed game stays collapsed across refreshes and a reload; expand/collapse all; arrows walk the headers', async () => {
   let page = await openApp();
   try {
@@ -553,7 +554,7 @@ scenario('E27', 'X1', 'Line: game > league hierarchy with counts; a collapsed ga
     await game.locator(':scope > summary').click(); await sleep(300);
     const isOpen = () => page.evaluate((k) => document.querySelector(`#content .list[data-view="prematch"] details[data-group="${CSS.escape(k)}"]`)?.open, key);
     if (await isOpen()) throw new Error('the game did not collapse');
-    await page.evaluate(() => { viewSignatures.delete('prematch'); renderView('prematch', true); });   // eslint-disable-line no-undef
+    await page.evaluate(() => { viewSignatures.delete('prematch'); renderView('prematch', true); });
     await sleep(300);
     if (await isOpen()) throw new Error('a refresh reopened the collapsed game');
     await page.reload(); await page.waitForSelector('#tabs [data-tab="prematch"]'); await clickTab(page, 'prematch'); await sleep(800);
@@ -575,7 +576,38 @@ scenario('E27', 'X1', 'Line: game > league hierarchy with counts; a collapsed ga
   } finally { await page.close(); }
 });
 
-/* eslint-disable no-undef -- the page.evaluate bodies below run inside app.html and call its own globals */
+scenario('E28', 'X1', 'Comparison: forks sort by arbitrage % numerically, both directions, and the choice is kept', async () => {
+  const page = await openApp();
+  try {
+    await clickTab(page, 'compare');
+    if (await page.locator('#compareMode [data-compare-mode="odds"]').isVisible()) await page.click('#compareMode [data-compare-mode="odds"]');
+    // Deterministic data: a Line snapshot with two bookmakers' quotes per match (known forks), injected in the page.
+    await page.click('#compareScope [data-compare-scope="prematch"]'); await sleep(300);
+    await page.evaluate(() => {
+      const mk = (i, h1, a1, h2, a2) => ({ id: 'arb-' + i, team1: 'Arb Home ' + i, team2: 'Arb Away ' + i, category: 'Counter Strike 2', league: 'Arb League', startAt: Date.now() + (i + 1) * 3600000, inPrematch: true,
+        sourceRefs: [{ source: 'astek', sourceEventId: 'a' + i, id: 'a' + i, inPrematch: true, startAt: Date.now() + (i + 1) * 3600000, quote: { h: h1, a: a1 } }, { source: 'pinnacle', sourceEventId: 'p' + i, id: 'p' + i, inPrematch: true, startAt: Date.now() + (i + 1) * 3600000, quote: { h: h2, a: a2 } }] });
+      setSnapshot('prematch', { events: [mk(0, 1.9, 1.9, 1.95, 1.85), mk(1, 2.2, 1.7, 1.8, 2.25), mk(2, 1.5, 2.6, 1.55, 2.5), mk(3, 2.05, 2.05, 2.1, 2.0), mk(4, 1.4, 3.1, 1.45, 3.0)], revision: 'arb-test', receivedAt: Date.now() });
+      viewSignatures.delete('compare'); renderView('compare', true);
+    });
+    await sleep(400);
+    const n = await page.locator('#content .list[data-view="compare"] tr[data-id]').count();
+    if (n < 5) throw new Error(`expected 5 compared matches, got ${n}`);
+    const values = () => page.evaluate(() => [...document.querySelectorAll('#content .list[data-view="compare"] tr[data-id]')].map((r) => (r.dataset.arb === '' ? null : Number(r.dataset.arb))));
+    await page.selectOption('#compareSort', 'arb-desc'); await sleep(500);
+    const desc = await values(), d = desc.filter((v) => v != null);
+    if (d.length < 5) throw new Error(`arbitrage values missing: ${desc}`);
+    if (d.some((v, i) => i && v > d[i - 1])) throw new Error(`desc not sorted: ${desc}`);
+    if (desc.indexOf(null) >= 0 && desc.slice(desc.indexOf(null)).some((v) => v != null)) throw new Error('rows without a value are not last');
+    await page.selectOption('#compareSort', 'arb-asc'); await sleep(500);
+    const asc = (await values()).filter((v) => v != null);
+    if (asc.some((v, i) => i && v < asc[i - 1])) throw new Error(`asc not sorted: ${asc}`);
+    await page.reload(); await page.waitForSelector('#tabs [data-tab="compare"]'); await clickTab(page, 'compare'); await sleep(800);
+    if ((await page.inputValue('#compareSort')) !== 'arb-asc') throw new Error('sort choice not kept');
+    await page.selectOption('#compareSort', 'time');
+    results.note = `${n} rows; desc ${d.slice(0, 4).join(', ')}…`;
+  } finally { await page.close(); }
+});
+
 scenario('E25', 'P1', 'render: a LIVE feed update over 200 matches is cheap and keeps row and shell nodes', async () => {
   mockState.extraEvents = 200;
   const page = await openApp();
@@ -715,8 +747,8 @@ try {
     if (only.size && !only.has(s.id)) continue;
     if (s.id === 'E06' && !only.has('E06')) { report.push({ id: s.id, covers: s.covers, title: s.title, status: 'SKIP', detail: 'NOT VERIFIABLE HERE: Playwright/CDP keeps the extension worker alive, so the browser never idles it out (and forcing it with ServiceWorker.stopAllWorkers leaves it unrecoverable); run with --only E06 on a real browser' }); console.log(`SKIP  E06  ${s.title}`); continue; }
     if (remote && !remoteOk.has(s.id)) { report.push({ id: s.id, covers: s.covers, title: s.title, status: 'SKIP', detail: 'fault injection needs the self-contained mode' }); continue; }
-    const t0 = Date.now(); results.note = '';
-    try { await Promise.race([s.fn(), new Promise((_, reject) => setTimeout(() => reject(new Error('scenario exceeded its 240 s budget')), 240000))]); report.push({ id: s.id, covers: s.covers, title: s.title, status: 'PASS', seconds: Math.round((Date.now() - t0) / 1000), detail: results.note }); }
+    const t0 = Date.now(); results.note = ''; results.skip = '';
+    try { await Promise.race([s.fn(), new Promise((_, reject) => setTimeout(() => reject(new Error('scenario exceeded its 240 s budget')), 240000))]); report.push({ id: s.id, covers: s.covers, title: s.title, status: results.skip ? 'SKIP' : 'PASS', seconds: Math.round((Date.now() - t0) / 1000), detail: results.skip || results.note }); }
     catch (e) { report.push({ id: s.id, covers: s.covers, title: s.title, status: 'FAIL', seconds: Math.round((Date.now() - t0) / 1000), detail: String(e.message || e).slice(0, 400) }); }
     // Leave the environment healthy for the next scenario.
     proxyState.mode = 'pass'; mockState.extraEvents = 0; mockState.scoreBump = 0; mockState.mode = 'ok';

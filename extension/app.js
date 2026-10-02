@@ -48,6 +48,7 @@ function migratePrefs(){
  if(!['leagues','schedule'].includes(prefs.lineMode))prefs.lineMode='leagues';
  if(!['odds','schedule'].includes(prefs.compareMode))prefs.compareMode='odds';
  if(!['live','prematch'].includes(prefs.compareScope))prefs.compareScope='live';
+ if(!['time','arb-desc','arb-asc'].includes(prefs.compareSort))prefs.compareSort='time';
  for(const key of ['favorites','hiddenLeagues'])if(!Array.isArray(prefs[key]))prefs[key]=[];
  prefs.notifications={...DEFAULT_PREFS.notifications,...prefs.notifications};
 }
@@ -581,7 +582,7 @@ function renderChrome(){
  show('search',!cmpSchedule);$('search').closest('.search').hidden=cmpSchedule;
  show('category',!cmpSchedule);show('availability',!['compare'].includes(t));show('startWindow',['prematch','results','history'].includes(t));
  show('historyPhase',t==='history');show('liveSort',t==='live');show('lineMode',t==='prematch');show('dateControl',t==='results');
- show('compareMode',t==='compare');show('compareScope',t==='compare'&&!cmpSchedule);show('favorites',!cmpSchedule);
+ show('compareMode',t==='compare');show('compareScope',t==='compare'&&!cmpSchedule);show('compareSort',t==='compare'&&!cmpSchedule);$('compareSort').value=prefs.compareSort||'time';show('favorites',!cmpSchedule);
  show('oddsSource',(t==='live'||t==='compare'&&prefs.compareScope==='live'&&!cmpSchedule)&&!prefs.hideOdds);
  if(document.activeElement!==$('search')&&$('search').value!==f.search)$('search').value=f.search;
  $('availability').value=f.availability;$('historyPhase').value=f.historyPhase;$('liveSort').value=prefs.liveSort;
@@ -736,6 +737,7 @@ $('liveSort').addEventListener('change',()=>{setPref('liveSort',$('liveSort').va
 $('lineMode').addEventListener('click',e=>{const b=e.target.closest('[data-line-mode]');if(!b)return;setPref('lineMode',b.dataset.lineMode);lineSchedulePages=1;filterChanged();});
 $('compareMode').addEventListener('click',e=>{const b=e.target.closest('[data-compare-mode]');if(!b)return;setPref('compareMode',b.dataset.compareMode);filterChanged();});
 $('compareScope').addEventListener('click',e=>{const b=e.target.closest('[data-compare-scope]');if(!b)return;setPref('compareScope',b.dataset.compareScope);DetailPanel.hide();filterChanged();});
+$('compareSort').addEventListener('change',()=>{setPref('compareSort',$('compareSort').value);filterChanged();});
 $('favorites').addEventListener('click',()=>{prefs.onlyFavorites=!prefs.onlyFavorites;savePrefs();for(const v of VIEWS)viewSignatures.delete(v);filterChanged();});
 $('resetFilters').addEventListener('click',resetFilters);
 function resetFilters(){prefs.viewFilters={...prefs.viewFilters,[tab]:{...FILTER_DEFAULTS}};prefs.onlyFavorites=false;savePrefs();$('search').value='';filterChanged();}
