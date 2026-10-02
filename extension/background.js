@@ -14,7 +14,7 @@ async function configureBackgroundAlarm(){if(wantsBackgroundFeeds()){const alarm
 chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.prefs){const providerBefore=OddsProvider.selected(changes.prefs.oldValue||prefs);prefs=changes.prefs.newValue||{};if(OddsProvider.selected(prefs)!==providerBefore)switchLiveProvider();configureBackgroundAlarm().catch(()=>{});if((changes.prefs.oldValue?.generatorEnabled===true||!changes.prefs.oldValue?.features630)&&(prefs.hideOdds!==false||prefs.generatorEnabled!==true))chrome.tabs.query({url:chrome.runtime.getURL('odds.html')+'*'}).then(tabs=>Promise.all(tabs.map(t=>chrome.tabs.remove(t.id)))).catch(()=>{});}});
 // A changed server address or token invalidates everything received so far: drop the cache and reconnect.
 chrome.storage.onChanged.addListener((changes,area)=>{if(area!=='local'||!changes.server)return;epoch++;inflight.clear();cache={};for(const key of Object.keys(failures))delete failures[key];for(const key of Object.keys(retryAfter))delete retryAfter[key];if(ports.size){stopFeedStream();setTimeout(()=>{startFeedStream();scheduleFeeds(0);},300);}});
-async function open(){await boot;const url=chrome.runtime.getURL('app.html'),tabs=await chrome.tabs.query({url}),type=prefs.openMode==='tab'?'normal':'popup';for(const tab of tabs){const win=await chrome.windows.get(tab.windowId);if(win.type===type){await chrome.tabs.update(tab.id,{active:true});await chrome.windows.update(win.id,{focused:true});return;}}if(type==='popup')await loadedWindow(url,1060,850);else await chrome.tabs.create({url});}
+async function open(){await boot;const url=chrome.runtime.getURL('app.html'),tabs=await chrome.tabs.query({url}),type=prefs.openMode==='tab'?'normal':'popup';for(const tab of tabs){const win=await chrome.windows.get(tab.windowId);if(win.type===type){await chrome.tabs.update(tab.id,{active:true});await chrome.windows.update(win.id,{focused:true});return;}}if(type==="popup")await loadedWindow(url,1320,880);else await chrome.tabs.create({url});}
 chrome.action.onClicked.addListener(open);
 chrome.notifications.onClicked.addListener(open);
 function logicalKey(e){const clean=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');return 'match:'+JSON.stringify([clean(e.category),...([e.team1,e.team2].map(clean).sort()),Number(e.startAt||0)]);}
@@ -140,7 +140,10 @@ async function handleStreamEvent(type,data){
   return;
  }
  if(type==='status'){
-  const current=cache[kind];if(current){cache[kind]={...current,...(data.meta||{}),transportError:data.error?ServerConfig.errorText(data.error):'',receivedAt:Date.now()};for(const port of ports)try{port.postMessage({kind:'freshness',feed:kind,freshness:{...(data.meta||{}),transportError:data.error?ServerConfig.errorText(data.error):'',receivedAt:Date.now()}});}catch{}}
+  // A status event reports one provider's upstream failure (data.provider/data.error). The stream itself is alive,
+  // so the server is reachable: never turn a bookmaker outage into a transport error of the whole feed. Provider
+  // health reaches the UI through `providers` (meta probe / snapshot).
+  const current=cache[kind];if(current){const meta={...(data.meta||{}),transportError:'',receivedAt:Date.now()};cache[kind]={...current,...meta};for(const port of ports)try{port.postMessage({kind:'freshness',feed:kind,freshness:{...meta,providerError:data.error?{provider:String(data.provider||''),error:String(data.error)}:null}});}catch{}}
  }
 }
 async function streamLoop(){

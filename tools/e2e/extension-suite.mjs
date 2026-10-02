@@ -120,7 +120,11 @@ async function launch() {
   context = await chromium.launchPersistentContext(profile, { headless: false, args: ['--headless=new', '--no-sandbox', `--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`] });
   const worker = await swHandle(); extensionId = new URL(worker.url()).host;
 }
-const cards = (page) => page.locator('article.card').count();
+// Local fixtures have 12 LIVE matches; staging has whatever is live right now.
+const LIVE_MIN = remote ? 1 : 12;
+const cards = (page) => page.locator('#content .list:not([hidden]) article.match').count();
+// In-page timing: run `action`, then poll every animation frame until `condition` holds (ms, or -1 on timeout).
+const timed = (page, action, condition, timeout = 10000) => page.evaluate(async ({ action, condition, timeout }) => { const act = new Function(action), cond = new Function(`return (${condition})`), t0 = performance.now(); act(); while (performance.now() - t0 < timeout) { await new Promise((r) => requestAnimationFrame(r)); try { if (cond()) return Math.round(performance.now() - t0); } catch {} } return -1; }, { action, condition, timeout });
 const clickTab = async (page, tab) => { await page.click(`#tabs [data-tab="${tab}"]`); await sleep(700); };
 // A provider (e.g. Fonbet) failing upstream is also surfaced as `transportError`; only these texts mean the SERVER is unreachable/broken.
 const dropStreams = () => { for (const res of [...proxyState.sse]) res.destroy(); };   // a failing server does not keep old streams open
@@ -135,21 +139,25 @@ const scenario = (id, covers, title, fn, { needsMock = true } = {}) => scenarios
 
 scenario('E01', 'X1 X2', 'extension loads, service worker runs, LIVE cards render from the server feed, SSE is connected', async () => {
   const page = await openApp();
-  await until(async () => (await cards(page)) >= 12, { what: '12 LIVE cards' });
+  await until(async () => (await cards(page)) >= LIVE_MIN, { what: `${LIVE_MIN} LIVE rows` });
   if (!remote) await until(async () => ((await serverHealth())?.sse?.open ?? 0) >= 1, { what: 'an SSE client on the server' });
   if (page.errors.length) throw new Error(page.errors.join(' | '));
   await page.close();
 });
 
-scenario('E02', 'X1', 'every tab opens without script errors (LIVE, Results, Line, History, Compare, Leagues)', async () => {
+scenario('E02', 'X1', 'every section opens without script errors (LIVE, Line, Results, Compare, History; Settings: league links, diagnostics)', async () => {
   const page = await openApp();
   await until(async () => (await cards(page)) > 0 || remote, { what: 'cards' });
-  const hidden = [], shown = [];
-  for (const tab of ['results', 'prematch', 'history', 'compare', 'leagues', 'live']) {
-    if (!(await page.locator(`#tabs [data-tab="${tab}"]`).isVisible())) { hidden.push(tab); continue; }   // History is an opt-in (hidden) feature
-    await clickTab(page, tab); const heading = (await page.textContent('#viewTitle'))?.trim(); if (!heading) throw new Error(`tab ${tab} has no heading`); shown.push(tab);
+  const shown = [];
+  for (const tab of ['results', 'prematch', 'history', 'compare', 'live']) {
+    await clickTab(page, tab);
+    const ok = await page.evaluate((t) => document.querySelector(`#tabs [data-tab="${t}"]`).getAttribute('aria-current') === 'page' && !document.querySelector(`#content .list[data-view="${t}"]`).hidden, tab);
+    if (!ok) throw new Error(`section ${tab} is not shown`); shown.push(tab);
   }
-  results.note = `opened: ${shown.join(', ')}; hidden by default: ${hidden.join(', ') || 'none'}`;
+  await page.click('#settingsButton');
+  for (const section of ['leagues', 'diagnostics', 'sources', 'server']) { await page.click(`[data-settings-section="${section}"]`); await sleep(700); shown.push('settings:' + section); }
+  await page.click('#settingsDone');
+  results.note = `opened: ${shown.join(', ')}`;
   if (page.errors.length) throw new Error(page.errors.join(' | '));
   await page.close();
 });
@@ -165,9 +173,9 @@ scenario('E03', 'X1', 'Line (prematch) tab shows fixtures from the feed', async 
 scenario('E04', 'X2 X4', 'a score change on the server reaches an open page through the SSE push path (no reload)', async () => {
   const page = await openApp();
   await until(async () => (await cards(page)) >= 12, { what: 'LIVE cards' });
-  const card = page.locator('article.card', { hasText: 'Two Move' }).first();
+  const card = page.locator('article.match', { hasText: 'Two Move' }).first();
   mockState.scoreBump = 7;
-  await until(async () => (await card.textContent()).includes('77'), { timeout: 30000, what: 'updated map score 77 on the card' });
+  await until(async () => (await card.innerHTML()).includes('77'), { timeout: 30000, what: 'updated map score 77 on the row' });
   mockState.scoreBump = 0;
   await page.close();
 });
@@ -179,10 +187,12 @@ scenario('E05', 'X2', 'server killed (SIGKILL) and restarted: extension reports 
   await until(async () => isDown((await swState('live'))?.transportError), { timeout: 90000, what: 'transport error in the service worker' });
   const cardsDuring = await cards(page);
   if (cardsDuring < 12) throw new Error(`cards vanished during the outage (${cardsDuring})`);
+  await until(async () => page.evaluate(() => !document.getElementById('banner').hidden && /Нет связи|Сервер недоступен/.test(document.getElementById('banner').textContent)), { timeout: 30000, what: 'the server-unavailable banner' });
   startServer();
   const t0 = Date.now();
   await until(async () => { const s = await swState('live'); return s && !isDown(s.transportError) && s.events >= 12; }, { timeout: 90000, what: 'recovery after the server restart' });
   await until(async () => ((await serverHealth())?.sse?.open ?? 0) >= 1, { timeout: 60000, what: 'SSE stream re-established' });
+  await until(async () => page.evaluate(() => document.getElementById('banner').hidden), { timeout: 30000, what: 'the banner to clear after recovery' });
   results.note = `recovered ${Math.round((Date.now() - t0) / 1000)} s after the restart`;
   await page.close();
 });
@@ -221,12 +231,14 @@ scenario('E07', 'X3', 'a new LIVE fixture raises exactly one browser notificatio
   await page.close();
 });
 
-scenario('E08', 'X1 X9', 'settings persist in chrome.storage; the Settings dialog saves server address and token (custom hosts need a browser permission prompt: not automatable)', async () => {
+scenario('E08', 'X1 X9', 'settings persist in chrome.storage; the Settings view saves server address and token (custom hosts need a browser permission prompt: not automatable)', async () => {
   const page = await openApp();
   await until(async () => (await cards(page)) > 0 || remote, { what: 'cards' });
   await page.click('#settingsButton');
-  await page.selectOption('#theme', 'dark');
+  await page.click('[data-settings-section="display"]');
+  await page.click('#setLogos');               // a display preference, saved to chrome.storage immediately
   await sleep(500);
+  await page.click('[data-settings-section="server"]');
   const before = await swEval(async () => (await chrome.storage.local.get('server')).server);
   // eslint-disable-next-line no-undef -- evaluated inside the extension page / worker, not in Node
   const defaultBase = await page.evaluate(() => ServerConfig.DEFAULT_BASE);
@@ -235,18 +247,18 @@ scenario('E08', 'X1 X9', 'settings persist in chrome.storage; the Settings dialo
   await Promise.all([page.waitForEvent('load'), page.click('#serverSave')]);
   const saved = await swEval(async () => (await chrome.storage.local.get(['server', 'prefs'])));
   if (saved.server.token !== 'replacement-token-1234567890' || saved.server.base !== defaultBase) throw new Error('server settings not saved: ' + JSON.stringify({ ...saved.server, token: '…' }));
-  if (saved.prefs.theme !== 'dark') throw new Error('theme not persisted');
+  if (saved.prefs.teamLogos !== false) throw new Error('display preference not persisted');
+  await swEval(async () => { const { prefs } = await chrome.storage.local.get('prefs'); await chrome.storage.local.set({ prefs: { ...prefs, teamLogos: true } }); });
   await swEval(async (b) => { await chrome.storage.local.set({ server: b }); }, before);
   await page.close();
 });
 
-scenario('E09', 'X1 X4', 'odds dialog opens from a LIVE card and lists markets (odds are an opt-in, hidden-by-default feature)', async () => {
-  let page = await openApp();
-  await page.evaluate(async () => { prefs.hideOdds = false; await chrome.storage.local.set({ prefs }); });
-  await page.reload(); await page.close(); page = await openApp();
-  await until(async () => (await cards(page)) >= 1, { what: 'cards' });
-  await page.locator('article.card [data-book-odds]').first().click();
-  await until(async () => page.evaluate(() => { const m = document.getElementById('modal'); return m?.open && m.textContent.trim().length > 40; }), { timeout: 20000, what: 'odds dialog content' });
+scenario('E09', 'X1 X4', 'selecting a LIVE match opens the detail panel with bookmakers and priced markets (odds are on by default in 9.0)', async () => {
+  const page = await openApp();
+  await until(async () => (await cards(page)) >= 1, { what: 'rows' });
+  await page.locator('#content .list[data-view="live"] article.match').first().click();
+  // Staging has real markets; the local mock bookmaker serves none, so there the panel must say so explicitly.
+  await until(async () => page.evaluate((needPrices) => !document.getElementById('detailPane').hidden && document.querySelector('#dpBooks [data-dp-book]') && (document.querySelector('#dpMarkets .outcome') || (!needPrices && document.querySelector('#dpMarkets .state') && !document.querySelector('#dpMarkets [aria-busy], #dpMarkets .skeleton'))), remote), { timeout: 20000, what: remote ? 'detail panel with priced markets' : 'detail panel with markets or an explicit no-markets state' });
   if (page.errors.length) throw new Error(page.errors.join(' | '));
   await page.close();
 });
@@ -315,17 +327,18 @@ scenario('E14', 'X9', '401 from the server: the server message reaches the user 
 
 scenario('E15', 'X1', 'browser restart with the same profile: stored preferences and server settings survive and the feed comes back (chrome.runtime.reload() itself cannot be automated: a flag-loaded extension is not re-enabled)', async () => {
   const page = await openApp();
-  await until(async () => (await cards(page)) >= 12, { what: 'LIVE cards' });
+  await until(async () => (await cards(page)) >= LIVE_MIN, { what: 'LIVE rows' });
   await swEval(async () => { await chrome.storage.local.set({ e2eMarker: 'kept' }); });
-  await page.evaluate(async () => { prefs.theme = 'light'; await chrome.storage.local.set({ prefs }); });
+  await page.evaluate(async () => { prefs.liveSort = 'asc'; await chrome.storage.local.set({ prefs }); });
   await sleep(800);
   await context.close();
   await launch();
   const marker = await swEval(async () => (await chrome.storage.local.get(['e2eMarker', 'prefs', 'server']))); 
-  if (marker.e2eMarker !== 'kept' || marker.prefs?.theme !== 'light') throw new Error('chrome.storage lost data across the browser restart');
+  if (marker.e2eMarker !== 'kept' || marker.prefs?.liveSort !== 'asc') throw new Error('chrome.storage lost data across the browser restart');
   if (!marker.server?.base) throw new Error('server settings lost across the restart');
   const again = await openApp();
-  await until(async () => (await cards(again)) >= 12, { timeout: 40000, what: 'cards after the browser restart' });
+  await until(async () => (await cards(again)) >= LIVE_MIN, { timeout: 40000, what: 'rows after the browser restart' });
+  await again.evaluate(async () => { prefs.liveSort = 'league'; await chrome.storage.local.set({ prefs }); });
   await again.close();
 });
 
@@ -357,7 +370,7 @@ scenario('E17', 'X2', 'SSE stream goes silent (half-dead connection): the worker
 scenario('E18', 'X1 X2 X4', 'LIVE odds provider GGBET <-> DataBet: requests follow the choice, providers never mix, the choice survives a reopen, an unavailable provider is explicit', async () => {
   const shots = process.env.E2E_SCREENSHOTS || '';
   const shot = async (page, name) => { if (shots) await page.screenshot({ path: path.join(shots, name) }); };
-  const rowSources = (page) => page.$$eval('article.card [data-source-ref]', (rows) => [...new Set(rows.map((r) => r.dataset.sourceRef.split(':')[0]))]);
+  const rowSources = (page) => page.$$eval('#content .list[data-view="live"] article.match [data-source-ref]', (rows) => [...new Set(rows.map((r) => r.dataset.sourceRef.split(':')[0]))]);
   const pressed = (page) => page.evaluate(() => ({ ggbet: document.getElementById('ggbet').getAttribute('aria-pressed'), databet: document.getElementById('databet').getAttribute('aria-pressed') }));
   const notice = (page) => page.evaluate(() => { const n = document.getElementById('providerNotice'); return n && !n.hidden ? n.textContent : ''; });
   let page = await openApp();
@@ -374,8 +387,12 @@ scenario('E18', 'X1 X2 X4', 'LIVE odds provider GGBET <-> DataBet: requests foll
   if (!remote && proxyState.liveProviders.some((p) => p !== 'databet')) throw new Error('a LIVE request after the switch did not name DataBet: ' + proxyState.liveProviders.join(','));
   await until(async () => (await cards(page)) >= 1, { what: 'LIVE cards after the switch' });
   await until(async () => !(await rowSources(page)).includes('ggbet'), { what: 'no GGBET rows while DataBet is selected' });
-  if (remote) await until(async () => (await rowSources(page)).includes('databet'), { timeout: 30000, what: 'DataBet rows from the real feed' });
+  // Staging: DataBet rows from the real feed, or (when its upstream is down) the explicit "unavailable" notice.
+  if (remote) await until(async () => (await rowSources(page)).includes('databet') || /DataBet временно недоступен/.test(await notice(page)), { timeout: 30000, what: 'DataBet rows or the explicit DataBet-unavailable notice' });
   else await until(async () => /DataBet временно недоступен/.test(await notice(page)), { what: 'explicit "DataBet unavailable" notice (DataBet is disabled on the local server)' });
+  // A provider outage is not a server outage: the server banner stays hidden and the other bookmakers keep their rows.
+  if (await page.evaluate(() => !document.getElementById('banner').hidden)) throw new Error('provider outage shown as a server outage');
+  if ((await cards(page)) < 1) throw new Error('rows vanished while the provider is unavailable');
   await shot(page, remote ? 'provider-databet-selected.png' : 'provider-databet-unavailable.png');
   // The choice survives closing and reopening the extension page.
   await page.close(); page = await openApp();
@@ -385,9 +402,76 @@ scenario('E18', 'X1 X2 X4', 'LIVE odds provider GGBET <-> DataBet: requests foll
   // Switch back to GGBET from the notice / selector.
   if (!remote && await notice(page)) await page.click('#providerNotice [data-switch-provider="ggbet"]'); else await page.click('#ggbet');
   await until(async () => (await pressed(page)).ggbet === 'true' && (await pressed(page)).databet === 'false', { what: 'GGBET selected again' });
-  await until(async () => !(await rowSources(page)).includes('databet') && !(await notice(page)), { what: 'GGBET view without DataBet rows or notice' });
-  if (remote) await until(async () => (await rowSources(page)).includes('ggbet'), { timeout: 30000, what: 'GGBET rows from the real feed again' });
+  await until(async () => !(await rowSources(page)).includes('databet') && !/DataBet временно недоступен/.test(await notice(page)), { what: 'GGBET view without DataBet rows or the DataBet notice' });
+  if (remote) await until(async () => (await rowSources(page)).includes('ggbet') || /GGBET временно недоступен/.test(await notice(page)), { timeout: 30000, what: 'GGBET rows or the explicit GGBET-unavailable notice' });
   if (page.errors.length) throw new Error(page.errors.join(' | '));
+  await page.close();
+});
+
+scenario('E19', 'P1', 'instant navigation: once a section has been visited, switching to it paints in under 100 ms (no network wait)', async () => {
+  const page = await openApp();
+  await until(async () => (await cards(page)) >= 1, { what: 'rows' });
+  const tabs = ['prematch', 'results', 'compare', 'history', 'live'];
+  for (const tab of tabs) { await clickTab(page, tab); await sleep(remote ? 2500 : 1200); }   // warm every section once
+  const runs = Object.fromEntries(tabs.map((t) => [t, []]));
+  for (let round = 0; round < 3; round++) for (const tab of tabs) {
+    runs[tab].push(await timed(page, `document.querySelector('#tabs [data-tab="${tab}"]').click()`, `document.querySelector('#tabs [data-tab="${tab}"]').getAttribute('aria-current')==='page' && !document.querySelector('#content .list[data-view="${tab}"]').hidden && document.querySelector('#content .list[data-view="${tab}"]').childElementCount > 0`));
+    await sleep(300);
+  }
+  const times = Object.fromEntries(tabs.map((t) => [t, [...runs[t]].sort((a, b) => a - b)[1]]));   // median of 3
+  results.note = Object.entries(times).map(([k, v]) => `${k} ${v} ms`).join(', ');
+  const slow = Object.entries(times).filter(([, v]) => v < 0 || v > 100);
+  if (slow.length) throw new Error('slow switches: ' + results.note);
+  if (page.errors.length) throw new Error(page.errors.join(' | '));
+  await page.close();
+});
+
+scenario('E20', 'P2 X4', 'cached detail: reopening a match renders from cache in under 100 ms and is refreshed in the background (stale-while-revalidate)', async () => {
+  const page = await openApp();
+  await until(async () => (await cards(page)) >= 2, { what: 'two rows' });
+  const rows = page.locator('#content .list[data-view="live"] article.match');
+  const first = await rows.nth(0).getAttribute('data-id');
+  await rows.nth(0).click();
+  const ready = remote ? `document.querySelector('#dpMarkets .outcome')` : `(document.querySelector('#dpMarkets .outcome') || document.querySelector('#dpMarkets .state')) && !document.querySelector('#dpMarkets .skeleton')`;
+  await until(async () => page.evaluate((c) => new Function(`return (${c})`)(), ready), { timeout: 20000, what: 'markets (or the explicit no-markets state) of the first match' });
+  await rows.nth(1).click(); await sleep(1500);
+  const click = (id) => `document.querySelector(${JSON.stringify(`#content .list[data-view="live"] [data-id="${id}"]`)}).click()`;
+  const ms = await timed(page, click(first), `DetailPanel.currentId()===${JSON.stringify(first)} && ${ready}`);
+  results.note = `cached reopen ${ms} ms`;
+  if (ms < 0 || ms > 100) throw new Error(`cached detail took ${ms} ms`);
+  await page.close();
+});
+
+scenario('E21', 'X1', 'filters and the chosen detail tab persist across sections and a reload', async () => {
+  let page = await openApp();
+  await until(async () => (await cards(page)) >= 1, { what: 'rows' });
+  const name = (await page.locator('#content .list[data-view="live"] article.match .team .name').first().textContent()).trim();
+  await page.fill('#search', name.slice(0, 6)); await sleep(400);
+  await clickTab(page, 'results'); await sleep(300); await clickTab(page, 'live');
+  if ((await page.inputValue('#search')) !== name.slice(0, 6)) throw new Error('LIVE search was not kept across sections');
+  await page.locator('#content .list[data-view="live"] article.match').first().click();
+  await until(async () => page.locator('#dpTabs [data-dp-tab="info"]').count(), { what: 'detail tabs' });
+  await page.click('#dpTabs [data-dp-tab="info"]'); await sleep(400);
+  await page.close(); page = await openApp();
+  await until(async () => (await page.inputValue('#search')) === name.slice(0, 6), { what: 'search restored after reopening' });
+  await page.locator('#content .list[data-view="live"] article.match').first().click();
+  await until(async () => page.evaluate(() => document.querySelector('#dpTabs [data-dp-tab="info"]')?.getAttribute('aria-selected') === 'true'), { what: 'detail tab restored' });
+  await page.fill('#search', ''); await page.click('#dpTabs [data-dp-tab="odds"]'); await sleep(400);
+  await page.close();
+});
+
+scenario('E22', 'P3 X2', 'cold start while the server is down: the last-known LIVE list renders at once (marked as saved), and the outage is explicit', async () => {
+  let page = await openApp();
+  await until(async () => (await cards(page)) >= 12, { what: 'LIVE rows' });
+  await sleep(1500); await page.close();
+  await stopServer('SIGKILL');
+  page = await openApp();
+  const ms = await page.evaluate(async () => { const t0 = performance.now(); while (performance.now() - t0 < 5000) { if (document.querySelectorAll('#content .list[data-view="live"] article.match').length >= 12) return Math.round(performance.now()); await new Promise((r) => requestAnimationFrame(r)); } return -1; });
+  if (ms < 0) throw new Error('no last-known rows while the server is down');
+  if (!/сохранено|обновлено/.test(await page.textContent('#viewUpdated'))) throw new Error('saved data is not labelled');
+  results.note = `last-known rows painted at ${ms} ms after navigation`;
+  startServer();
+  await until(async () => { const s = await swState('live'); return s && !isDown(s.transportError) && s.events >= 12; }, { timeout: 90000, what: 'recovery' });
   await page.close();
 });
 
@@ -404,7 +488,7 @@ try {
   } else if (!process.env.STAGING_URL) throw new Error('--remote needs STAGING_URL (and STAGING_TOKEN)');
   await launch();
   await setServer();
-  const remoteOk = new Set(['E01', 'E02', 'E03', 'E08', 'E09', 'E15', 'E16', 'E18']);
+  const remoteOk = new Set(['E01', 'E02', 'E03', 'E08', 'E09', 'E15', 'E16', 'E18', 'E19', 'E20', 'E21']);
   for (const s of scenarios) {
     if (only.size && !only.has(s.id)) continue;
     if (s.id === 'E06' && !only.has('E06')) { report.push({ id: s.id, covers: s.covers, title: s.title, status: 'SKIP', detail: 'NOT VERIFIABLE HERE: Playwright/CDP keeps the extension worker alive, so the browser never idles it out (and forcing it with ServiceWorker.stopAllWorkers leaves it unrecoverable); run with --only E06 on a real browser' }); console.log(`SKIP  E06  ${s.title}`); continue; }

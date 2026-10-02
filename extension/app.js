@@ -1,572 +1,696 @@
 'use strict';
-const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const ZONE='Asia/Yerevan',BASE=ServerConfig.base,LEAGUE_PAGE_SIZE=120,HISTORY_PAGE_SIZE=500;
-const timeFmt=new Intl.DateTimeFormat('ru-RU',{timeZone:ZONE,hour:'2-digit',minute:'2-digit'}),secondFmt=new Intl.DateTimeFormat('ru-RU',{timeZone:ZONE,hour:'2-digit',minute:'2-digit',second:'2-digit'}),dateFmt=new Intl.DateTimeFormat('ru-RU',{timeZone:ZONE,day:'2-digit',month:'2-digit'});
+/* Esports Monitor 9.0 - application shell.
+
+   Data flow: the service worker owns the LIVE/line feeds (poll + SSE + notifications) and forwards snapshots and
+   patches through a port. This page keeps them in memory, saves the last-known copy to disk, and renders every view
+   from memory: a tab switch or a cached detail never waits for the network. Results, history and event details go
+   through Store resources (stale-while-revalidate, LRU, deduplicated and cancellable requests). */
+
+// ---------------------------------------------------------------------------------------------------- basics ----
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ZONE='Asia/Yerevan',BASE=ServerConfig.base,HISTORY_PAGE_SIZE=200,RESULTS_PAGE_SIZE=150,LINE_SCHEDULE_PAGE=150;
+const timeFmt=new Intl.DateTimeFormat('ru-RU',{timeZone:ZONE,hour:'2-digit',minute:'2-digit'}),secondFmt=new Intl.DateTimeFormat('ru-RU',{timeZone:ZONE,hour:'2-digit',minute:'2-digit',second:'2-digit'}),dateFmt=new Intl.DateTimeFormat('ru-RU',{timeZone:ZONE,day:'2-digit',month:'2-digit'}),weekdayFmt=new Intl.DateTimeFormat('ru-RU',{timeZone:ZONE,weekday:'short',day:'numeric',month:'long'});
 const stamp=(ms,full=false,seconds=false)=>Number(ms)>0?`${full?dateFmt.format(ms)+' ':''}${(seconds?secondFmt:timeFmt).format(ms)}`:'—';
 const dayKey=(ms=Date.now())=>new Date(ms+14400000).toISOString().slice(0,10),shiftDay=(d,n)=>new Date(Date.parse(d+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
-const labels={live:'LIVE',results:'Результаты',prematch:'Линия',history:'История',compare:'Сравнение расписаний',leagues:'Лиги и связи',debug:'Диагностика'};
+const VIEWS=['live','prematch','results','compare','history'];
+const BOOKS=['astek','fonbet','pinnacle','ggbet','databet'];
 const providerName=source=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET',databet:'DataBet'})[source]||source;
-// GGBET and DataBet are alternative LIVE odds providers (OddsProvider): exactly one of them is shown.
-const providers=['astek','fonbet','pinnacle','ggbet','databet'];
-// League linking covers the four bookmakers it was built for; DataBet leagues are not linked there.
-const leagueProviders=['astek','fonbet','pinnacle','ggbet'];
-const prematchProviders=['astek','fonbet','pinnacle'];
-let prefs={pinnacle:true,ggbet:true,databet:true,liveOddsProvider:'ggbet',theme:'system',linkBrowser:'current',astek:true,fonbet:true,dotaStatsEnabled:true,teamLogos:true,favorites:[],hiddenLeagues:[],notifications:{live:false,prematch:false,favoritesOnly:false,sound:false}},snapshots={},tab='live',date=dayKey(),resultCache=new Map(),history=null,catalog=null,workingLinks=[],selection=new Set(),scoreValues=new Map(),changes=new Map(),imported=null,importText='',comparison=null,compareFilter='all',busy=false,viewSignature='',port=null,calendarMonth='';
-const pending=new Map(),errors=[],uiDirty=new Set(),uiInvalidateTimers=new Map();
 const norm=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
-const refs=e=>e.sourceRefs?.length?e.sourceRefs:[e];
+const refs=e=>e?.sourceRefs?.length?e.sourceRefs:[e].filter(Boolean);
+const alphabet=new Intl.Collator('ru',{sensitivity:'base',numeric:true});
 const isExtraEvent=e=>PresentationUtils.isExtraEvent(e);
-const eventKeys=e=>[...(e.entityAliases||[]),...refs(e).flatMap(r=>[...(r.aliases||[]),`${r.source}:${r.sourceEventId||r.id}`])];
-const matchFavorite=e=>eventKeys(e).some(k=>prefs.favorites.includes(k));
-const favorite=e=>[e.leagueKey,...refs(e).map(r=>LeagueModel.id(r)),...eventKeys(e)].some(k=>prefs.favorites.includes(k));
-let prefsSaveTimer=0;
-function savePrefs(){clearTimeout(prefsSaveTimer);prefsSaveTimer=setTimeout(()=>chrome.storage.local.set({prefs}).catch(report),80);}
-function flushPrefs(){clearTimeout(prefsSaveTimer);prefsSaveTimer=0;return chrome.storage.local.set({prefs}).catch(()=>{});}
-const systemTheme=matchMedia('(prefers-color-scheme: dark)');
-function theme(){document.body.classList.toggle('pinned-menu',!!prefs.pinMenu);$('pinMenuButton').setAttribute('aria-pressed',!!prefs.pinMenu);$('pinMenuButton').setAttribute('aria-label',prefs.pinMenu?'Открепить меню':'Закрепить меню');const mode=['dark','light','system'].includes(prefs.theme)?prefs.theme:'system';try{localStorage.setItem('monitor-theme',mode);}catch{}document.documentElement.dataset.theme=mode==='system'?(systemTheme.matches?'dark':'light'):mode;}
-systemTheme.addEventListener('change',theme);
-window.addEventListener('storage',e=>{if(e.key==='monitor-theme'&&e.newValue){prefs.theme=e.newValue;theme();}});
+
+// DEV instrumentation: interaction timings in window.__perf; printed when localStorage.devPerf === '1'.
+const Perf=(()=>{const log=[],dev=(()=>{try{return localStorage.getItem('devPerf')==='1';}catch{return false;}})();
+ function measure(name,start){const ms=Math.round((performance.now()-start)*10)/10;log.push({name,ms,at:Date.now()});if(log.length>300)log.shift();if(dev)console.debug(`[perf] ${name}: ${ms} ms`);return ms;}
+ function frame(name){const start=performance.now();requestAnimationFrame(()=>requestAnimationFrame(()=>measure(name,start)));}
+ return {measure,frame,log};})();
+window.__perf=Perf.log;
+
+// ---------------------------------------------------------------------------------------------------- prefs -----
+const DEFAULT_PREFS={astek:true,fonbet:true,pinnacle:true,ggbet:true,databet:true,liveOddsProvider:'ggbet',linkBrowser:'current',openMode:'window',dotaStatsEnabled:true,teamLogos:true,favorites:[],hiddenLeagues:[],hiddenLeaguesByView:{},notifications:{live:false,prematch:false,favoritesOnly:false,sound:false},viewFilters:{},liveSort:'league',lineMode:'leagues',compareMode:'odds',compareScope:'live',showExtras:true,hideOdds:false,historyEnabled:true,detailTab:'odds',detailBook:'',onlyFavorites:false};
+let prefs={...DEFAULT_PREFS};
+let prefsTimer=0;
+function savePrefs(){clearTimeout(prefsTimer);prefsTimer=setTimeout(()=>chrome.storage.local.set({prefs}).catch(report),80);}
+function flushPrefs(){clearTimeout(prefsTimer);prefsTimer=0;return chrome.storage.local.set({prefs}).catch(()=>{});}
+function setPref(key,value){prefs[key]=value;savePrefs();}
+function migratePrefs(){
+ if(typeof prefs.dotaStatsEnabled!=='boolean'){prefs.dotaStatsEnabled=typeof prefs.hawkEnabled==='boolean'?prefs.hawkEnabled:true;delete prefs.hawkEnabled;}
+ if(typeof prefs.teamLogos!=='boolean')prefs.teamLogos=true;
+ if(!['current','system','chrome','edge','firefox'].includes(prefs.linkBrowser))prefs.linkBrowser='current';
+ if(!prefs.scheduleMerged690){const old=prefs.hiddenLeaguesByView?.schedule||[];prefs.hiddenLeaguesByView={...prefs.hiddenLeaguesByView,prematch:[...new Set([...(prefs.hiddenLeaguesByView?.prematch||[]),...old])]};delete prefs.hiddenLeaguesByView.schedule;prefs.scheduleMerged690=true;}
+ if(!prefs.splitHistory607){prefs.hiddenLeaguesByView={...prefs.hiddenLeaguesByView,history:[...(prefs.hiddenLeaguesByView?.results||[])]};prefs.splitHistory607=true;}
+ // 9.0: odds, History and the detail panel are part of the product; League links moved to Settings.
+ if(!prefs.ui900){prefs.hideOdds=false;prefs.historyEnabled=true;prefs.liveSort='league';if(['leagues','debug','schedule'].includes(prefs.lastTab))prefs.lastTab='live';prefs.lineMode=prefs.lineScheduleMode===true?'schedule':'leagues';prefs.ui900=true;}
+ if(!['league','asc','desc'].includes(prefs.liveSort))prefs.liveSort='league';
+ if(!['leagues','schedule'].includes(prefs.lineMode))prefs.lineMode='leagues';
+ if(!['odds','schedule'].includes(prefs.compareMode))prefs.compareMode='odds';
+ if(!['live','prematch'].includes(prefs.compareScope))prefs.compareScope='live';
+ for(const key of ['favorites','hiddenLeagues'])if(!Array.isArray(prefs[key]))prefs[key]=[];
+ prefs.notifications={...DEFAULT_PREFS.notifications,...prefs.notifications};
+}
+const bookVisible=source=>prefs[source]!==false&&OddsProvider.visible(source,prefs);
+const viewBooks=view=>(view==='live'?['astek','fonbet','pinnacle',OddsProvider.selected(prefs)]:view==='results'?['astek','fonbet']:view==='history'?['astek','fonbet','pinnacle']:['astek','fonbet','pinnacle']).filter(s=>prefs[s]!==false);
+
+// ---------------------------------------------------------------------------------------------------- toast/errors
+const clientErrors=[];
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,3200);}
-function report(error){const message=error?ServerConfig.errorText(error):'Неизвестная ошибка';errors.push({at:new Date().toISOString(),message});if(errors.length>50)errors.shift();toast(message);}
-async function request(path,options={}){
- const key=options.method==='POST'?null:path;if(key&&pending.has(key))return pending.get(key);
- const run=(async()=>{const timeout=path==='/api/prematch/compare'||path.startsWith('/api/ui/history')||path.startsWith('/api/ui/results')?35000:15000;const response=await fetch(BASE+path,{cache:'no-store',signal:AbortSignal.timeout(timeout),...options,headers:ServerConfig.headers(options.headers)});const data=await response.json();if(!response.ok)throw new Error(data.error||`HTTP ${response.status}`);return data;})().finally(()=>{if(key)pending.delete(key);});if(key)pending.set(key,run);return run;
-}
-const detailCache=new Map();
-// LIVE detail belongs to the selected odds provider: never reuse a GGBET detail while DataBet is selected.
-const detailKey=(view,id)=>OddsProvider.detailKey(view,id,prefs);
-async function fullEvent(event,view=tab,{force=false}={}){
- if(!event||!['live','prematch'].includes(view))return event;
- const key=detailKey(view,event.id),cached=detailCache.get(key);
- if(!force&&cached&&Date.now()-cached.at<20000)return cached.event;
- const data=await request('/api/ui/event-detail?view='+encodeURIComponent(view)+'&id='+encodeURIComponent(event.id)+(view==='live'?'&provider='+OddsProvider.selected(prefs):'')+(force?'&fresh=1':''));
- const hydrated=data?.marketDetailErrors&&Object.keys(data.marketDetailErrors).length?{...data.event,marketDetailErrors:data.marketDetailErrors}:data.event;
- detailCache.delete(key);detailCache.set(key,{event:hydrated,at:Date.now()});
- while(detailCache.size>12)detailCache.delete(detailCache.keys().next().value);
- return hydrated;
-}
-function rules(){return [catalog,snapshots.live?.leagueRules,snapshots.prematch?.leagueRules].filter(Boolean).sort((a,b)=>(b.revision||0)-(a.revision||0))[0]||{};}
-function hiddenKeys(view=tab){return [...(prefs.hiddenLeagues||[]),...(prefs.hiddenLeaguesByView?.[view]||[])];}
-function visible(rows,{view=tab,ignoreCategory=false}={}){const rule=rules(),state={publishedLeagueLinks:rule.links||[],excludedLeagueKeys:[...hiddenKeys(view),...(rule.visibility?.excludedLeagueKeys||[])],excludedCategoryKeys:rule.visibility?.excludedCategoryKeys||[]},q=norm($('search').value).split(' ').filter(Boolean),category=ignoreCategory?'':$('category').value,availability=$('availability').value;
- return (rows||[]).map(e=>MatchView.project(e,prefs,view)).filter(e=>{if(!e)return false;const sources=new Set(refs(e).map(r=>r.source));const available=availability==='all'||(availability==='both'&&sources.size>1)||(availability==='unique'&&sources.size===1)||(sources.size===1&&sources.has(availability));return inStartWindow(e,view)&&inHistoryStartWindow(e,view)&&available&&(view!=='history'||MatchView.historyPhase(e,$('historyPhase').value))&&(!category||norm(e.category)===category)&&!LeagueModel.hidden(e,state)&&(!prefs.onlyFavorites||favorite(e))&&($('showExtras').checked||!isExtraEvent(e))&&q.every(t=>norm([e.category,e.league,e.team1,e.team2,...refs(e).map(r=>r.league)].join(' ')).includes(t));});
-}
-function inStartWindow(e,view=tab){if(view==='live')return true;const end=view==='results'&&date<dayKey()?Date.parse(date+'T23:59:59.999+04:00'):Date.now();return MatchView.inWindow(e,$('startWindow').value,view,end);}
-function inHistoryStartWindow(e,view=tab){if(view!=='history')return true;const hours=Number($('historyStartWindow').value||0);if(!(hours>0))return true;const at=Number(e.startAt||0),now=Date.now();return at>=now&&at<=now+hours*3600000;}
-function timeFilterOptions(){$('startWindow').hidden=tab==='live';const past=['history','live','results'].includes(tab),archived=tab==='results'&&date<dayKey(),title=tab==='history'?'Появление в линии':tab==='live'?'Время появления в LIVE':tab==='results'?'Время результата':'Время начала';$('startWindow').setAttribute('aria-label',title);$('startWindow').innerHTML='<option value="">'+(tab==='history'?'Любое время появления':tab==='live'?'Все LIVE':tab==='results'?'Любое время результата':'Любое время начала')+'</option>'+[0.5,1,6,12,24].map(h=>'<option value="'+h+'">'+(past?(archived?(h===0.5?'Последние 30 минут дня':h===24?'Весь выбранный день':'Последние '+h+' ч дня'):(h===0.5?'За последние 30 минут':h===1?'За последний час':h===24?'За последние сутки':'За последние '+h+' ч')):(h===0.5?'В ближайшие 30 минут':h===1?'В ближайший час':h===24?'В ближайшие сутки':'В ближайшие '+h+' ч'))+'</option>').join('');$('startWindow').value=prefs.timeWindows?.[tab]||'';$('historyStartWindow').hidden=tab!=='history';$('historyStartWindow').value=prefs.historyStartWindow||'';$('historyPhase').hidden=tab!=='history';$('historyPhase').value=prefs.historyPhase||'';$('liveSort').hidden=tab!=='live';$('liveSort').value=prefs.liveSort==='asc'?'asc':'desc';}
-const alphabet=new Intl.Collator('en',{sensitivity:'base',numeric:true});
-const leagueText=value=>{let text=(ScheduleImport.leagueInfo(value).league||value||'').replace(/\bbo\s*\d+\b/gi,'').replace(/^[\s.,:;–—-]+|[\s.,:;–—-]+$/g,'').trim();text=text.replace(/\bUnited\s+21\b/gi,'United21');const suffix=/(?:\s*[:.–—-]\s*)(?:division|div\.?|season|stage|group|groups|playoffs?|qualifiers?|qualification|regular season|swiss stage|upper bracket|lower bracket)\b.*$/i;if(suffix.test(text))text=text.replace(suffix,'').trim();text=text.replace(/\s+series$/i,'').trim();return text||String(value||'').trim();};
-const leagueTitle=e=>leagueText(e.league);
-function lineLeagueBucket(e){
- const logical=String(e?.leagueKey||'');if(logical.startsWith('logical:manual:'))return logical;
- const raw=leagueText(e?.league||'').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim();
- return `name:${norm(e?.category)}:${raw}`;
-}
-function gameIcon(category){const {key,abbr}=GameCategories.info(category);return '<span class="game-icon icon-'+key+'" aria-hidden="true">'+abbr+'</span>';}
-function starIcon(active){return '<svg viewBox="0 0 24 24" fill="'+(active?'currentColor':'none')+'" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.55 4.44 1.08 6.26L12 17.35l-5.63 2.95 1.08-6.26L2.9 9.6l6.3-.9L12 3Z"/></svg>';}
-function eventUrl(r){try{const u=new URL(r.url);return ['https:','http:'].includes(u.protocol)?u.href:'';}catch{return '';}}
-function eventLogo(value){if(/^\/api\/team-logos\/[a-f0-9]{32}$/.test(value||''))return BASE+value;try{const u=new URL(value);return u.protocol==='https:'&&u.hostname==='v2l.traincdn.com'&&/^\/sfiles\/logo_teams\/[a-f\d]{32}\.(png|webp|jpe?g)$/i.test(u.pathname)?u.href:'';}catch{return '';}}
-const rememberedTeamLogos=new Map();
-const hydratedLineGroups=new Set();
-const leagueListLimits=new Map(leagueProviders.map(source=>[source,LEAGUE_PAGE_SIZE]));
-function lineGroupContentReady(key){if((prefs.expandedLineGroups||[]).includes(key))hydratedLineGroups.add(key);return hydratedLineGroups.has(key);}
-function stableTeamLogo(e,side,sources=[]){const name=e?.['team'+side]||'',key=norm((e?.category||'')+'|'+name),source=sources.find(r=>r.source==='astek')||sources.find(r=>r?.['team'+side+'Logo']),fresh=eventLogo(e?.['team'+side+'Logo']||source?.['team'+side+'Logo']);if(fresh){rememberedTeamLogos.set(key,fresh);if(rememberedTeamLogos.size>2000)rememberedTeamLogos.delete(rememberedTeamLogos.keys().next().value);return fresh;}return rememberedTeamLogos.get(key)||'';}
-const teamLogoObserver='IntersectionObserver' in window?new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){const image=entry.target,url=image.dataset.src;if(url&&image.getAttribute('src')!==url)image.src=url;teamLogoObserver.unobserve(image);}},{rootMargin:'500px 0px'}):null;
-function bindTeamLogos(root=document){const enabled=prefs.teamLogos!==false;for(const image of root.querySelectorAll?.('img.team-logo[data-src]')||[]){const wanted=image.dataset.src,failedAt=Number(image.dataset.logoFailedAt||0);image.draggable=false;if(!image.dataset.logoEvents){image.dataset.logoEvents='1';image.addEventListener('load',()=>{if(prefs.teamLogos!==false)image.hidden=false;delete image.dataset.logoFailedAt;});image.addEventListener('error',()=>{image.hidden=true;image.dataset.logoFailedAt=String(Date.now());image.removeAttribute('src');});}if(!enabled){image.hidden=true;teamLogoObserver?.unobserve(image);continue;}image.hidden=false;if(image.dataset.logoBound==='1'&&image.dataset.logoObserved===wanted&&image.getAttribute('src')===wanted&&(!failedAt||Date.now()-failedAt<30000))continue;image.dataset.logoBound='1';image.dataset.logoObserved=wanted;if(teamLogoObserver)teamLogoObserver.observe(image);else if(wanted)image.src=wanted;}}
-function applyTeamLogoPreference(){const enabled=prefs.teamLogos!==false;document.documentElement.classList.toggle('team-logos-off',!enabled);bindTeamLogos($('content'));DotaStatsPanel.refreshAppearance?.();Cs2Panel.refreshAppearance?.();}
-function categoryOptions(rows,facets=null){const select=$('category'),value=select.value,groups=new Map();if(Array.isArray(facets))for(const f of facets){const label=String(f?.name||'Esports'),key=norm(label);groups.set(key,{label,count:Number(f?.count)||0});}else for(const e of rows){if(!refs(e).some(r=>prefs[r.source]!==false))continue;const key=norm(e.category),g=groups.get(key)||{label:e.category||'Esports',count:0};g.count++;groups.set(key,g);}if(value&&!groups.has(value))groups.set(value,{label:select.selectedOptions[0]?.textContent||value,count:0});const entries=[...groups].sort((a,b)=>a[1].label.localeCompare(b[1].label)),html='<option value="">Все игры</option>'+entries.map(([key,g])=>'<option value="'+esc(key)+'">'+esc(g.label)+'</option>').join('');if(select.innerHTML!==html){select.innerHTML=html;select.value=groups.has(value)?value:'';}$('gameChoice').innerHTML=select.value?gameIcon(groups.get(select.value)?.label)+esc(groups.get(select.value)?.label)+' · '+groups.get(select.value)?.count:'Все игры · '+[...groups.values()].reduce((n,g)=>n+g.count,0);const options='<button type="button" data-game="">Все игры</button>'+entries.map(([key,g])=>'<button type="button" data-game="'+esc(key)+'" aria-pressed="'+(select.value===key)+'">'+gameIcon(g.label)+'<span>'+esc(g.label)+'</span><b>'+g.count+'</b></button>').join('');if($('gameOptions').innerHTML!==options)$('gameOptions').innerHTML=options;}
-function lineTree(rows){const groups=new Map();for(const e of rows){const key=norm(e.category);if(!groups.has(key))groups.set(key,{name:e.category,leagues:new Map(),count:0});const group=groups.get(key),league=key+':'+lineLeagueBucket(e);group.count++;if(!group.leagues.has(league))group.leagues.set(league,[]);group.leagues.get(league).push(e);}return [...groups].sort((a,b)=>a[1].name.localeCompare(b[1].name)).map(([key,g])=>`<details class="category-group" data-tree-key="${esc(key)}" ${(prefs.expandedLineGroups||[]).includes(key)?'open':''}><summary>${gameIcon(g.name)}<strong>${esc(g.name)}</strong><span class="group-count">${g.count}</span></summary><div class="category-body">${[...g.leagues].sort((a,b)=>alphabet.compare(leagueTitle(a[1][0]),leagueTitle(b[1][0]))||alphabet.compare(a[0],b[0])).map(([league,list])=>`<details class="league-group" data-tree-key="${esc(league)}" ${(prefs.expandedLineGroups||[]).includes(league)?'open':''}><summary><span>${esc(leagueTitle(list[0]))}</span><span class="group-count">${list.length}</span><button class="icon-button" data-line-favorite="${esc(list[0].leagueKey||LeagueModel.id(refs(list[0])[0]))}" aria-label="Избранная лига" aria-pressed="${prefs.favorites.includes(list[0].leagueKey||LeagueModel.id(refs(list[0])[0]))}">${prefs.favorites.includes(list[0].leagueKey||LeagueModel.id(refs(list[0])[0]))?starIcon(true):starIcon(false)}</button></summary><div class="league-body">${lineGroupContentReady(league)?[...list].sort((a,b)=>Number(a.startAt||Infinity)-Number(b.startAt||Infinity)||alphabet.compare(a.id,b.id)).map(e=>card(e,{pre:true,heading:false})).join(''):''}</div></details>`).join('')}</div></details>`).join('');}
-function hydrateLineGroup(details){if(!details?.classList?.contains('league-group'))return;const key=details.dataset.treeKey;if(hydratedLineGroups.has(key)&&details.querySelector('.league-body')?.childElementCount)return;hydratedLineGroups.add(key);const list=lastLineRows.filter(e=>norm(e.category)+':'+lineLeagueBucket(e)===key).sort((a,b)=>Number(a.startAt||Infinity)-Number(b.startAt||Infinity)||alphabet.compare(a.id,b.id)),body=details.querySelector('.league-body');if(body){StableDOM.patch(body,list.map(e=>card(e,{pre:true,heading:false})).join(''));bindTeamLogos(body);}}
-function clearTreeBranch(set,key){set.delete(key);for(const value of [...set])if(value.startsWith(key+':'))set.delete(value);}
-function setTreeOpen(d,open){const key=d.dataset.treeKey;if(tab==='prematch'&&open&&d.classList.contains('league-group'))hydrateLineGroup(d);if(tab==='compare'){const expanded=new Set(prefs.comparisonExpanded||[]);if(open)expanded.add(key);else if(d.classList.contains('category-group'))clearTreeBranch(expanded,key);else expanded.delete(key);prefs.comparisonExpanded=[...expanded];if(!open&&d.classList.contains('category-group'))d.querySelectorAll('details[open]').forEach(child=>child.open=false);d.open=open;savePrefs();treeLabel();return;}const set=new Set(prefs.expandedLineGroups||[]);if(open)set.add(key);else if(d.classList.contains('category-group'))clearTreeBranch(set,key);else set.delete(key);prefs.expandedLineGroups=[...set];if(!open&&d.classList.contains('category-group'))d.querySelectorAll('details[open]').forEach(child=>child.open=false);d.open=open;savePrefs();treeLabel();}
-function treeLabel(){$('treeToggle').textContent=$('content').querySelector('.category-group[open]')?'Свернуть игры':'Раскрыть игры';}
-let liveBadgeKey='',liveBadgeCount=0;
-function refreshLiveBadge(){const s=snapshots.live,rule=rules(),key=JSON.stringify([s?.structureRevision||s?.revision||'',rule.revision,prefs.astek,prefs.fonbet,prefs.pinnacle,prefs.ggbet,prefs.databet,OddsProvider.selected(prefs),prefs.showExtras,hiddenKeys('live')]);if(key===liveBadgeKey)return;liveBadgeKey=key;const state={publishedLeagueLinks:rule.links||[],excludedLeagueKeys:[...hiddenKeys('live'),...(rule.visibility?.excludedLeagueKeys||[])],excludedCategoryKeys:rule.visibility?.excludedCategoryKeys||[]};liveBadgeCount=currentLiveRows().filter(e=>refs(e).some(r=>prefs[r.source]!==false&&OddsProvider.visible(r.source,prefs))&&!LeagueModel.hidden(e,state)&&($('showExtras').checked||!isExtraEvent(e))).length;$('liveCount').textContent=String(liveBadgeCount);}
-function sourceStatus(){refreshLiveBadge();updateProviderNotice();const s=snapshots.live,p=s?.providers||{};const html=providers.filter(source=>OddsProvider.visible(source,prefs)).map(source=>{const snapshot=source==='pinnacle'?snapshots.prematch:s,r=p[source]||(source==='pinnacle'?snapshots.prematch?.providers?.pinnacle:null),transport=!!snapshot?.transportError,oddsHealth=OddsProvider.isOddsProvider(source)&&r?.oddsProvider?OddsProvider.health(s,prefs):null,error=String((oddsHealth&&!oddsHealth.ok?oddsHealth.reason:'')||r?.lastError||'').trim(),http=Number(r?.lastHttpStatus||0),failed=transport||http>=400||!!error,partial=!!r?.partial,waiting=!r,cls=failed?'bad':partial||waiting?'warn':'good',status=failed?'ошибка':partial?'частичные данные':waiting?'ожидаем данные':'работает',detail=failed?(transport?'нет связи с сервером':error||`HTTP ${http}`):partial?'источник отвечает, но данные получены частично':waiting?'сервер ещё не прислал состояние источника':'источник отвечает; отсутствие новых событий не считается ошибкой',title=`${providerName(source)} · ${detail}`;return `<span class="provider-health ${cls}" title="${esc(title)}" aria-label="${esc(providerName(source)+' · '+status)}"><i aria-hidden="true"></i><b>${esc(providerName(source))}</b></span>`;}).join('');if($('feedStatus').innerHTML!==html)$('feedStatus').innerHTML=html;}
-function scoreMarkup(r,e={}){const text=PresentationUtils.scoreText(r,e)||'—';return esc(text).replace(/(\d+:\d+)/g,'<span class="map-pair">$1</span>');}
-function observeScores(snapshot){for(const e of snapshot?.events||[])for(const r of refs(e)){const key=`${r.source}:${r.sourceEventId||r.id}`,value=r.scoreText||'';if(scoreValues.has(key)&&scoreValues.get(key)!==value&&value)changes.set(key,Date.now());scoreValues.set(key,value);}if(changes.size>1000)changes.clear();}
-function cardTimeline(r){return (r.timeline||r.lifecycle||[]).filter(c=>tab!=='live'||!c.phase||c.phase==='live');}
-function lastLiveRemoval(r){const timeline=(r.timeline||[]).filter(c=>c.type==='removed'&&c.phase==='live').map(c=>Number(c.at)||0);const lifecycle=timeline.length?[]:(r.lifecycle||[]).filter(c=>c.type==='removed').map(c=>Number(c.at)||0);const removed=Math.max(0,...timeline,...lifecycle,Number(r.removedAt||0));return removed||Number(r.endedAt||0);}
-function card(e,{past=false,pre=false,heading=true}={}){
- const sources=MatchView.selected(e,prefs,tab).sort((a,b)=>a.source.localeCompare(b.source));
- const archive=past,finished=e.phase==='results'||e.phase==='removed';if(archive)pre=!finished&&e.phase!=='live';past=archive&&finished;
- const bestOf=Number(e.bestOf)||Math.max(0,...sources.map(r=>Number(r.bestOf)||Number(String(r.league||'').match(/\bbo\s*(\d+)/i)?.[1])||0)),id=encodeURIComponent(e.id),isFav=matchFavorite(e),format=bestOf?`<span class="bo">Bo${bestOf}</span>`:'',changesList=sources.flatMap(r=>cardTimeline(r).map(c=>({...c,provider:r.provider||r.source}))).sort((a,b)=>a.at-b.at),logo1=stableTeamLogo(e,1,sources),logo2=stableTeamLogo(e,2,sources);
- return `<article class="card ${isFav?'is-favorite':''} ${pre&&tab==='prematch'?'line-card':''} ${(DotaStatsPanel.isOpen(e.id)||Cs2Panel.isOpen(e.id))?'stats-open':''}" data-id="${esc(e.id)}" tabindex="0" aria-label="${esc(e.team1)} - ${esc(e.team2)}"><div class="card-top"><div class="card-info game-context">${heading?`${gameIcon(e.category)}<div><div class="game">${esc(e.category)}</div><div class="league">${esc(leagueTitle(e))}</div></div>`:''}</div><button class="icon-button" data-favorite="${id}" aria-label="${isFav?'Убрать из избранного':'Добавить в избранное'}" aria-pressed="${isFav}">${isFav?starIcon(true):starIcon(false)}</button><button class="icon-button" data-copy="${id}" aria-label="Копировать матч"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/></svg></button></div><div class="teams"><span class="team-names-copy" data-copy-text="${esc(PresentationUtils.matchPairText(e))}">${logo1?`<img class="team-logo" data-src="${esc(logo1)}" alt="" aria-hidden="true" draggable="false" width="20" height="20" loading="lazy" decoding="async" fetchpriority="low">`:''}<span class="team-name">${esc(e.team1)}</span> <span class="team-separator">-</span> ${logo2?`<img class="team-logo" data-src="${esc(logo2)}" alt="" aria-hidden="true" draggable="false" width="20" height="20" loading="lazy" decoding="async" fetchpriority="low">`:''}<span class="team-name">${esc(e.team2)}</span></span>${pre?` <span class="match-format">${format}</span>`:''}</div>${tab!=='live'&&e.displayMerged&&e.startDifferenceMinutes?`<div class="time-difference">Разница начала у контор: ${e.startDifferenceMinutes} мин</div>`:''}
- ${archive&&e.phase==='removed'?'<div class="phase-label">Ожидается финальный результат</div>':''}
- <div class="match-grid ${past?'past':pre?'pre':''}"><div class="column-title">Источник</div><div class="column-title">Начало</div><div class="column-title">${pre?'В линии':'В LIVE'}</div>${past?'<div class="column-title">Окончание</div>':''}${pre?'':`<div class="column-title score-title">${past?'Итог':'Счёт'} ${format}</div>`}
- ${sources.map(r=>{const key=`${r.source}:${r.sourceEventId||r.id}`,url=eventUrl(r);return `<div class="row" data-source-ref="${esc(key)}"><div class="source ${esc(r.source)}"><button class="source-link ${esc(r.source)}" data-open-url="${esc(url)}" ${url?'':'disabled'} aria-label="Открыть матч в ${providerName(r.source)}">${providerName(r.source)}</button></div><div class="stamp">${stamp(r.startAt,past||pre)}</div><div class="stamp">${stamp(pre?r.firstPrematchAt:r.enteredLiveAt,past||pre,!pre)}</div>${past?`<div class="stamp">${stamp(lastLiveRemoval(r),true,true)}</div>`:''}${pre?'':`<div data-score-label="${past?'Итог':'Счёт'}${e.bestOf?' · Bo'+e.bestOf:''}" class="score"><button type="button" data-score-history="${id}" class="score-value ${!past&&Date.now()-(changes.get(key)||0)<2000?'changed':''}">${scoreMarkup(r,{...e,bestOf})}</button>${past&&!r.resultVerified?'<small class="muted"> · последний</small>':''}</div>`}</div>`;}).join('')}</div>
- <div class="match-actions">${prefs.generatorEnabled&&!prefs.hideOdds&&((pre&&tab==='prematch')||tab==='live')&&GameCategories.info(e.category).key==='cs'&&!isExtraEvent(e)?`<button class="odds-button model-odds-button" data-generate-odds="${id}">Генератор</button>`:''}
- ${['live','results'].includes(tab)&&prefs.dotaStatsEnabled&&StatisticsClient.info(e)?.provider==='dota2'&&GameCategories.info(e.category).key==='dota'&&!isExtraEvent(e)?`<button class="odds-button stats-available" data-hawk-toggle="${id}" aria-expanded="${DotaStatsPanel.isOpen(e.id)}">${DotaStatsPanel.isOpen(e.id)?'Скрыть статистику':'Статистика'}</button>`:''}
- ${['live','results'].includes(tab)&&StatisticsClient.info(e)?.provider==='cs2'&&GameCategories.info(e.category).key==='cs'&&!isExtraEvent(e)?`<button class="odds-button stats-available" data-cs2-toggle="${id}" aria-label="Статистика CS2" aria-expanded="${Cs2Panel.isOpen(e.id)}">${Cs2Panel.isOpen(e.id)?'Скрыть статистику':'Статистика'}</button>`:''}
- ${['live','prematch','results'].includes(tab)&&!prefs.hideOdds?`<button class="odds-button" data-odds-timeline="${id}">История коэффициентов</button>`:''}
- ${tab!=='results'&&!prefs.hideOdds&&sources.some(r=>['astek','fonbet','pinnacle','ggbet','databet'].includes(r.source))?`<button class="odds-button" data-book-odds="${id}">Коэффициенты контор</button>`:''}
-</div>
- ${(archive?changesList.length>0:sources.some(r=>cardTimeline(r).length>1))?`<details class="lifecycle"><summary>История появления · ${changesList.length}</summary><ul>${changesList.map(c=>`<li>${esc(providerName(c.provider))} · ${stamp(c.at,true,true)} · ${c.phase==='results'?'финальный счёт подтверждён':c.type==='entered'?(c.phase==='prematch'?'появился в линии':'появился в LIVE'):(c.phase==='prematch'?'убран из линии':'убран из LIVE')}</li>`).join('')}</ul></details>`:''}${['live','results'].includes(tab)?DotaStatsPanel.markup(e)+Cs2Panel.markup(e):''}</article>`;
-}
-function empty(title,text='Измените поиск или фильтры.'){const none=providers.every(s=>prefs[s]===false);return `<div class="empty"><strong>${esc(none?'Выберите контору':title)}</strong><p>${esc(none?'Все источники выключены.':text)}</p>${none?'<button data-enable-providers>Включить все конторы</button>':filterCount()?'<button data-reset-filters>Сбросить фильтры</button>':''}</div>`;}
-let lastLineRows=[],prematchRowsKey='',prematchRowsCache=[],liveRowsKey='',liveRowsCache=[];
-function normalizedRows(rows){return Array.isArray(rows)?rows:[];} // Server 4.2 already owns category/league normalization and fixture identity.
-function canonicalEventCategory(e){if(!GameCategories.generic(e.category)&&GameCategories.info(e.category).key!=='other')return e.category;const exact=refs(e).map(r=>r.category).find(c=>!GameCategories.generic(c)&&GameCategories.info(c).key!=='other');return exact||GameCategories.resolve(e.category,e.league);}
-const dataVersion=data=>data?.structureRevision??data?.revision??data?.updatedAt??data?.receivedAt??data?.events?.length??0;
-function currentLiveRows(){const snapshot=snapshots.live,key=JSON.stringify([dataVersion(snapshot),rules().revision]);if(key===liveRowsKey)return liveRowsCache;liveRowsKey=key;liveRowsCache=normalizedRows(snapshot?.events||[]).map(event=>{const sourceRefs=refs(event).map(ref=>({...ref,inLive:true,enteredLiveAt:Number(ref.enteredLiveAt||ref.firstSeenAt||0)}));return {...event,sourceRefs,inLive:true,category:canonicalEventCategory({...event,sourceRefs})};});return liveRowsCache;}
-function currentRows(){const snapshot=snapshots.prematch,key=JSON.stringify([dataVersion(snapshot),rules().revision]);if(key===prematchRowsKey)return prematchRowsCache;prematchRowsKey=key;prematchRowsCache=normalizedRows(snapshot?.events||[]).map(event=>({...event,inPrematch:true,category:canonicalEventCategory(event)}));return prematchRowsCache;}
-function activeRows(view=tab){if(view==='live')return currentLiveRows();if(view==='prematch')return currentRows();if(view==='results')return resultCache.get(date)?.events||[];if(view==='history')return history?.events||[];return [];}
+function errorText(error){return error?ServerConfig.errorText(error):'Неизвестная ошибка';}
+function report(error){if(error?.name==='AbortError')return;const message=errorText(error);clientErrors.push({at:new Date().toISOString(),message});if(clientErrors.length>50)clientErrors.shift();toast(message);}
 
+// ---------------------------------------------------------------------------------------------------- data layer
+const client=Store.createClient({base:()=>BASE,headers:()=>ServerConfig.headers(),timeoutFor:url=>url.startsWith('/api/ui/history')||url.startsWith('/api/ui/results')||url.startsWith('/api/prematch/compare')?35000:15000});
+// Compatibility wrapper for the reused modules (score dialog, odds timeline, generator, stats panels, league client).
+async function request(path,options={}){if(options.method==='POST'){const body=typeof options.body==='string'?JSON.parse(options.body):options.body;return client.post(path,body);}return client.get(path);}
+const persist=Store.createPersist({storage:chrome.storage.local,prefix:'lastKnown9:',minIntervalMs:30000});
 
-function renderedRow(id){const e=activeRows().find(e=>String(e.id)===decodeURIComponent(id));return e?MatchView.project(e,prefs,tab):null;}
-function copyText(e){const league=leagueTitle(e);return `${stamp(e.startAt)} Киберспорт. ${league.replace(/[.\s]+$/,'')}. "${e.team1} - ${e.team2}"`;}
-async function copy(text){await navigator.clipboard.writeText(text);toast('Текст скопирован');}
-document.addEventListener('copy',event=>{if(event.defaultPrevented)return;const text=getSelection()?.toString();if(text&&event.clipboardData){event.clipboardData.setData('text/plain',text);event.preventDefault();}});
-function resultsMeta(current){const text=date.split('-').reverse().join('.');if(!current)return text+' · Загружаем результаты…';if(current.refreshing||current.queued)return text+' · '+(current.queued?'Обновление в очереди':'Проверяем финальные счета…');const next=current.nextRefreshAt||current.nextRetryAt;if(next){const seconds=Math.max(0,Math.ceil((next-Date.now())/1000));const interval=date<dayKey()?(seconds>=86400?Math.floor(seconds/86400)+' д '+Math.floor(seconds%86400/3600)+' ч':seconds>=3600?Math.floor(seconds/3600)+' ч '+Math.floor(seconds%3600/60)+' мин':Math.ceil(seconds/60)+' мин'):Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');return text+' · '+(seconds?'До следующей проверки '+interval:'Ожидаем следующую проверку');}return text;}
-function updateCards(html,preservePosition=false){
- const root=$('content'),template=document.createElement('template');template.innerHTML=html;
- const menuBottom=prefs.pinMenu?$('menuShell').getBoundingClientRect().bottom:0;
- const anchor=preservePosition?[...root.querySelectorAll('[data-tree-key]>summary,.card')].find(n=>{for(let d=n.parentElement.closest('details');d;d=d.parentElement.closest('details'))if(!d.open&&n!==d.firstElementChild)return false;const r=n.getBoundingClientRect();return r.bottom>menuBottom&&r.top<innerHeight&&r.height>0;}):null,top=anchor?.getBoundingClientRect().top;
- function key(n){return n.nodeType===1?(n.dataset.id||n.dataset.treeKey||''):'';}
- function morph(parent,fresh){
-  const old=[...parent.childNodes],keyed=new Map(old.filter(key).map(n=>[key(n),n]));let cursor=parent.firstChild;
-  for(const desired of [...fresh.childNodes]){
-   let node=key(desired)?keyed.get(key(desired)):cursor&&!key(cursor)&&cursor.nodeType===desired.nodeType&&cursor.nodeName===desired.nodeName?cursor:null;
-   if(!node){node=desired.cloneNode(true);parent.insertBefore(node,cursor);}
-   else {if(node!==cursor)parent.insertBefore(node,cursor);if(node.hasAttribute?.('data-tree-key'))node.open=desired.hasAttribute('open');if(node.nodeType===3){if(node.nodeValue!==desired.nodeValue)node.nodeValue=desired.nodeValue;}
-    else if(node.nodeType===1){for(const a of [...node.attributes])if(!desired.hasAttribute(a.name)&&a.name!=='open'&&a.name!=='data-bound'&&a.name!=='data-logo-bound'&&a.name!=='data-logo-observed'&&!(a.name==='src'&&node.matches?.('img.team-logo')&&desired.getAttribute('data-src')===node.getAttribute('data-src')))node.removeAttribute(a.name);for(const a of desired.attributes)if((a.name!=='open'||node.hasAttribute('data-tree-key'))&&node.getAttribute(a.name)!==a.value)node.setAttribute(a.name,a.value);
-     // Stats panels have their own incremental refresh. Rebuilding their DOM
-     // on each feed snapshot also toggles nested details and shakes the card.
-     if(!node.matches('[data-cs2-body],[data-hawk-body]'))morph(node,desired);}}
-   cursor=node.nextSibling;
-  }
-  while(cursor){const next=cursor.nextSibling;cursor.remove();cursor=next;}
- }
- morph(root,template.content);
- bindTeamLogos(root);
- if(anchor?.isConnected&&scrollY>0){const delta=anchor.getBoundingClientRect().top-top;if(Math.abs(delta)>1)scrollBy(0,delta);}
- clearTimeout(updateCards.scoreTimer);if(root.querySelector('.score-value.changed'))updateCards.scoreTimer=setTimeout(()=>root.querySelectorAll('.score-value.changed').forEach(n=>n.classList.remove('changed')),2100);
-}
-let oddsWatchIds=[],oddsWatchSignature='',oddsWatchTimer=0;
-async function pushOddsWatch(){const ids=tab==='live'&&!document.hidden?oddsWatchIds:[];try{await request('/api/ui/odds-watch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});}catch{}}
-function scheduleOddsWatch(rows=[]){const ids=(tab==='live'?rows:[]).slice(0,8).map(e=>String(e.id)).filter(Boolean),signature=ids.join('|');oddsWatchIds=ids;if(signature===oddsWatchSignature)return;oddsWatchSignature=signature;clearTimeout(oddsWatchTimer);oddsWatchTimer=setTimeout(pushOddsWatch,120);}
-setInterval(()=>{if(tab==='live'&&!document.hidden&&oddsWatchIds.length)pushOddsWatch();},15000);
-let historyLimit=HISTORY_PAGE_SIZE,resultsLimit=120,historyFilter='',historyPageKey='',historyPages=new Map(),historyPrefetchToken=0,historyPrefetchTimer=0;
-const configurableTabs=['live','prematch','results','compare','leagues'];
-function tabEnabled(name){return name==='debug'||(name==='history'?prefs.historyEnabled===true:configurableTabs.includes(name)&&prefs.tabs?.[name]!==false);}
-function firstVisibleTab(){return [...configurableTabs,'history'].find(tabEnabled)||'live';}
-function updateTabVisibility(){for(const b of $('tabs').querySelectorAll('[data-tab]'))b.hidden=!tabEnabled(b.dataset.tab);}
-let statisticsObserveKey='';
-function observeStatisticsRows(rows){const current=tab==='live'?snapshots.live:tab==='results'?resultCache.get(date):null,key=tab+':'+(tab==='results'?date+':':'')+String(current?.structureRevision??current?.revision??current?.receivedAt??rows.length);if(key===statisticsObserveKey)return;statisticsObserveKey=key;StatisticsClient.observe(rows);}
-function currentWarning(current=tab==='live'?snapshots.live:tab==='results'?resultCache.get(date):tab==='history'?history:snapshots.prematch){if(!current?.transportError&&StatisticsClient.warning()&&['live','results'].includes(tab))return StatisticsClient.warning();if(current?.transportError)return current.receivedAt?`Связь с сервером прервана: ${current.transportError}. Показаны сохранённые данные.`:`Нет связи с сервером: ${current.transportError}. Повторяем попытки.`;const providersState=Object.values(current?.providers||{}),actuallyStale=providersState.some(r=>r?.stale&&!r?.updating);if(current?.stale&&actuallyStale)return 'Один из источников задерживается. Последние данные сохранены.';if(tab==='results')return Object.entries(current?.providers||{}).filter(([,r])=>r.error).map(([name,r])=>providerName(name)+': '+r.error).join('; ');return '';}
-function render(force=false){updateTabVisibility();updateFilterReset();
- $('oddsGenerator').hidden=tab!=='prematch'||!prefs.generatorEnabled||prefs.hideOdds;$('lineScheduleToggle').hidden=tab!=='prematch';$('lineScheduleToggle').setAttribute('aria-pressed',tab==='prematch'&&prefs.lineScheduleMode===true);$('lineScheduleToggle').textContent=prefs.lineScheduleMode===true?'По лигам':'Расписание';$('lineFilters').hidden=['leagues','debug'].includes(tab);$('treeToggle').hidden=!(tab==='compare'||tab==='prematch'&&prefs.lineScheduleMode!==true);
- sourceStatus();$('viewTitle').textContent=tab==='prematch'&&prefs.lineScheduleMode===true?'Линия · Расписание':labels[tab];$('liveMenuStats').hidden=tab!=='live';$('mainHeading').hidden=tab==='live';$('toolbar').hidden=['leagues','debug'].includes(tab);$('dateControl').hidden=tab!=='results';$('dateButton').textContent=date.split('-').reverse().join('.');$('nextDate').disabled=date>=dayKey();$('copySchedule').hidden=!(tab==='prematch'&&prefs.lineScheduleMode===true);$('favorites').setAttribute('aria-pressed',!!prefs.onlyFavorites);for(const src of providers)$(src).setAttribute('aria-pressed',prefs[src]!==false&&OddsProvider.visible(src,prefs));
- for(const button of $('tabs').querySelectorAll('button')){button.classList.toggle('active',button.dataset.tab===tab);button.setAttribute('aria-current',button.dataset.tab===tab?'page':'false');}
- if(['leagues','debug','compare'].includes(tab)){if(force){if(tab==='leagues')renderLeagues();if(tab==='compare')renderCompare();if(tab==='debug')renderDebug();}return;}
- const active=activeRows();if(['live','results'].includes(tab))observeStatisticsRows(active);
- const current=tab==='live'?snapshots.live:tab==='results'?resultCache.get(date):tab==='history'?history:snapshots.prematch,serverView=['results','history'].includes(tab);
- const prepared=serverView?active.map(e=>MatchView.project(e,prefs,tab)).filter(Boolean):visible(active,{ignoreCategory:true});categoryOptions(prepared,serverView?current?.facets?.categories:null);const selectedCategory=$('category').value;let rows=serverView?prepared:(selectedCategory?prepared.filter(e=>norm(e.category)===selectedCategory):prepared);if(tab==='prematch')rows.sort((a,b)=>Number(a.startAt||Infinity)-Number(b.startAt||Infinity));if(tab==='live'){const direction=prefs.liveSort==='asc'?1:-1;rows.sort((a,b)=>Number(matchFavorite(b))-Number(matchFavorite(a))||direction*(MatchView.clock(a,'live')-MatchView.clock(b,'live'))||alphabet.compare(a.id,b.id));}else if(tab==='results')rows.sort((a,b)=>MatchView.clock(b,tab)-MatchView.clock(a,tab)||alphabet.compare(a.id,b.id));
- if(tab==='live')scheduleOddsWatch(rows);else if(oddsWatchIds.length)scheduleOddsWatch([]);
- const warn=currentWarning(current);
- $('notice').hidden=!warn;$('notice').textContent=warn;$('viewCount').textContent=serverView?(current?.total??rows.length):rows.length;$('liveMenuCount').textContent=rows.length;
- if(tab==='live')$('liveMenuMeta').textContent=snapshots.live?.receivedAt?'Обновлено '+stamp(snapshots.live.receivedAt,false,true):'Ожидаем данные';
- const received=current?.receivedAt||current?.updatedAt||Date.parse(current?.generatedAt||'');
- $('viewMeta').textContent=tab==='results'?resultsMeta(current):`${received?'Обновлено '+stamp(received,false,true):'Ожидаем данные сервера'}${tab==='prematch'?' · ближайшие матчи первыми':''}`;
- const filterKey=JSON.stringify([$ ('search').value,$('category').value,$('availability').value,$('showExtras').checked,$('startWindow').value,$('historyStartWindow').value,$('historyPhase').value,prefs.onlyFavorites,prefs.hiddenLeagues,prefs.hiddenLeaguesByView,prefs.astek,prefs.fonbet,prefs.pinnacle,prefs.ggbet,prefs.databet,OddsProvider.selected(prefs)]);if(tab==='history'&&historyFilter!==filterKey){historyFilter=filterKey;historyLimit=HISTORY_PAGE_SIZE;}
- const contentVersion=['live','prematch'].includes(tab)?(current?.revision??current?.updatedAt??current?.events?.length):(current?.revision??current?.updatedAt??current?.receivedAt??current?.events?.length),relatedVersion=tab==='live'?snapshots.live?.revision:['prematch','compare','leagues'].includes(tab)?snapshots.prematch?.revision:0,timeTick=($('startWindow').value||tab==='history'&&$('historyStartWindow').value)?Math.floor(Date.now()/60000):0;const signature=JSON.stringify([tab,prefs.lineScheduleMode===true,date,$('historyPhase').value,prefs.liveSort||'desc',timeTick,historyLimit,current?.status,current?.complete,contentVersion,$('startWindow').value,$('historyStartWindow').value,rules().revision,current?.events?.length,$('search').value,$('showExtras').checked,prefs.favorites,prefs.hiddenLeagues,prefs.hiddenLeaguesByView,tab==='history'?history?.receivedAt:0,relatedVersion,prefs.astek,prefs.fonbet,prefs.pinnacle,prefs.ggbet,prefs.databet,OddsProvider.selected(prefs),prefs.onlyFavorites,prefs.teamLogos]);if(!force&&signature===viewSignature)return;viewSignature=signature;
- const open=new Map([...$('content').querySelectorAll('.card .lifecycle')].map(d=>[d.closest('[data-id]')?.dataset.id,d.open]));
- if(!rows.length){const loading=tab==='results'&&(!current||!current.complete||current.refreshing||current.queued);updateCards(loading?'<div class="empty"><strong>'+(!current||['loading','queued','preparing'].includes(current.status)?'Загружаем результаты…':'Результаты пока недоступны')+'</strong><progress aria-label="Загрузка результатов" '+(current?.status==='retrying'?'hidden':'')+'></progress><p>'+esc(current?.status==='retrying'?'Получение прервано. Сервер повторит запрос.':'Получаем данные контор. Длительность зависит от размера архива.')+'</p></div>':empty(current?.transportError&&!current.receivedAt?'Сервер недоступен':current&&prefs.onlyFavorites&&!$('search').value?'В избранном пока ничего нет':current?'Матчи не найдены':'Загрузка…',current?.transportError&&!current.receivedAt?'Не удаётся подключиться к '+ServerConfig.base+'. Проверьте адрес и токен в настройках — запросы повторяются автоматически.':current&&prefs.onlyFavorites&&!$('search').value?'Нажмите ☆ на карточке матча, чтобы добавить его сюда, или выключите «Избранное».':current?'Проверьте фильтры и выбранную дату.':'Ожидаем данные сервера'));return;}
- if(tab==='prematch'&&prefs.lineScheduleMode!==true){lastLineRows=rows;updateCards(lineTree(rows),!force);treeLabel();$('content').querySelectorAll('[data-tree-key]').forEach(d=>{if(d.dataset.bound)return;d.dataset.bound='1';let previous=d.open;d.addEventListener('toggle',()=>{if(!d.isConnected||d.open===previous)return;previous=d.open;const set=new Set(prefs.expandedLineGroups||[]),key=d.dataset.treeKey;if(d.open){set.add(key);if(d.classList.contains('league-group'))hydrateLineGroup(d);}else if(d.classList.contains('category-group'))clearTreeBranch(set,key);else set.delete(key);prefs.expandedLineGroups=[...set];savePrefs();treeLabel();});});}
- else {if(tab==='history')rows.sort((a,b)=>MatchView.appearance(b)-MatchView.appearance(a)||alphabet.compare(a.id,b.id));const moreButton=tab==='history'&&current?.hasMore?'<button data-more-history class="history-more">Показать ещё 500 · осталось '+Math.max(0,(current.total||0)-rows.length)+'</button>':tab==='results'&&current?.hasMore?'<button data-more-results class="history-more">Показать ещё 120 · осталось '+Math.max(0,(current.total||0)-rows.length)+'</button>':'';updateCards(rows.map(e=>card(e,{past:tab==='results',pre:tab!=='live'&&tab!=='results'})).join('')+moreButton,!force);historyObserver.disconnect();const more=$('content').querySelector('[data-more-history]');if(more)historyObserver.observe(more);}
- for(const d of $('content').querySelectorAll('.lifecycle'))if(open.get(d.closest('[data-id]')?.dataset.id))d.open=true;
-}
-const historyObserver=new IntersectionObserver(entries=>{if(tab==='history'&&entries.some(e=>e.isIntersecting))revealHistoryMore();},{rootMargin:'220px'});
-const resultAttempts=new Map();let resultRequestSeq=0,historyRequestSeq=0;
-function serverViewQuery(view,limit,offset=0){
- const p=new URLSearchParams();p.set('limit',String(limit));if(offset>0)p.set('offset',String(offset));p.set('thin','1');
- const q=$('search').value.trim();if(q)p.set('q',q);
- const category=$('category').value;if(category)p.set('category',category);
- const availability=$('availability').value;if(availability&&availability!=='all')p.set('availability',availability);
- p.set('sources',providers.filter(src=>prefs[src]!==false&&OddsProvider.visible(src,prefs)&&(!['results','history'].includes(view)||!OddsProvider.isOddsProvider(src))).join(','));
- p.set('showExtras',$('showExtras').checked?'1':'0');
- const hidden=hiddenKeys(view);if(hidden.length)p.set('hidden',hidden.join(','));
- if(prefs.onlyFavorites){p.set('favoriteOnly','1');if(prefs.favorites?.length)p.set('favorites',prefs.favorites.join(','));}
- const hours=$('startWindow').value;if(hours)p.set('hours',hours);
- if(view==='results'&&$('startWindow').value){const end=date<dayKey()?Date.parse(date+'T23:59:59.999+04:00'):Math.floor(Date.now()/60000)*60000;p.set('end',String(end));}
- if(view==='history'){
-  const future=$('historyStartWindow').value;if(future)p.set('historyStartHours',future);
-  const phase=$('historyPhase').value;if(phase)p.set('phase',phase);
- }
- return p;
-}
-function serverViewKey(view,limit){return serverViewQuery(view,limit).toString();}
-function applyResultDelta(cached,data,key){
- if(!data?.delta)return {...data,queryKey:key,receivedAt:Date.now()};
- const map=new Map((cached?.events||[]).map(e=>[String(e.id),e]));
- for(const id of data.remove||[])map.delete(String(id));
- for(const event of data.upsert||[])map.set(String(event.id),event);
- const ordered=[],seen=new Set();
- for(const id of data.order||[]){const event=map.get(String(id));if(event){ordered.push(event);seen.add(String(id));}}
- for(const [id,event] of map)if(!seen.has(id))ordered.push(event);
- return {...cached,...data,events:ordered,queryKey:key,receivedAt:Date.now(),delta:false};
-}
-async function loadResults(force=false){
- const selected=date,key=serverViewKey('results',resultsLimit),cached=resultCache.get(selected),seq=++resultRequestSeq;
- if(!force&&Date.now()-(resultAttempts.get(selected)||0)<750)return;
- // Keep the existing rows on screen while a small delta refresh happens.
- if(!force&&cached?.queryKey===key&&Date.now()-cached.receivedAt<15000){render();return;}
- try{
-  resultAttempts.set(selected,Date.now());
-  const query=serverViewQuery('results',resultsLimit);query.set('date',selected);query.set('timezone',ZONE);
-  if(cached?.queryKey===key&&Number.isFinite(Number(cached.uiRevision)))query.set('deltaSince',String(cached.uiRevision));
-  const data=await request('/api/ui/results?'+query.toString());if(seq!==resultRequestSeq||selected!==date&&tab==='results')return;
-  const next=applyResultDelta(cached,data,key);resultCache.set(selected,next);if(resultCache.size>32)resultCache.delete(resultCache.keys().next().value);
-  if(tab==='results'&&date===selected){render(true);restoreTabScroll();}
- }catch(error){if(tab==='results'&&date===selected){$('notice').hidden=false;$('notice').textContent=`Результаты не обновились: ${ServerConfig.errorText(error)}. Показаны последние сохранённые данные.`;}}
-}
-function historyBaseKey(){const p=serverViewQuery('history',HISTORY_PAGE_SIZE);p.delete('limit');p.delete('offset');return p.toString();}
-function resetHistoryPrefetch(key=''){clearTimeout(historyPrefetchTimer);historyPrefetchTimer=0;historyPages=new Map();historyPageKey=key;historyPrefetchToken++;}
-function historyRowsFromPages(limit=historyLimit){const out=[],seen=new Set();for(const [offset,rows] of [...historyPages].sort((a,b)=>a[0]-b[0]))for(const row of rows||[]){const key=String(row?.id||`${offset}:${out.length}`);if(seen.has(key))continue;seen.add(key);out.push(row);if(out.length>=limit)return out;}return out;}
-function syncHistoryVisible(meta=history){if(!meta)return;const events=historyRowsFromPages(historyLimit),total=Number(meta.total||meta.totalHint||events.length);history={...meta,total,events,hasMore:events.length<total,limit:historyLimit,offset:0,receivedAt:Number(meta.receivedAt||Date.now())};}
-async function fetchHistoryPage(offset,token,baseKey,{fast=false}={}){
- const query=serverViewQuery('history',HISTORY_PAGE_SIZE,offset);if(fast)query.set('fast','1');
- const data=await request('/api/ui/history?'+query.toString());if(token!==historyPrefetchToken||baseKey!==historyPageKey)return null;
- if(data?.deferred)return data;
- historyPages.set(offset,data.events||[]);return data;
-}
-function idleHistoryDelay(callback,delay){
- clearTimeout(historyPrefetchTimer);
- historyPrefetchTimer=setTimeout(()=>{if('requestIdleCallback'in window)requestIdleCallback(callback,{timeout:1800});else callback();},delay);
-}
-function scheduleHistoryPrefetch(baseKey,token,total,{canonicalFirst=false}={}){
- if(token!==historyPrefetchToken||baseKey!==historyPageKey)return;
- const run=async()=>{
-  if(token!==historyPrefetchToken||baseKey!==historyPageKey)return;
-  try{
-   if(canonicalFirst){
-    const canonical=await fetchHistoryPage(0,token,baseKey);if(!canonical)return;
-    if(canonical.deferred){idleHistoryDelay(()=>scheduleHistoryPrefetch(baseKey,token,total,{canonicalFirst:true}),Math.max(3000,Number(canonical.retryAfterMs||0)));return;}
-    if(history){history={...history,...canonical,queryKey:baseKey,receivedAt:Date.now()};syncHistoryVisible(history);if(tab==='history')render(true);}
-    total=Number(canonical.total||total);canonicalFirst=false;
-   }
-   const known=[...historyPages.keys()].sort((a,b)=>a-b),offset=known.length?Math.max(...known)+HISTORY_PAGE_SIZE:HISTORY_PAGE_SIZE;
-   if(offset>=total)return;
-   const data=await fetchHistoryPage(offset,token,baseKey);if(!data)return;
-   if(data.deferred){idleHistoryDelay(()=>scheduleHistoryPrefetch(baseKey,token,total),Math.max(3000,Number(data.retryAfterMs||0)));return;}
-   if(history){history={...history,total:Number(data.total||total),facets:data.facets||history.facets};syncHistoryVisible(history);}
-   scheduleHistoryPrefetch(baseKey,token,Number(data.total||total));
-  }catch{}
- };
- // Canonical history is deliberately slow background work; LIVE/prematch stay ahead.
- idleHistoryDelay(run,document.hidden?6000:canonicalFirst?2500:2800);
-}
-async function revealHistoryMore(){
- if(tab!=='history'||!history)return;
- const target=Math.min(Number(history.total||0)||historyLimit+HISTORY_PAGE_SIZE,historyLimit+HISTORY_PAGE_SIZE),baseKey=historyPageKey,token=historyPrefetchToken;
- for(let offset=historyLimit;offset<target;offset+=HISTORY_PAGE_SIZE){const pageOffset=Math.floor(offset/HISTORY_PAGE_SIZE)*HISTORY_PAGE_SIZE;if(!historyPages.has(pageOffset)){try{let data=await fetchHistoryPage(pageOffset,token,baseKey);if(data?.deferred){await new Promise(r=>setTimeout(r,Math.max(1000,Number(data.retryAfterMs||3000))));data=await fetchHistoryPage(pageOffset,token,baseKey);}if(data&&!data.deferred)history={...history,total:data.total,facets:data.facets||history.facets};}catch(error){report(error);return;}}}
- historyLimit=target;syncHistoryVisible(history);render(true);
-}
-async function loadHistory(force=false){
- const baseKey=historyBaseKey(),seq=++historyRequestSeq;
- if(!force&&history?.queryKey===baseKey&&Date.now()-Number(history.receivedAt||0)<15000){render();return;}
- if(force||historyPageKey!==baseKey)resetHistoryPrefetch(baseKey);
- const token=historyPrefetchToken;
- try{
-  // The newest 500 use the bounded fast path and paint immediately.
-  const data=await fetchHistoryPage(0,token,baseKey,{fast:true});if(!data||data.deferred||seq!==historyRequestSeq)return;
-  historyLimit=HISTORY_PAGE_SIZE;
-  history={...data,total:Number(data.totalHint||data.total||0),queryKey:baseKey,receivedAt:Date.now()};syncHistoryVisible(history);
-  if(tab==='history'){render(true);restoreTabScroll();}
-  // Replace page zero with the canonical ledger, then prefetch older pages only in idle gaps.
-  scheduleHistoryPrefetch(baseKey,token,Number(data.totalHint||data.total||0),{canonicalFirst:true});
- }catch(error){if(tab==='history')report(error);}
+// Event details: LIVE ones belong to the selected odds provider (never reuse GGBET detail for DataBet).
+const detailMeta=new Map();
+function hydrateDetail(data){return data?.marketDetailErrors&&Object.keys(data.marketDetailErrors).length?{...data.event,marketDetailErrors:data.marketDetailErrors}:data.event;}
+const details=Store.createResource({max:40,usable:10*60000,fresh:key=>key.startsWith('live:')?10000:60000,fetcher:(key,{signal})=>{const m=detailMeta.get(key);return client.get('/api/ui/event-detail?view='+m.view+'&id='+encodeURIComponent(m.id)+(m.view==='live'?'&provider='+m.provider:''),{signal}).then(hydrateDetail);}});
+function detailKeyFor(event,view){const key=OddsProvider.detailKey(view,event.id,prefs);detailMeta.set(key,{view,id:String(event.id),provider:OddsProvider.selected(prefs)});if(detailMeta.size>400)detailMeta.delete(detailMeta.keys().next().value);return key;}
+function detailSwr(event,view,{force=false,onValue,onError,signal}={}){const started=performance.now(),key=detailKeyFor(event,view);const res=details.swr(key,{force,signal,onValue:(v)=>{Perf.measure('detail.network',started);onValue?.(v);},onError});return res;}
+let prefetchController=null,prefetchTimer=0;
+function prefetchDetail(event,view){
+ if(!event||!['live','prematch'].includes(view)||prefs.hideOdds)return;
+ const key=detailKeyFor(event,view),cached=details.peek(key);if(cached?.fresh||details.isLoading(key))return;
+ prefetchController?.abort();prefetchController=new AbortController();
+ details.load(key,{signal:prefetchController.signal}).catch(()=>{});
 }
 
-async function loadCatalog(force=false,selected=[...selection]){
- const previous=catalog,draft=previous?LeagueModel.diff(previous.links||[],workingLinks):{upsert:[],remove:[]},dirty=draft.upsert.length+draft.remove.length;
- if(previous&&!force){if(dirty)return;if(Date.now()-previous.receivedAt<60000)return;}
- const p=new URLSearchParams({limit:'500',thin:'1'});if(selected.length)p.set('selected',selected.join(','));
- const data=await request('/api/ui/leagues?'+p.toString());
- catalog={...data,receivedAt:Date.now()};
- if(!previous||(!dirty&&!force))workingLinks=structuredClone(catalog.links||[]);
- if(!previous)selection.clear();
- if(tab==='leagues')renderLeagues();
-}
-async function rerankLeagueCatalog(){
- if(!catalog)return;const p=new URLSearchParams({limit:'500',thin:'1'});if(selection.size)p.set('selected',[...selection].join(','));
- try{const data=await request('/api/ui/leagues?'+p.toString());if(tab!=='leagues')return;catalog={...catalog,...data,links:catalog.links,visibility:catalog.visibility,receivedAt:Date.now()};renderLeagues();}catch(error){report(error);}
-}
+// Results and history (server-side views): stale-while-revalidate per query.
+const resultsRes=Store.createResource({max:24,usable:24*3600000,fresh:key=>key.startsWith(dayKey()+'|')?20000:300000,fetcher:(key,{signal})=>fetchResults(key,signal)});
+const historyRes=Store.createResource({max:30,usable:3600000,fresh:60000,fetcher:(key,{signal})=>fetchHistoryPage(key,signal)});
 
-function scheduleUiViewReload(view,delay=120){
- if(!['results','history','leagues'].includes(view)||document.hidden||tab!==view)return;
- clearTimeout(uiInvalidateTimers.get(view));
- uiInvalidateTimers.set(view,setTimeout(async()=>{
-  uiInvalidateTimers.delete(view);if(document.hidden||tab!==view)return;
-  uiDirty.delete(view);
-  if(view==='results')await loadResults(true);
-  else if(view==='history')await loadHistory(false);
-  else await loadCatalog(true).catch(report);
- },delay));
-}
-function handleUiInvalidate(message={}){
- const view=String(message.view||'');if(!['results','history','leagues'].includes(view))return;
- uiDirty.add(view);
- if(view==='results'){
-  const changedDate=String(message.date||'');
-  // Never blank Results during refresh. Mark the cached view stale and ask for a delta.
-  if(changedDate){const cached=resultCache.get(changedDate);if(cached)cached.receivedAt=0;}else for(const cached of resultCache.values())cached.receivedAt=0;
-  if(changedDate&&changedDate!==date)return;
- }else if(view==='history'){
-  if(history)history.receivedAt=0;
- }else if(catalog)catalog.receivedAt=0;
- scheduleUiViewReload(view,view==='history'?900:view==='results'?250:220);
-}
-function reconcileUiStream(){
- if(document.hidden)return;
- if(['results','history','leagues'].includes(tab)){uiDirty.add(tab);scheduleUiViewReload(tab,50);}
-}
-
-let diagnosticsUnlocked=false;
-function unlockDiagnostics(){modal('<h2>Доступ к функциям</h2><form id="debugLogin"><label class="field">Пароль<input id="debugPassword" type="password" autocomplete="off" required></label><p id="debugLoginError" class="bad" role="alert"></p><div class="dialog-actions"><button type="button" id="debugCancel">Отмена</button><button type="submit">Открыть</button></div></form>');$('debugPassword').focus();$('debugCancel').onclick=()=>$('modal').close();$('debugLogin').onsubmit=e=>{e.preventDefault();const password=$('debugPassword').value;if(password==='Deforum'){prefs.featureAccess={...prefs.featureAccess,history:true};savePrefs();$('modal').close();historyAccessDialog();return;}if(password!=='DaveChappelle'){$('debugLoginError').textContent='Неверный пароль';return;}diagnosticsUnlocked=true;$('modal').close();switchTab('debug');};}
-function ensureVisibleTab(){if(![...configurableTabs,'history'].some(tabEnabled))prefs.tabs={...prefs.tabs,live:true};updateTabVisibility();if(!tabEnabled(tab))switchTab(firstVisibleTab());}
-function setHistoryEnabled(enabled){prefs.historyEnabled=enabled;ensureVisibleTab();savePrefs();}
-function historyAccessDialog(){modal('<h2>Вкладка «История»</h2><label class="controls"><input id="historyAccessToggle" type="checkbox" '+(prefs.historyEnabled?'checked':'')+'> Показывать историю</label><p class="muted">После включения этот переключатель доступен в настройках.</p><div class="dialog-actions"><button id="historyAccessClose">Готово</button></div>');$('historyAccessToggle').onchange=()=>{if($('historyAccessToggle').checked)prefs.historySettingsUnlocked=true;setHistoryEnabled($('historyAccessToggle').checked);};$('historyAccessClose').onclick=()=>$('modal').close();}
-function setOddsHidden(hidden){prefs.hideOdds=hidden;if(!hidden)prefs.oddsSettingsUnlocked=true;savePrefs();render(true);}
-function setGeneratorEnabled(enabled){prefs.generatorEnabled=enabled;if(enabled){prefs.generatorSettingsUnlocked=true;prefs.oddsSettingsUnlocked=true;prefs.hideOdds=false;}savePrefs();render(true);}
-
-const tabPositions=new Map();let scrollTarget=null;
-function rememberTabScroll(){const bottom=prefs.pinMenu?$('menuShell').getBoundingClientRect().bottom:0;const node=[...$('content').querySelectorAll('.card,[data-tree-key]>summary')].find(n=>n.getClientRects().length&&n.getBoundingClientRect().bottom>bottom);tabPositions.set(tab,{y:scrollY,id:node?.dataset.id,tree:node?.parentElement.dataset.treeKey,offset:node?.getBoundingClientRect().top});}
-function restoreTabScroll(){if(!scrollTarget||scrollTarget.tab!==tab)return;const target=scrollTarget,nodes=[...$('content').querySelectorAll('.card,[data-tree-key]>summary')],node=nodes.find(n=>target.id?n.dataset.id===target.id:target.tree&&n.parentElement.dataset.treeKey===target.tree);scrollTo(0,node?scrollY+node.getBoundingClientRect().top-target.offset:target.y);if(node||document.documentElement.scrollHeight-innerHeight>=target.y)scrollTarget=null;}
-for(const event of ['wheel','touchstart','pointerdown','keydown'])document.addEventListener(event,()=>{scrollTarget=null;},{passive:true});
-let filterViewReady=false;
-function rememberViewFilters(){if(!filterViewReady)return;prefs.viewFilters={...prefs.viewFilters,[tab]:{search:$('search').value,category:$('category').value,categoryLabel:$('category').selectedOptions[0]?.textContent||'',availability:$('availability').value}};}
-function restoreViewFilters(){const v=prefs.viewFilters?.[tab]||{};$('search').value=v.search||'';const key=v.category||'';if(key&&![...$('category').options].some(o=>o.value===key))$('category').add(new Option(v.categoryLabel||key,key));$('category').value=key;$('availability').value=v.availability||'all';}
-function filterCount(){return [!!$('search').value,!!$('category').value,$('availability').value!=='all',tab!=='live'&&!!$('startWindow').value,tab==='history'&&!!$('historyStartWindow').value,tab==='history'&&!!$('historyPhase').value,!!prefs.onlyFavorites].filter(Boolean).length;}
-function liveStatsOpen(){return tab==='live'&&((Cs2Panel.openCount?.()||0)+(DotaStatsPanel.openCount?.()||0)>0);}
-function updateFilterReset(){const n=filterCount(),stats=liveStatsOpen();$('resetFilters').hidden=!n&&!stats;$('resetFilters').textContent=n?'Сбросить · '+n:'Сбросить';}
-function refreshServerView(reset=true){if(tab==='results'){if(reset)resultsLimit=120;loadResults(true);return true;}if(tab==='history'){if(reset)historyLimit=HISTORY_PAGE_SIZE;loadHistory(true);return true;}return false;}
-function renderOrReload(force=true){if(!refreshServerView(true))render(force);}
-function resetViewFilters(){if(tab==='live'){Cs2Panel.clear?.();DotaStatsPanel.clear?.();}$('search').value='';$('category').value='';$('availability').value='all';$('startWindow').value='';$('historyStartWindow').value='';$('historyPhase').value='';prefs.onlyFavorites=false;prefs.timeWindows={...prefs.timeWindows,[tab]:''};if(tab==='history'){prefs.historyStartWindow='';prefs.historyPhase='';}rememberViewFilters();savePrefs();renderOrReload(true);}
-$('resetFilters').onclick=resetViewFilters;
-function updateProviderScope(){const liveOnly=tab==='live'||tab==='leagues'||tab==='debug',selected=OddsProvider.selected(prefs);if($('liveOddsSource'))$('liveOddsSource').hidden=!liveOnly;if($('databet'))$('databet').hidden=tab==='leagues';for(const provider of OddsProvider.PROVIDERS){const option=$('availability').querySelector(`option[value=${provider}]`);if(option)option.hidden=tab!=='live'||provider!==selected;}if(OddsProvider.isOddsProvider($('availability').value)&&(tab!=='live'||$('availability').value!==selected))$('availability').value='all';}
-// Switching the LIVE odds provider: the service worker drops the previous provider's LIVE feed and reconnects;
-// the view clears it immediately so GGBET and DataBet rows are never shown together.
-function selectLiveOddsProvider(provider){const next=OddsProvider.normalize(provider);if(OddsProvider.selected(prefs)===next&&prefs[next]!==false)return;prefs.liveOddsProvider=next;prefs[next]=true;detailCache.clear();delete snapshots.live;liveRowsKey='';viewSignature='';chrome.storage.local.set({prefs}).catch(report);updateProviderScope();toast('Коэффициенты LIVE: '+OddsProvider.name(next));renderOrReload(true);}
-function updateProviderNotice(){const box=$('providerNotice');if(!box)return;const health=tab==='live'?OddsProvider.health(snapshots.live,prefs):null;if(!health||health.ok){box.hidden=true;box.replaceChildren();delete box.dataset.html;return;}const other=OddsProvider.PROVIDERS.find(p=>p!==health.provider);const html=`<span><strong>${esc(health.label)} временно недоступен</strong>${health.reason?' — '+esc(health.reason):''}</span><button type="button" data-switch-provider="${esc(other)}">Переключиться на ${esc(OddsProvider.name(other))}</button>`;if(box.dataset.html!==html){box.dataset.html=html;box.innerHTML=html;}box.hidden=false;}
-function switchTab(next){if(!tabEnabled(next))next=firstVisibleTab();if(next==='debug'&&!diagnosticsUnlocked){unlockDiagnostics();return;}const previous=tab;rememberTabScroll();rememberViewFilters();tab=next;restoreViewFilters();updateProviderScope();timeFilterOptions();filterViewReady=true;if(next!=='debug')prefs.lastTab=next;savePrefs();viewSignature='';scrollTarget={tab,...(tabPositions.get(tab)||{y:0})};render(true);restoreTabScroll();sendActivity();if(tab==='results')loadResults();if(tab==='history')loadHistory();if(tab==='leagues')loadCatalog().then(restoreTabScroll).catch(report);}
-
-
-$('tabs').onclick=event=>{const b=event.target.closest('[data-tab]');if(b)switchTab(b.dataset.tab);};
-document.addEventListener('keydown',event=>{if(event.defaultPrevented||!event.ctrlKey||event.altKey||event.metaKey||event.shiftKey||!/^\d$/.test(event.key)||document.querySelector('dialog[open]'))return;const number=Number(event.key);if(!number)return;const buttons=[...$('tabs').querySelectorAll('[data-tab]')].filter(b=>tabEnabled(b.dataset.tab));const chosen=buttons[number-1];if(!chosen)return;event.preventDefault();event.stopImmediatePropagation();switchTab(chosen.dataset.tab);chosen.focus({preventScroll:true});},true);
-document.addEventListener('keydown',event=>{if(event.defaultPrevented||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||document.querySelector('dialog[open]')||event.target.closest('input,textarea,select,[contenteditable="true"],#gamePicker'))return;if(!event.key.startsWith('Arrow'))return;
- if(event.target.closest('#tabs')){if(!['ArrowLeft','ArrowRight'].includes(event.key))return;const buttons=[...$('tabs').querySelectorAll('[data-tab]')].filter(b=>tabEnabled(b.dataset.tab)),index=buttons.findIndex(b=>b.dataset.tab===tab),next=buttons[(index+(event.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length];event.preventDefault();switchTab(next.dataset.tab);next.focus({preventScroll:true});return;}
- const nodes=[...$('content').querySelectorAll('[data-tree-key]>summary,.card,.comparison-row[tabindex]')].filter(n=>{if(!n.getClientRects().length)return false;for(let d=n.parentElement.closest('details');d;d=d.parentElement.closest('details'))if(!d.open&&n!==d.firstElementChild)return false;return true;}),focused=event.target.closest('.card,.comparison-row[tabindex],[data-tree-key]>summary'),index=nodes.indexOf(focused),node=focused||nodes[0];if(!node)return;event.preventDefault();
- if(event.key==='ArrowDown'||event.key==='ArrowUp'){const next=nodes[Math.max(0,Math.min(nodes.length-1,index+(event.key==='ArrowDown'?1:-1)))];next?.focus({preventScroll:true});if(next){const rect=next.getBoundingClientRect(),top=prefs.pinMenu?$('menuShell').getBoundingClientRect().bottom+6:6;if(rect.top<top)scrollBy(0,rect.top-top);else if(rect.bottom>innerHeight-8)scrollBy(0,rect.bottom-innerHeight+8);}return;}
- const summary=node.matches('[data-tree-key]>summary'),detail=summary?node.parentElement:node.querySelector('.lifecycle');
- if(event.key==='ArrowRight'){if(summary)setTreeOpen(detail,true);else if(detail)detail.open=true;}
- else if(detail?.open){if(summary)setTreeOpen(detail,false);else detail.open=false;}
- else {const parent=(summary?node.parentElement.parentElement:node.parentElement).closest('[data-tree-key]');parent?.querySelector('summary')?.focus({preventScroll:true});}
-});
-$('search').oninput=()=>{rememberViewFilters();if(filterViewReady)savePrefs();clearTimeout(render.searchTimer);render.searchTimer=setTimeout(()=>{if(!refreshServerView(true))render(tab==='compare');},180);};$('showExtras').onchange=()=>{prefs.showExtras=$('showExtras').checked;savePrefs();renderOrReload(true);};
-$('category').onchange=()=>{rememberViewFilters();savePrefs();renderOrReload(true);};
-$('availability').onchange=()=>{rememberViewFilters();savePrefs();renderOrReload(true);};
-function saveTimeFilter(){prefs.timeWindows={...prefs.timeWindows,[tab]:$('startWindow').value};savePrefs();renderOrReload(true);}
-$('startWindow').onchange=saveTimeFilter;
-$('historyStartWindow').onchange=()=>{prefs.historyStartWindow=$('historyStartWindow').value;savePrefs();renderOrReload(true);};
-$('historyPhase').onchange=()=>{prefs.historyPhase=$('historyPhase').value;savePrefs();renderOrReload(true);};
-$('liveSort').onchange=()=>{prefs.liveSort=$('liveSort').value==='asc'?'asc':'desc';savePrefs();render(true);};
-
-$('gamePicker').addEventListener('keydown',event=>{const keys=['ArrowDown','ArrowUp','Home','End','Escape'];if(!keys.includes(event.key))return;event.preventDefault();event.stopPropagation();if(event.key==='Escape'){$('gamePicker').open=false;$('gameChoice').focus();return;}$('gamePicker').open=true;const buttons=[...$('gameOptions').querySelectorAll('button')],i=buttons.indexOf(document.activeElement);const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:Math.max(0,Math.min(buttons.length-1,i+(event.key==='ArrowDown'?1:-1)));buttons[next]?.focus();});
-$('gameOptions').onclick=e=>{const button=e.target.closest('[data-game]');if(!button)return;if(tab==='prematch'&&$('category').value!==button.dataset.game){prefs.expandedLineGroups=[];savePrefs();}$('category').value=button.dataset.game;rememberViewFilters();savePrefs();$('gamePicker').open=false;renderOrReload(true);if(tab==='prematch')$('content').querySelector('.category-group>summary')?.focus();else $('gameChoice').focus();};
-document.addEventListener('click',e=>{if(!e.target.closest('#gamePicker'))$('gamePicker').open=false;});
-$('treeToggle').onclick=()=>{const expand=!$('content').querySelector('.category-group[open]');if(tab==='compare'){if(expand)$('content').querySelectorAll('.league-group[data-tree-key]').forEach(d=>setTreeOpen(d,false));$('content').querySelectorAll('.category-group[data-tree-key]').forEach(d=>setTreeOpen(d,expand));return;}const set=new Set(prefs.expandedLineGroups||[]);if(expand)$('content').querySelectorAll('.league-group[data-tree-key]').forEach(d=>set.delete(d.dataset.treeKey));$('content').querySelectorAll('.category-group[data-tree-key]').forEach(d=>{if(expand)set.add(d.dataset.treeKey);else set.delete(d.dataset.treeKey);});prefs.expandedLineGroups=[...set];savePrefs();viewSignature='';render();};
-for(const src of providers)$(src).onclick=()=>{if(OddsProvider.isOddsProvider(src)&&OddsProvider.selected(prefs)!==src){selectLiveOddsProvider(src);return;}prefs[src]=prefs[src]===false;savePrefs();renderOrReload(true);}; $('providerNotice').onclick=event=>{const button=event.target.closest('[data-switch-provider]');if(button)selectLiveOddsProvider(button.dataset.switchProvider);};
-$('favorites').onclick=()=>{prefs.onlyFavorites=!prefs.onlyFavorites;savePrefs();renderOrReload(true);};
-$('copySchedule').onclick=()=>copy(visible(activeRows()).sort((a,b)=>a.startAt-b.startAt).map(copyText).join('\n')).catch(report);
-$('lineScheduleToggle').onclick=()=>{if(tab!=='prematch')return;prefs.lineScheduleMode=prefs.lineScheduleMode!==true;savePrefs();viewSignature='';render(true);restoreTabScroll();};
-$('content').addEventListener('click',event=>{const line=event.target.closest?.('.team-names-copy');if(line&&event.detail===3){const selection=getSelection();if(selection){const range=document.createRange();range.selectNodeContents(line);selection.removeAllRanges();selection.addRange(range);}return;}});
-$('content').addEventListener('copy',event=>{const selection=getSelection();if(!selection||selection.isCollapsed)return;const node=selection.anchorNode?.nodeType===1?selection.anchorNode:selection.anchorNode?.parentElement,line=node?.closest?.('.team-names-copy');if(!line?.dataset.copyText)return;event.preventDefault();event.clipboardData?.setData('text/plain',line.dataset.copyText);});
-$('content').addEventListener('contextmenu',event=>{const link=event.target.closest?.('[data-open-url]');if(link?.dataset.openUrl){event.preventDefault();copy(link.dataset.openUrl).catch(report);}});
-$('content').addEventListener('click',async event=>{if(event.target.closest('[data-reset-filters]')){resetViewFilters();return;}if(event.target.closest('[data-enable-providers]')){for(const p of providers)prefs[p]=true;savePrefs();renderOrReload(true);return;}const cs2=event.target.closest('[data-cs2-toggle],[data-cs2-close]');if(cs2){const e=renderedRow(cs2.dataset.cs2Toggle||cs2.dataset.cs2Close);if(e)Cs2Panel.toggle(e);return;}const hawk=event.target.closest('[data-hawk-toggle],[data-hawk-close]');if(hawk){const e=renderedRow(hawk.dataset.hawkToggle||hawk.dataset.hawkClose);if(e)DotaStatsPanel.toggle(e);return;}const timeline=event.target.closest('[data-odds-timeline]');if(timeline){const e=renderedRow(timeline.dataset.oddsTimeline);if(e)OddsTimeline.open(e,{refs:refs(e),esc,stamp,modal,request});return;}const book=event.target.closest('[data-book-odds]');if(book){const e=renderedRow(book.dataset.bookOdds),view=tab;if(e)try{const full=await fullEvent(e,view);BookDialog.open(full,{refs:refs(full),esc,stamp,modal,request,base:BASE,load:()=>{const cached=detailCache.get(detailKey(view,e.id))?.event,rows=refs(cached||full);return rows.filter(r=>!r.source||prefs[r.source]!==false&&OddsProvider.visible(r.source,prefs));},reload:async()=>{const fresh=await fullEvent(e,view,{force:true});return fresh;}});}catch(error){report(error);}return;}const genButton=event.target.closest('[data-generate-odds]');if(genButton){const e=renderedRow(genButton.dataset.generateOdds);if(e)openOddsGenerator(e);return;}const scoreButton=event.target.closest('[data-score-history]');if(scoreButton){const e=renderedRow(scoreButton.dataset.scoreHistory);if(e)openScoreHistory(e);return;}const more=event.target.closest('[data-more-history]');if(more){revealHistoryMore();return;}const moreResults=event.target.closest('[data-more-results]');if(moreResults){resultsLimit+=120;loadResults(true);return;}const leagueStar=event.target.closest('[data-line-favorite]');if(leagueStar){event.preventDefault();const key=leagueStar.dataset.lineFavorite;prefs.favorites=prefs.favorites.includes(key)?prefs.favorites.filter(k=>k!==key):[...prefs.favorites,key];savePrefs();if(prefs.onlyFavorites&&['results','history'].includes(tab))refreshServerView(false);else render(true);return;}const lifecycle=event.target.closest('.lifecycle>summary');if(lifecycle){event.preventDefault();lifecycle.parentElement.open=!lifecycle.parentElement.open;return;}const summary=event.target.closest('[data-tree-key]>summary');if(summary){event.preventDefault();setTreeOpen(summary.parentElement,!summary.parentElement.open);return;}const link=event.target.closest('[data-open-url]'),copyButton=event.target.closest('[data-copy]'),favButton=event.target.closest('[data-favorite]');if(link){if(link.dataset.openUrl)chrome.runtime.sendMessage({type:'openExternal',url:link.dataset.openUrl}).then(r=>{if(r?.fallback)toast('Выбранный браузер недоступен — ссылка открыта в текущем');if(r?.error&&!r?.fallback)throw Error(r.error);}).catch(report);return;}if(copyButton){const e=renderedRow(copyButton.dataset.copy);if(e)copy(copyText(e)).catch(report);return;}if(favButton){const e=renderedRow(favButton.dataset.favorite);if(!e)return;const keys=eventKeys(e);prefs.favorites=matchFavorite(e)?prefs.favorites.filter(k=>!keys.includes(k)):[...new Set([...prefs.favorites,...keys])];savePrefs();if(prefs.onlyFavorites&&['results','history'].includes(tab))refreshServerView(false);else render(true);return;}});
-$('prevDate').onclick=()=>{date=shiftDay(date,-1);resultsLimit=120;timeFilterOptions();render(true);loadResults(true);};$('nextDate').onclick=()=>{if(date<dayKey()){date=shiftDay(date,1);resultsLimit=120;timeFilterOptions();render(true);loadResults(true);}};$('today').onclick=()=>{date=dayKey();resultsLimit=120;timeFilterOptions();render(true);loadResults(true);};
-let scorePrefetchTimer;
-for(const type of ['pointerover','focusin'])$('content').addEventListener(type,event=>{const b=event.target.closest('[data-score-history]');if(!b)return;clearTimeout(scorePrefetchTimer);scorePrefetchTimer=setTimeout(()=>{const e=renderedRow(b.dataset.scoreHistory);if(e){const ids=scoreIds(e);ScoreCache.read(ids).then(data=>{if(!data||Date.now()-data.cachedAt>5000)return ScoreCache.load(ids);}).catch(()=>{});}},150);});
-function scoreIds(e){const selected=new Set(refs(e).filter(r=>prefs[r.source]!==false).map(r=>r.source)),identity=r=>r.source+':'+String(r.sourceEventId||r.id||'').replace(/^fonbet-(?:result-)?/,'');return (e.entityAliases||refs(e).map(identity)).filter(k=>selected.has(k.split(':')[0])).join(',');}
-function openScoreHistory(e){const view=tab;ScoreDialog.open(e,{ids:scoreIds(e),refs:refs(e).filter(r=>prefs[r.source]!==false),getCurrent:()=>{const fresh=activeRows(view).find(r=>r.id===e.id);return fresh?refs(fresh).filter(r=>prefs[r.source]!==false):null;},modal,esc,stamp,providerName});}
-
-$('modal').addEventListener('click',event=>{if(event.target!==$('modal'))return;const r=$('modal').getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)$('modal').close();});
-let modalReturnFocus=null;
-$('modal').addEventListener('close',()=>{const node=modalReturnFocus;if(node?.isConnected)requestAnimationFrame(()=>{if(!$('modal').open)node.focus({preventScroll:true});});});
-function modal(html,kind=''){modalReturnFocus=document.activeElement;if($('modal').open)$('modal').close();$('modal').dataset.kind=kind;$('modal').classList.toggle('data-dialog',['scores','odds','book-odds','live-generator'].includes(kind));$('modal').innerHTML=html;$('modal').showModal();}
-function calendar(){const first=calendarMonth+'-01',month=new Date(first+'T12:00:00Z'),start=shiftDay(first,-((month.getUTCDay()+6)%7));$('modal').innerHTML=`<div class="calendar-header"><button id="calPrev" aria-label="Предыдущий месяц">‹</button><b>${month.toLocaleDateString('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'})}</b><button id="calNext" aria-label="Следующий месяц">›</button></div><div class="calendar">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(d=>`<span>${d}</span>`).join('')}${Array.from({length:42},(_,i)=>{const d=shiftDay(start,i);return `<button data-day="${d}" class="${d===date?'active':''} ${d.slice(0,7)!==calendarMonth?'outside':''}" ${d>dayKey()?'disabled':''}>${Number(d.slice(-2))}</button>`;}).join('')}</div><div class="dialog-actions"><button id="calClose">Закрыть</button></div>`;$('calPrev').onclick=()=>{month.setUTCMonth(month.getUTCMonth()-1);calendarMonth=month.toISOString().slice(0,7);calendar();};$('calNext').onclick=()=>{month.setUTCMonth(month.getUTCMonth()+1);calendarMonth=month.toISOString().slice(0,7);calendar();};$('calClose').onclick=()=>$('modal').close();$('modal').querySelectorAll('[data-day]').forEach(b=>b.onclick=()=>{date=b.dataset.day;timeFilterOptions();$('modal').close();render(true);loadResults();});}
-$('dateButton').onclick=()=>{calendarMonth=date.slice(0,7);modal('','calendar');calendar();};
-$('pinMenuButton').onclick=()=>{prefs.pinMenu=!prefs.pinMenu;theme();savePrefs();};
-$('settingsButton').onclick=()=>{modal(`<h2>Настройки</h2><label class="field">Оформление<select id="theme"><option value="system">Как в системе</option><option value="light">Светлое</option><option value="dark">Тёмное</option></select></label><label class="field">Открывать монитор<select id="openMode"><option value="window">Отдельное окно приложения</option><option value="tab">Вкладка браузера</option></select><small>Применяется при следующем нажатии на значок расширения.</small></label><label class="field">Браузер для ссылок<select id="linkBrowser"><option value="current">Текущий браузер</option><option value="system">Системный браузер по умолчанию</option><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option><option value="firefox">Mozilla Firefox</option></select><small>Для другого браузера один раз установите помощник из папки browser-host. ID расширения: ${chrome.runtime.id}</small></label><h3>Сервер</h3><label class="field">Адрес сервера<input id="serverBase" type="url" value="${esc(ServerConfig.base)}" spellcheck="false" maxlength="200"><small>Например http://адрес:8080, https://домен или https://домен/путь. По умолчанию используется прежний сервер.</small></label><label class="field">Токен доступа<input id="serverToken" type="password" autocomplete="off" maxlength="256" placeholder="${ServerConfig.token?'Токен сохранён — оставьте пустым, чтобы не менять':'Не задан'}"><small>Нужен, только если на сервере задан API_TOKEN (публикация связей лиг, генераторы, поиск HLTV).</small></label><div class="controls"><button id="serverSave">Сохранить и перезапустить</button><button id="serverClearToken">Удалить токен</button><button id="serverReset">Сбросить адрес</button></div><p id="serverMessage" class="muted" role="status"></p><button id="openDiagnostics">Диагностика</button><h3>Вкладки</h3>${(prefs.historySettingsUnlocked?[...configurableTabs,'history']:configurableTabs).map(name=>`<label class="controls"><input type="checkbox" data-tab-setting="${name}" ${tabEnabled(name)?'checked':''}> ${labels[name]}</label>`).join('')}${prefs.oddsSettingsUnlocked||prefs.generatorSettingsUnlocked?'<h3>Коэффициенты</h3>':''}${prefs.oddsSettingsUnlocked?'<label class="controls"><input id="settingsHideOdds" type="checkbox" '+(prefs.hideOdds?'checked':'')+'> Скрыть все коэффициенты</label>':''}${prefs.generatorSettingsUnlocked?'<label class="controls"><input id="settingsGenerator" type="checkbox" '+(prefs.generatorEnabled?'checked':'')+'> Генератор коэффициентов</label>':''}<h3>Отображение</h3><label class="controls"><input id="settingsTeamLogos" type="checkbox" ${prefs.teamLogos!==false?'checked':''}> Показывать логотипы команд</label><h3>Статистика Dota 2</h3><label class="controls"><input id="settingsDotaStats" type="checkbox" ${prefs.dotaStatsEnabled?'checked':''}> Показывать статистику матча</label><h3>Уведомления о новых матчах</h3><p class="muted">При первом запуске текущие матчи не вызывают уведомления.</p>${[['deduplicate','Одно уведомление на матч: не повторять при появлении второй конторы'],['live','LIVE'],['prematch','Линия'],['favoritesOnly','Только избранные матчи и лиги'],['sound','Звук']].map(([key,label])=>`<label class="controls"><input type="checkbox" data-notify="${key}" ${prefs.notifications?.[key]?'checked':''}> ${label}</label>`).join('')}<div class="controls"><button id="exportPrefs">Экспорт настроек</button><label>Импорт <input id="importPrefs" type="file" accept=".json"></label></div><div class="dialog-actions"><button id="settingsClose">Готово</button></div>`,'settings');$('modal').querySelectorAll('[data-tab-setting]').forEach(c=>c.onchange=()=>{const name=c.dataset.tabSetting;if(!c.checked&&[...configurableTabs,'history'].filter(tabEnabled).length===1){c.checked=true;toast('Оставьте хотя бы одну вкладку');return;}if(name==='history')prefs.historyEnabled=c.checked;else prefs.tabs={...prefs.tabs,[name]:c.checked};savePrefs();updateTabVisibility();if(!tabEnabled(tab))switchTab(firstVisibleTab());});if($('settingsHideOdds'))$('settingsHideOdds').onchange=()=>setOddsHidden($('settingsHideOdds').checked);if($('settingsGenerator'))$('settingsGenerator').onchange=()=>{setGeneratorEnabled($('settingsGenerator').checked);if($('settingsHideOdds'))$('settingsHideOdds').checked=prefs.hideOdds;};$('openMode').value=prefs.openMode||'window';$('openMode').onchange=()=>{prefs.openMode=$('openMode').value;savePrefs();};$('linkBrowser').value=['current','system','chrome','edge','firefox'].includes(prefs.linkBrowser)?prefs.linkBrowser:'current';$('linkBrowser').onchange=()=>{prefs.linkBrowser=$('linkBrowser').value;savePrefs();};$('openDiagnostics').onclick=()=>{$('modal').close();unlockDiagnostics();};$('serverSave').onclick=async()=>{const base=ServerConfig.normalize($('serverBase').value),message=$('serverMessage');if(!base){message.textContent='Введите корректный адрес, начиная с http:// или https://';return;}const token=$('serverToken').value.trim()||ServerConfig.token;try{const pattern=ServerConfig.permissionPattern(base),defaultPattern=ServerConfig.permissionPattern(ServerConfig.DEFAULT_BASE),previous=ServerConfig.permissionPattern(ServerConfig.base);if(pattern!==defaultPattern){const origins=[pattern];if(!(await chrome.permissions.contains({origins}))&&!(await chrome.permissions.request({origins}))){message.textContent='Без разрешения на доступ к этому адресу расширение не сможет читать ответы сервера.';return;}}await ServerConfig.save({base,token});if(previous!==pattern&&previous!==defaultPattern)chrome.permissions.remove({origins:[previous]}).catch(()=>{});await flushPrefs();location.reload();}catch(error){report(error);}};$('serverClearToken').onclick=async()=>{try{await ServerConfig.save({base:ServerConfig.base,token:''});await flushPrefs();location.reload();}catch(error){report(error);}};$('serverReset').onclick=async()=>{try{const previous=ServerConfig.permissionPattern(ServerConfig.base),defaultPattern=ServerConfig.permissionPattern(ServerConfig.DEFAULT_BASE);await ServerConfig.save({base:ServerConfig.DEFAULT_BASE,token:ServerConfig.token});if(previous!==defaultPattern)await chrome.permissions.remove({origins:[previous]}).catch(()=>{});await flushPrefs();location.reload();}catch(error){report(error);}};$('theme').value=prefs.theme;$('theme').onchange=()=>{prefs.theme=$('theme').value;theme();savePrefs();};$('modal').querySelectorAll('[data-notify]').forEach(c=>c.onchange=()=>{prefs.notifications={...prefs.notifications,[c.dataset.notify]:c.checked};savePrefs();});if($('settingsTeamLogos'))$('settingsTeamLogos').onchange=()=>{prefs.teamLogos=$('settingsTeamLogos').checked;savePrefs();applyTeamLogoPreference();};$('settingsDotaStats').onchange=()=>{prefs.dotaStatsEnabled=$('settingsDotaStats').checked;if(!prefs.dotaStatsEnabled)DotaStatsPanel.clear();savePrefs();render(true);};$('settingsClose').onclick=()=>$('modal').close();$('exportPrefs').onclick=()=>download('esports-monitor-settings.json',{schema:1,prefs});$('importPrefs').onchange=async()=>{try{const data=JSON.parse(await $('importPrefs').files[0].text());if(data.schema!==1||!Array.isArray(data.prefs?.favorites)||!Array.isArray(data.prefs?.hiddenLeagues))throw new Error('Неверный файл настроек');const locks=Object.fromEntries(['features630','historyEnabled','historySettingsUnlocked','featureAccess','hideOdds','generatorEnabled','oddsSettingsUnlocked','generatorSettingsUnlocked'].map(k=>[k,prefs[k]]));prefs={...prefs,...data.prefs,...locks};if(![...configurableTabs,'history'].some(tabEnabled))prefs.tabs={...prefs.tabs,live:true};savePrefs();theme();applyTeamLogoPreference();$('modal').close();render(true);toast('Настройки импортированы');}catch(e){report(e);}};};
-function download(name,data){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-async function chooseLeagueCategory(picked){const names=[...new Set(picked.map(r=>LeagueModel.groupFor(r,workingLinks)?.category||GameCategories.resolve(r.category,r.league)))];if(names.length===1&&!GameCategories.generic(names[0]))return names[0];return new Promise(resolve=>{modal(`<h2>Выберите дисциплину</h2><p>У контор указаны разные или неопределённые игры. Выберите общую дисциплину для этой связи.</p><select id="linkGame"><option value="">Выберите игру…</option>${GameCategories.entries.map(([,name])=>`<option value="${esc(name)}">${esc(name)}</option>`).join('')}</select><div class="dialog-actions"><button id="linkGameCancel">Отмена</button><button id="linkGameSave">Применить</button></div>`);$('modal').addEventListener('close',()=>resolve(null),{once:true});$('linkGameCancel').onclick=()=>$('modal').close();$('linkGameSave').onclick=()=>{if(!$('linkGame').value)return;resolve($('linkGame').value);$('modal').close();};});}
-const leagueViews=[['live','LIVE'],['prematch','Линия'],['results','Результаты'],['history','История'],['compare','Сравнение']];
-function leagueShown(key,scope){const keys=new Set(LeagueModel.expandedKeys([key],workingLinks));const check=v=>!hiddenKeys(v).some(k=>keys.has(k));return scope==='all'?leagueViews.every(([v])=>check(v)):check(scope);}
-function toggleLeagueScope(key,scope){const keys=new Set(LeagueModel.expandedKeys([key],workingLinks)),wasShown=leagueShown(key,scope),globalHidden=prefs.hiddenLeagues.some(k=>keys.has(k));prefs.hiddenLeagues=prefs.hiddenLeagues.filter(k=>!keys.has(k));prefs.hiddenLeaguesByView={...prefs.hiddenLeaguesByView};for(const [view] of leagueViews){let hidden=prefs.hiddenLeaguesByView[view]||[];if(globalHidden)hidden=[...new Set([...hidden,key])];if(scope==='all'||scope===view){hidden=hidden.filter(k=>!keys.has(k));if(wasShown)hidden.push(key);}prefs.hiddenLeaguesByView[view]=hidden;}savePrefs();}
-function renderLeagues(){
- $('notice').hidden=true;$('viewCount').textContent='';$('viewMeta').textContent='Расчёт связей и совпадений выполняется сервером · расширение только отображает каталог';
- if(!catalog){$('content').innerHTML=empty('Загрузка каталога…','Каталог включает и чемпионаты, которых сейчас нет в LIVE.');return;}
- const changeset=LeagueModel.diff(catalog.links||[],workingLinks),dirty=changeset.upsert.length+changeset.remove.length;
- $('content').innerHTML=`<section class="panel"><h2>Собственная группа чемпионатов</h2><p class="muted">Выберите два или больше турнира одной игры. Сходство и процент совпадающих матчей уже рассчитаны сервером.</p><div class="controls"><input id="leagueSearch" type="search" placeholder="Найти чемпионат или игру"><input id="groupName" placeholder="Название общей лиги" maxlength="150"><button id="connectLeagues">Объединить выбранные (${selection.size})</button><button id="publishLeagues" class="primary" ${dirty?'':'disabled'}>Опубликовать (${dirty})</button></div><div id="leagueLists" class="columns"></div></section><section class="panel"><h2>Группы · ${workingLinks.length}</h2>${workingLinks.map(g=>`<div class="league-row"><span><b>${esc(leagueText(g.name)||LeagueModel.members(g).map(r=>leagueText(r.league)).join(' ↔ '))}</b><small>${LeagueModel.members(g).map(r=>`${providerName(r.source)}: ${esc(leagueText(r.league))}`).join(' · ')}</small></span><button data-edit-group="${esc(g.id)}">Состав</button><button data-rename-group="${esc(g.id)}">Название</button><button data-remove-group="${esc(g.id)}">Разъединить</button></div>`).join('')||'<p class="muted">Групп пока нет.</p>'}</section>`;
- let listTimer=0,rankTimer=0;
- function lists(){
-  const offsets=[...$('leagueLists').querySelectorAll('.league-list')].map(n=>n.scrollTop),q=norm($('leagueSearch').value),tokens=q.split(' ').filter(Boolean);
-  const listHtml=leagueProviders.map(source=>{
-   const rows=(catalog.providers?.[source]||[]).filter(r=>!tokens.length||tokens.every(t=>norm(r.league+' '+r.category).includes(t)));
-   const limit=Math.max(LEAGUE_PAGE_SIZE,leagueListLimits.get(source)||LEAGUE_PAGE_SIZE),shown=rows.slice(0,limit);
-   const body=shown.map(r=>{
-    const group=LeagueModel.groupFor(r,workingLinks),id=r.id||LeagueModel.id(r),key=group?LeagueModel.groupKey(group):id,pct=r.matchedPercent==null?'нет матчей':r.matchedPercent+'%';
-    return `<div class="league-row" data-league-row="${esc(id)}"><input type="checkbox" data-select-league="${esc(id)}" aria-label="Выбрать ${esc(leagueText(r.league))}" ${selection.has(id)?'checked':''}><span>${esc(leagueText(r.league))}<small>${esc(r.category)} · сходство ${Number(r.suggestion)||0}% · совпадения ${pct}${group?' · '+esc(leagueText(group.name)||'В группе'):''}</small></span><button class="icon-button" data-star-league="${esc(key)}" aria-label="Избранная лига" aria-pressed="${prefs.favorites.includes(key)}">${prefs.favorites.includes(key)?starIcon(true):starIcon(false)}</button><div class="league-visibility" aria-label="Показывать лигу">${[['all','Везде'],...leagueViews].map(([scope,label])=>`<button data-visibility-key="${esc(key)}" data-visibility-scope="${scope}" aria-pressed="${leagueShown(key,scope)}">${label}</button>`).join('')}</div></div>`;
-   }).join('');
-   const more=rows.length>shown.length?`<button class="league-more" data-more-leagues="${source}">Показать ещё ${Math.min(LEAGUE_PAGE_SIZE,rows.length-shown.length)} · осталось ${rows.length-shown.length}</button>`:'';
-   return `<div><h2>${providerName(source)} <small>${shown.length}/${rows.length}</small></h2><div class="league-list">${body}${more}</div></div>`;
-  }).join('');
-  StableDOM.patch($('leagueLists'),listHtml);[...$('leagueLists').querySelectorAll('.league-list')].forEach((n,i)=>n.scrollTop=offsets[i]||0);
- }
- const scheduleLists=(delay=70)=>{clearTimeout(listTimer);listTimer=setTimeout(lists,delay);};
- const scheduleRank=()=>{clearTimeout(rankTimer);rankTimer=setTimeout(()=>rerankLeagueCatalog(),140);};
- lists();$('leagueSearch').oninput=()=>{for(const source of providers)leagueListLimits.set(source,LEAGUE_PAGE_SIZE);scheduleLists();};
- $('leagueLists').onchange=event=>{const id=event.target.dataset.selectLeague;if(!id)return;if(event.target.checked)selection.add(id);else selection.delete(id);$('connectLeagues').textContent=`Объединить выбранные (${selection.size})`;scheduleRank();};
- $('leagueLists').onclick=event=>{const b=event.target.closest('button');if(!b)return;const more=b.dataset.moreLeagues;if(more){leagueListLimits.set(more,(leagueListLimits.get(more)||LEAGUE_PAGE_SIZE)+LEAGUE_PAGE_SIZE);lists();return;}if(b.dataset.visibilityKey){toggleLeagueScope(b.dataset.visibilityKey,b.dataset.visibilityScope);$('leagueLists').querySelectorAll('[data-visibility-key]').forEach(button=>button.setAttribute('aria-pressed',leagueShown(button.dataset.visibilityKey,button.dataset.visibilityScope)));return;}const star=b.dataset.starLeague;if(star){prefs.favorites=prefs.favorites.includes(star)?prefs.favorites.filter(k=>k!==star):[...prefs.favorites,star];savePrefs();$('leagueLists').querySelectorAll('[data-star-league]').forEach(button=>{const active=prefs.favorites.includes(button.dataset.starLeague);button.setAttribute('aria-pressed',active);button.innerHTML=starIcon(active);});}};
- $('connectLeagues').onclick=async()=>{try{const name=$('groupName').value.trim();if(!name)throw new Error('Введите название общей лиги');const picked=providers.flatMap(source=>catalog.providers?.[source]||[]).filter(r=>selection.has(r.id||LeagueModel.id(r)));if(picked.length<2)throw new Error('Выберите минимум две лиги');const category=await chooseLeagueCategory(picked);if(!category)return;workingLinks=LeagueModel.connect(workingLinks,picked,crypto.randomUUID(),Date.now(),category);const g=LeagueModel.groupFor(picked[0],workingLinks);g.name=name;selection.clear();renderLeagues();toast('Группа в черновике. Опубликуйте изменения.');}catch(error){report(error);}};
- $('publishLeagues').onclick=async()=>{try{const result=await LeagueClient.publishDialog(catalog,LeagueModel.diff(catalog.links||[],workingLinks));if(result){catalog={...catalog,...result.result,receivedAt:0};workingLinks=structuredClone(result.result?.links||workingLinks);toast('Связи опубликованы');renderLeagues();snapshots=await chrome.runtime.sendMessage({type:'refresh'});viewSignature='';await loadCatalog(true,[]);}}catch(error){report(error);}};
- $('content').querySelectorAll('[data-edit-group]').forEach(b=>b.onclick=()=>editLeagueGroup(b.dataset.editGroup));
- $('content').querySelectorAll('[data-remove-group]').forEach(b=>b.onclick=()=>{workingLinks=workingLinks.filter(g=>g.id!==b.dataset.removeGroup);renderLeagues();});
- $('content').querySelectorAll('[data-rename-group]').forEach(b=>b.onclick=()=>{const group=workingLinks.find(g=>g.id===b.dataset.renameGroup);modal(`<h2>Название группы</h2><input id="renameInput" value="${esc(group.name||'')}" maxlength="150"><div class="dialog-actions"><button id="renameCancel">Отмена</button><button id="renameSave">Сохранить черновик</button></div>`);$('renameCancel').onclick=()=>$('modal').close();$('renameSave').onclick=()=>{const name=$('renameInput').value.trim();if(!name)return;workingLinks=workingLinks.map(g=>g.id===group.id?{...g,name}:g);$('modal').close();renderLeagues();};});
-}
-function comparisonProviders(e){return refs(e).filter(r=>prefs[r.source]!==false&&providers.includes(r.source)).map(r=>`<span class="comparison-provider"><button class="source-link ${esc(r.source)}" data-open-url="${esc(eventUrl(r))}" ${eventUrl(r)?'':'disabled'}>${providerName(r.source)}</button> ${stamp(r.startAt,true)} ${r.bestOf?'<span class="bo">Bo'+r.bestOf+'</span>':''}</span>`).join('');}
-function comparisonTree(items,prefix){const groups=new Map();for(const item of items){const e=item.event,key=norm(e.category),g=groups.get(key)||{name:e.category||'Esports',leagues:new Map(),count:0},league=leagueTitle(e)||'Без лиги';g.count++;if(!g.leagues.has(league))g.leagues.set(league,[]);g.leagues.get(league).push(item);groups.set(key,g);}return [...groups].sort((a,b)=>alphabet.compare(a[1].name,b[1].name)).map(([key,g])=>{const categoryKey=prefix+':'+key;return `<details class="category-group comparison-group" data-tree-key="${esc(categoryKey)}" ${(prefs.comparisonExpanded||[]).includes(categoryKey)?'open':''}><summary>${gameIcon(g.name)}<strong>${esc(g.name)}</strong><span class="group-count">${g.count}</span></summary>${[...g.leagues].sort((a,b)=>alphabet.compare(a[0],b[0])).map(([name,rows])=>{const leagueKey=categoryKey+':'+norm(name);return `<details class="league-group" data-tree-key="${esc(leagueKey)}" ${(prefs.comparisonExpanded||[]).includes(leagueKey)?'open':''}><summary><span>${esc(name)}</span><span class="group-count">${rows.length}</span></summary>${rows.sort((a,b)=>Number(a.event.startAt)-Number(b.event.startAt)).map(r=>r.html).join('')}</details>`;}).join('')}</details>`;}).join('');}
-function compareVisible(events,ignoreCategory=false){return visible(normalizedRows(events),{view:'compare',ignoreCategory});}
-async function runComparison(){if(busy||!imported)return;busy=true;if(tab==='compare')renderCompare();try{comparison=await request('/api/prematch/compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({events:imported.events,options:{astekEnabled:prefs.astek!==false,fonbetEnabled:prefs.fonbet!==false,pinnacleEnabled:prefs.pinnacle!==false,excludedLeagueKeys:hiddenKeys('compare')}})});}catch(error){report(error);}finally{busy=false;if(tab==='compare')renderCompare();}}
-function renderCompare(){
- if(comparison&&comparison.revision<rules().revision&&!busy){comparison=null;runComparison();return;}
- const draft=$('scheduleText')?.value;const facetRows=comparison?[...comparison.matches.map(m=>m.astek),...comparison.missingInput,...comparison.onlyAstek]:(imported?.events||[]);categoryOptions(compareVisible(facetRows,true));const inputRows=compareVisible(imported?.events||[]);$('notice').hidden=true;$('viewCount').textContent=inputRows.length||'';$('viewMeta').textContent='Файл расписания → проверка дат → сопоставление с линией';
- $('content').innerHTML=`<section class="panel"><h2>1. Загрузите расписание</h2><p class="muted">HTM / HTML / Markdown, включая CustomLine и Betshop printed. Читаются турниры, даты и команды. Коэффициенты и дополнительные рынки пропускаются.</p><div class="controls"><input id="scheduleFile" type="file" accept=".htm,.html,.md,.txt,text/html,text/plain,text/markdown"><label>Год <input id="importYear" type="number" min="2000" max="2100" value="${imported?.year||new Date().getFullYear()}" style="width:90px"></label><label>Время в файле<select id="importZone"><option value="240">UTC+4</option><option value="180">UTC+3</option><option value="0">UTC</option></select></label></div><details><summary>Или вставьте расписание текстом</summary><p class="muted">Можно вставить таблицу Betshop printed целиком или строки: 21.09.2026 18:00 | Counter Strike 2 | CCT Europe | Nexus - Bushido Wildcats</p><textarea id="scheduleText" rows="4" placeholder="Дата время | Игра | Лига | Команда 1 - Команда 2"></textarea><button id="parseText">Прочитать текст</button></details></section>
- ${imported?`<section class="panel"><h2>2. Проверьте распознанные матчи · ${inputRows.length}</h2><p class="muted">Время ниже приведено к UTC+4. ${imported.duplicates?`Повторы удалены: ${imported.duplicates}.`:''} ${imported.errors.length?`Не прочитано строк: ${imported.errors.length}.`:''}</p>${imported.errors.length?`<details><summary>Ошибки импорта</summary><pre>${esc(imported.errors.join('\n'))}</pre></details>`:''}<div class="comparison-preview">${comparisonTree(inputRows.map(e=>({event:e,html:`<div class="comparison-row" tabindex="0"><strong>${esc(e.team1)} - ${esc(e.team2)}</strong><span>${stamp(e.startAt,true)}</span></div>`})),'preview')}</div><div class="controls"><button id="compareRun" class="primary" ${busy?'disabled':''}>${busy?'Сравниваем…':'Сравнить с линией'}</button><span class="muted">Учитываются выбранные конторы и скрытые лиги</span></div></section>`:''}<div id="comparisonOutput"></div>`;
- $('importZone').value=String(imported?.offsetMinutes??240);if(draft!==undefined)$('scheduleText').value=draft;
- async function read(){try{if(!importText)return;imported={...ScheduleImport.parse(importText,{year:Number($('importYear').value),offsetMinutes:Number($('importZone').value)}),offsetMinutes:Number($('importZone').value)};comparison=null;renderCompare();}catch(error){report(error);}}
- $('scheduleFile').onchange=async()=>{const file=$('scheduleFile').files[0];if(!file)return;if(file.size>10*1024*1024){toast('Файл слишком большой: максимум 10 МБ');return;}importText=await file.text();await read();};$('importYear').onchange=read;$('importZone').onchange=read;
- $('parseText').onclick=()=>{if(/Betshop printed|(?:Esports|Киберспорт)\s*[.:]/i.test($('scheduleText').value)){importText=$('scheduleText').value;read();return;}try{const rows=$('scheduleText').value.trim().split('\n').filter(Boolean);const events=rows.map((line,i)=>{const parts=line.split('|').map(s=>s.trim()),date=parts[0].match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$/),teams=(parts[3]||'').split(/\s+[—–-]\s+/);if(!date||teams.length!==2||!parts[2])throw new Error(`Проверьте формат строки ${i+1}`);return {startAt:Date.UTC(+date[3],+date[2]-1,+date[1],+date[4],+date[5])-Number($('importZone').value)*60000,category:parts[1],league:parts[2],team1:teams[0],team2:teams[1]};});if(!events.length)throw new Error('Вставьте расписание');imported={events,errors:[],duplicates:0,year:Number($('importYear').value),offsetMinutes:Number($('importZone').value)};importText='';comparison=null;renderCompare();}catch(error){report(error);}};
- if($('compareRun'))$('compareRun').onclick=runComparison;
- if(comparison){const result={...comparison,matches:comparison.matches.filter(m=>compareVisible([m.astek]).length),missingInput:compareVisible(comparison.missingInput),onlyAstek:compareVisible(comparison.onlyAstek)};$('viewCount').textContent=result.matches.length+result.missingInput.length+result.onlyAstek.length;$('comparisonOutput').innerHTML=`<section class="panel"><h2>3. Результат сравнения</h2><div class="controls">${[['all','Все'],['matched',`Совпали · ${result.matches.length}`],['time',`Разное время · ${result.matches.filter(m=>m.minutes>=1).length}`],['missing',`Есть в файле · ${result.missingInput.length}`],['extra',`Отсутствуют в файле · ${result.onlyAstek.length}`]].map(([value,label])=>`<button data-compare-filter="${value}" class="${compareFilter===value?'active':''}">${label}</button>`).join('')}</div><p class="muted">Скрыто правилами: ${result.hiddenInputs||0}. «Есть в файле» также может означать, что названия неоднозначны или матч уже начался.</p><div id="comparisonRows"></div></section>`;
- treeLabel();const rows=[];if(['all','matched','time'].includes(compareFilter))for(const m of result.matches){if(compareFilter==='time'&&m.minutes<1)continue;rows.push({event:normalizedRows([m.astek])[0],html:`<div class="comparison-row" tabindex="0"><div><span class="pill">Файл</span><strong>${esc(m.input.team1)} - ${esc(m.input.team2)}</strong><small>${esc(leagueTitle(m.input))} · ${stamp(m.input.startAt,true)}</small></div><div><span class="${m.minutes>=1?'bad':'good'}">${m.minutes>=1?'Разница '+Math.round(m.minutes)+' мин':'Совпало'} · ${Math.round(m.score*100)}%</span><strong>${esc(m.astek.team1)} - ${esc(m.astek.team2)}</strong><small>${comparisonProviders(m.astek)}${m.swapped?' · обратный порядок команд':''}</small></div></div>`});}
- if(['all','missing'].includes(compareFilter))for(const e of result.missingInput)rows.push({event:e,html:`<div class="comparison-row" tabindex="0"><div><strong>${esc(e.team1)} - ${esc(e.team2)}</strong><small>${esc(leagueTitle(e))} · ${stamp(e.startAt,true)}</small></div><div class="bad">Не найдено уверенного совпадения в линии</div></div>`});
- if(['all','extra'].includes(compareFilter))for(const e of result.onlyAstek)rows.push({event:e,html:`<div class="comparison-row" tabindex="0"><div><strong>${esc(e.team1)} - ${esc(e.team2)}</strong><small>${esc(leagueTitle(e))} · ${stamp(e.startAt,true)}</small></div><div class="muted">Есть в линии, отсутствует в файле<span class="comparison-providers">${comparisonProviders(e)}</span></div></div>`});
- $('comparisonRows').innerHTML=comparisonTree(rows,'comparison')||empty('Нет расхождений в этой группе','');treeLabel();$('comparisonOutput').querySelectorAll('[data-compare-filter]').forEach(b=>b.onclick=()=>{compareFilter=b.dataset.compareFilter;renderCompare();});}
-}
-function publicHealth(raw){
- if(!raw||typeof raw!=='object')return raw;
- const copy=typeof structuredClone==='function'?structuredClone(raw):JSON.parse(JSON.stringify(raw));
- const providerStats={};
- if(copy.hawk)providerStats.dota2=copy.hawk;
- if(copy.crossbet)providerStats.cs2=copy.crossbet;
- delete copy.hawk;delete copy.crossbet;
- if(copy.features&&Object.prototype.hasOwnProperty.call(copy.features,'hawk')){
-  copy.features.statistics=copy.features.statistics??copy.features.hawk;
-  delete copy.features.hawk;
- }
- if(copy.statistics?.providers){
-  const providers=copy.statistics.providers;
-  copy.statistics.providers={};
-  if(providers.hawk)copy.statistics.providers.dota2=providers.hawk;
-  if(providers.crossbet)copy.statistics.providers.cs2=providers.crossbet;
- }
- if(Object.keys(providerStats).length)copy.statisticsSources=providerStats;
- return copy;
-}
-let lastHealth=null,healthAt=0;
-async function renderDebug(){
- $('notice').hidden=true;$('viewCount').textContent='';$('viewMeta').textContent='Свежесть источников, очередь результатов и ошибки';
- const renderHealth=()=>{if(tab!=='debug')return;const health=publicHealth(lastHealth),rows=['live','prematch'].flatMap(mode=>(mode==='live'?providers:prematchProviders).map(source=>{const r=health?.[mode]?.[source]||{},at=Date.parse(r.lastSuccessfulUpdateAt||''),age=at?Math.max(0,Math.round((Date.now()-at)/1000)):'—';return `<tr><td>${mode==='live'?'LIVE':'Линия'} · ${providerName(source)}</td><td class="${r.stale?'bad':'good'}">${r.stale?'Задерживается':'●'}</td><td>${r.count??'—'}</td><td>${age} с</td><td>${r.lastHttpStatus||'—'} / ${r.lastElapsedMs??'—'} мс</td><td>${esc(r.lastError||'—')}</td></tr>`;}));
- $('content').innerHTML=`<section class="panel"><h2>Отображение коэффициентов</h2><label class="controls"><input id="debugHideOdds" type="checkbox" ${prefs.hideOdds?'checked':''}> Скрыть все коэффициенты</label><label class="controls"><input id="debugGenerator" type="checkbox" ${prefs.generatorEnabled?'checked':''}> Генератор коэффициентов</label><p class="muted">Включение генератора разрешает показ коэффициентов. После включения управление доступно в настройках.</p></section><div class="diagnostic-summary"><span class="muted">Обновлено ${stamp(healthAt,false,true)}</span><span class="status-pill ${!health||Object.values(health.live||{}).some(r=>r.stale)?'bad':'good'}">${!health?'Нет ответа сервера':Object.values({...Object.fromEntries(Object.entries(health.live||{}).map(([k,v])=>['live-'+k,v])),...Object.fromEntries(Object.entries(health.prematch||{}).map(([k,v])=>['pre-'+k,v]))}).some(r=>r.stale)?'Один из источников задерживается':'Источники обновляются'}</span></div><div class="metric-grid"><div class="metric"><small>Сервер</small><b>${esc(health?.version||'Нет ответа')}</b></div><div class="metric"><small>Работает</small><b>${health?Math.floor(health.uptimeSeconds/60)+' мин':'—'}</b></div><div class="metric"><small>Архив готов</small><b>${health?.results?.readyDays??'—'} / ${health?.results?.requiredDays??'—'}</b></div><div class="metric"><small>Дней в очереди</small><b>${health?.results?.queuedDays??'—'}</b></div></div><section class="panel" style="margin-top:14px;overflow:auto"><h2>Источники</h2><table><thead><tr><th>Источник</th><th>Статус</th><th>Матчей</th><th>Возраст</th><th>HTTP / время</th><th>Ошибка</th></tr></thead><tbody>${rows.join('')}</tbody></table><p class="muted">Возраст — время с последнего успешного ответа, даже если состав матчей не менялся.</p></section><section class="panel"><h2>Нагрузка и запросы</h2><p class="muted">Считаются отдельные HTTP-запросы, включая части каталога и повторы. Результаты открытой даты сверяются раз в 5 минут, архив вне просмотра — раз в сутки.</p><p>Память: ${health?.runtime?.rssMiB??'—'} МБ · максимальная задержка обработки: ${health?.runtime?.eventLoopMaxMs??'—'} мс · очередь сопоставления: ${health?.runtime?.matcher?.pendingTasks??'—'}</p><p class="muted">AstekBet: ${health?.runtime?.astekGate?.active?'запрос выполняется':'свободен'} · в очереди ${health?.runtime?.astekGate?.queued??0}</p><div style="overflow:auto"><table><thead><tr><th>Лента</th><th>За минуту</th><th>Успешно</th><th>Ошибки</th><th>В работе</th></tr></thead><tbody>${Object.entries(health?.upstreamRequests||{}).map(([key,m])=>`<tr><td>${esc(({astekLive:'LIVE AstekBet',pinnacleLive:'Pinnacle · LIVE и коэффициенты',pinnaclePrematch:'Pinnacle · линия и коэффициенты',astekPrematch:'Линия AstekBet',fonbetFeed:'Fonbet · LIVE и линия',results:'Результаты',astekResultsCatalog:'AstekBet · лиги результатов',astekResultsGames:'AstekBet · финальные счета',fonbetResults:'Fonbet · результаты дня'})[key]||key)}</td><td>${m.requestsLastMinute}</td><td>${m.successes}</td><td class="${m.failures?'bad':''}">${m.failures}</td><td>${m.inFlight}</td></tr>`).join('')}</tbody></table></div></section><section class="panel"><h2>Архив</h2><p>Активные даты: ${esc((health?.results?.activeDays||[]).join(', ')||'нет')} · Ожидают финала: ${health?.results?.pendingFinals??'—'}</p>${(health?.results?.failedDays||[]).map(d=>`<p class="bad">${esc(d.date)}: ${esc(Object.entries(d.providers||{}).filter(([,p])=>p.error).map(([source,p])=>source+': '+p.error).join('; ')||d.error||'ожидается обновление')}</p>`).join('')}</section><section class="panel"><h2>Последние ошибки расширения</h2><pre>${esc(errors.length?errors.map(e=>e.at+' '+e.message).join('\n'):'Ошибок в этом окне нет.')}</pre><div class="controls"><button id="debugCheck">Проверить сейчас</button><button id="debugDownload">Скачать отчёт</button></div><details><summary>Полный ответ сервера</summary><pre>${esc(JSON.stringify(health,null,2))}</pre></details></section>`;
- $('debugHideOdds').onchange=()=>setOddsHidden($('debugHideOdds').checked);$('debugGenerator').onchange=()=>setGeneratorEnabled($('debugGenerator').checked);$('debugCheck').onclick=()=>{healthAt=0;renderDebug();};$('debugDownload').onclick=()=>download('esports-monitor-report.json',{createdAt:new Date().toISOString(),extensionVersion:chrome.runtime.getManifest().version,health,lastHealthAt:healthAt,statisticsClient:StatisticsClient.status(),statisticsEnabled:prefs.dotaStatsEnabled,clientErrors:errors,snapshots:Object.fromEntries(Object.entries(snapshots).map(([k,v])=>[k,{revision:v.revision,count:v.count,receivedAt:v.receivedAt,transportError:v.transportError}]))});};
- renderHealth();if(Date.now()-healthAt<10000)return;try{lastHealth=await request('/health');healthAt=Date.now();renderHealth();}catch(e){report(e);}
-}
-let reconnectDelay=500,reconnectTimer=0;
-function snapshotChanged(before,next){if(!before||!next)return true;if(before.revision!=null||next.revision!=null)return before.revision!==next.revision||before.transportError!==next.transportError||before.stale!==next.stale;return true;}
-function refreshFreshness(){sourceStatus();if(tab==='live')$('liveMenuMeta').textContent=snapshots.live?.receivedAt?'Обновлено '+stamp(snapshots.live.receivedAt,false,true):'Ожидаем данные';if(tab==='results')$('viewMeta').textContent=resultsMeta(resultCache.get(date));const current=tab==='live'?snapshots.live:tab==='results'?resultCache.get(date):tab==='history'?history:snapshots.prematch,warn=currentWarning(current);$('notice').hidden=!warn;$('notice').textContent=warn;}
-function sendActivity(){try{port?.postMessage({type:'activity',visible:!document.hidden,tab});}catch{}}
-let feedRenderFrame=0;
-function feedAffectsView(kind){return kind==='live'?tab==='live':kind==='prematch'?['prematch','compare','leagues'].includes(tab):true;}
-function scheduleFeedRender(){if(feedRenderFrame)return;feedRenderFrame=requestAnimationFrame(()=>{feedRenderFrame=0;render();restoreTabScroll();});}
-function providerRefMap(snapshot){const map=new Map();for(const event of snapshot?.events||[])for(const ref of refs(event))map.set(`${ref.source}:${ref.sourceEventId||ref.id}`,ref);return map;}
-function applyVisibleFeedPatches(kind,patches){
- const list=Array.isArray(patches)?patches:[];if(!list.length)return true;
- // These fields do not alter grouping/filtering/card structure. They can be
- // consumed from the in-memory snapshot without morphing the whole feed DOM.
- const safe=kind==='live'?new Set(['scoreText','seriesScore','mapScores','activeMap','updatedAt','odds','broadcast']):new Set(['updatedAt','odds']);
- if(list.some(p=>(Array.isArray(p.fields)?p.fields:Object.keys(p||{}).filter(k=>!['source','id','sourceEventId'].includes(k))).some(field=>!safe.has(field))))return false;
- if(kind!=='live'||tab!=='live')return true;
- const byRef=providerRefMap(snapshots.live),eventByRef=new Map();for(const event of snapshots.live?.events||[])for(const ref of refs(event))eventByRef.set(`${ref.source}:${ref.sourceEventId||ref.id}`,event);const rows=[...$('content').querySelectorAll('[data-source-ref]')],rowByRef=new Map(rows.map(row=>[row.dataset.sourceRef,row]));let touched=false;
- for(const patch of list){const fields=Array.isArray(patch.fields)?patch.fields:[],scoreChange=fields.some(f=>['scoreText','seriesScore','mapScores','activeMap'].includes(f));if(!scoreChange)continue;const key=`${patch.source}:${patch.sourceEventId||patch.id}`,ref=byRef.get(key),event=eventByRef.get(key),row=rowByRef.get(key),button=row?.querySelector('.score-value');if(!ref||!button)continue;button.innerHTML=scoreMarkup(ref,event);button.classList.add('changed');touched=true;}
- if(touched){clearTimeout(applyVisibleFeedPatches.timer);applyVisibleFeedPatches.timer=setTimeout(()=>$('content').querySelectorAll('.score-value.changed').forEach(n=>n.classList.remove('changed')),2100);}
- return true;
+// ---------------------------------------------------------------------------------------------------- feeds -----
+const snapshots={live:null,prematch:null};
+const liveByProvider=new Map();
+let port=null,reconnectDelay=500,reconnectTimer=0;
+const quoteTracker=MatchFormat.createPriceTracker({windowMs:20000});
+const scoreChanged=new Map();let lastScores=new Map();
+function noteScores(snapshot){const now=Date.now();for(const e of snapshot?.events||[])for(const r of refs(e)){const key=`${r.source}:${r.sourceEventId||r.id}`,v=r.scoreText||'';if(lastScores.has(key)&&lastScores.get(key)!==v&&v)scoreChanged.set(key,now);lastScores.set(key,v);}if(lastScores.size>6000)lastScores=new Map([...lastScores].slice(-3000));}
+function compactForDisk(s,kind){if(!s?.events)return null;return {events:s.events,providers:s.providers,revision:s.revision,structureRevision:s.structureRevision,leagueRules:s.leagueRules,generatedAt:s.generatedAt,receivedAt:s.receivedAt||Date.now(),liveOddsProvider:kind==='live'?OddsProvider.selected(prefs):undefined};}
+function setSnapshot(kind,snapshot,{persisted=false}={}){
+ snapshots[kind]=snapshot?{...snapshot,persisted}:null;
+ if(kind==='live'&&snapshot&&!persisted){noteScores(snapshot);liveByProvider.set(OddsProvider.selected(prefs),snapshots.live);}
+ if(snapshot&&!persisted&&!snapshot.offline)persist.save(kind,compactForDisk(snapshot,kind));
+ invalidateRows(kind);
 }
 function connect(){
  clearTimeout(reconnectTimer);
  try{port=chrome.runtime.connect({name:'monitor'});}catch{port=null;reconnectTimer=setTimeout(connect,reconnectDelay);reconnectDelay=Math.min(10000,reconnectDelay*2);return;}
  sendActivity();
- port.onMessage.addListener(message=>{
-  reconnectDelay=500;
-  if(message.kind==='ui-invalidate'){handleUiInvalidate(message);return;}
-  if(message.kind==='ui-stream'){reconcileUiStream();return;}
-  let needsRender=true;
-  if(message.kind==='freshness'){
-   const target=snapshots[message.feed],failed=!!message.freshness?.transportError;
-   // Before the first snapshot only a placeholder (offline:true) records the connection error; it is never treated as data.
-   if(target&&!target.offline&&message.freshness)Object.assign(target,message.freshness);
-   else if(failed&&message.freshness&&(target?.offline||message.freshness.failures>=2)){snapshots[message.feed]={events:[],offline:true,...message.freshness};needsRender=true;}
-   else if(target?.offline&&!failed){delete snapshots[message.feed];needsRender=true;}
-   if(!(target?.offline||snapshots[message.feed]?.offline))needsRender=false;
-  }else if(message.kind==='live-provider'){
-   if(OddsProvider.normalize(message.provider)!==OddsProvider.selected(prefs)){prefs.liveOddsProvider=OddsProvider.normalize(message.provider);updateProviderScope();}detailCache.clear();delete snapshots.live;liveRowsKey='';viewSignature='';needsRender=true;
-  }else if(message.kind==='initial'){
-   snapshots={...snapshots,...message.snapshots};observeScores(snapshots.live);
-  }else if(message.push){
-   for(const patch of message.patches||[])if(patch?.detailChanged){
-    const key=`${patch.source}:${patch.sourceEventId||patch.id}`;
-    for(const [cacheKey,entry] of detailCache)if(refs(entry?.event||{}).some(r=>`${r.source}:${r.sourceEventId||r.id}`===key))detailCache.delete(cacheKey);
-   }
-   const before=snapshots[message.kind]?.offline?undefined:snapshots[message.kind],applied=FeedPush.applyProviderPatches(before,message.patches||[],message.meta||{},Number(message.meta?.receivedAt)||Date.now()),next=applied.snapshot;
-   if(next){snapshots[message.kind]=next;needsRender=snapshotChanged(before,next);if(message.kind==='live')observeScores(next);if(applyVisibleFeedPatches(message.kind,message.patches))needsRender=false;window.dispatchEvent(new CustomEvent('monitor-feed-push',{detail:{kind:message.kind,patches:message.patches||[],snapshot:next}}));}else needsRender=false;
-  }else{
-   const before=snapshots[message.kind];snapshots[message.kind]=message.snapshot;needsRender=snapshotChanged(before,message.snapshot);if(message.kind==='live')observeScores(message.snapshot);
-  }
-  if(needsRender&&feedAffectsView(message.kind))scheduleFeedRender();else refreshFreshness();
- });
+ port.onMessage.addListener(onPortMessage);
  port.onDisconnect.addListener(()=>{port=null;clearTimeout(reconnectTimer);reconnectTimer=setTimeout(connect,reconnectDelay);reconnectDelay=Math.min(10000,reconnectDelay*2);});
 }
-async function init(){$('extensionVersion').textContent='v'+chrome.runtime.getManifest().version;const saved=await chrome.storage.local.get(['prefs']);prefs={...prefs,...saved.prefs};if(typeof prefs.dotaStatsEnabled!=='boolean'){prefs.dotaStatsEnabled=typeof prefs.hawkEnabled==='boolean'?prefs.hawkEnabled:true;delete prefs.hawkEnabled;savePrefs();}if(typeof prefs.teamLogos!=='boolean'){prefs.teamLogos=true;savePrefs();}if(!['asc','desc'].includes(prefs.liveSort))prefs.liveSort='desc';if(!['','0.5','1','6','12','24'].includes(String(prefs.historyStartWindow||'')))prefs.historyStartWindow='';if(!['current','system','chrome','edge','firefox'].includes(prefs.linkBrowser))prefs.linkBrowser='current';if(!prefs.features630){prefs.historyEnabled=false;prefs.historySettingsUnlocked=false;prefs.hideOdds=true;prefs.generatorEnabled=false;prefs.oddsSettingsUnlocked=false;prefs.generatorSettingsUnlocked=false;prefs.features630=true;savePrefs();}snapshots={};if(!prefs.tabs608){prefs.historyEnabled=false;prefs.tabs608=true;savePrefs();}if(![...configurableTabs,'history'].some(tabEnabled))prefs.tabs={...prefs.tabs,live:true};if(!prefs.timeWindows)prefs.timeWindows=Object.fromEntries(['live','prematch','results','compare'].map(v=>[v,['0.5','1','6','12','24'].includes(prefs.timeWindow)?prefs.timeWindow:'']));if(!prefs.splitHistory607){prefs.hiddenLeaguesByView={...prefs.hiddenLeaguesByView,history:[...(prefs.hiddenLeaguesByView?.results||[])]};prefs.splitHistory607=true;savePrefs();}
-if(!prefs.scheduleMerged690){
- const oldSchedule=prefs.hiddenLeaguesByView?.schedule||[];
- prefs.hiddenLeaguesByView={...prefs.hiddenLeaguesByView,prematch:[...new Set([...(prefs.hiddenLeaguesByView?.prematch||[]),...oldSchedule])]};
- delete prefs.hiddenLeaguesByView.schedule;
- prefs.scheduleMerged690=true;
- savePrefs();
-}$('showExtras').checked=prefs.showExtras!==false;$('startWindow').value=prefs.timeWindow||'';for(const key of Object.keys(prefs.timeWindows||{}))if(prefs.timeWindows[key]==='3')prefs.timeWindows[key]='';if(prefs.historyStartWindow==='3')prefs.historyStartWindow='';theme();applyTeamLogoPreference();observeScores(snapshots.live);if(prefs.lastTab==='schedule'){prefs.lastTab='prematch';prefs.lineScheduleMode=true;savePrefs();}tab=labels[prefs.lastTab]&&prefs.lastTab!=='debug'&&tabEnabled(prefs.lastTab)?prefs.lastTab:firstVisibleTab();switchTab(tab);connect();}
-document.addEventListener('visibilitychange',()=>{sendActivity();if(!document.hidden&&uiDirty.has(tab))scheduleUiViewReload(tab,0);});
-setInterval(()=>{sourceStatus();sendActivity();},20000);
-setInterval(()=>{if(tab==='results')$('viewMeta').textContent=resultsMeta(resultCache.get(date));},1000);
-const clearableSelector='input:not([type]),input[type=search],input[type=text],input[type=password],textarea';
-function decorateClearInput(input){if(!(input instanceof HTMLElement)||!input.matches?.(clearableSelector)||input.closest('.clear-field'))return;const wrapper=document.createElement('span');wrapper.className='clear-field';input.before(wrapper);wrapper.append(input);const button=document.createElement('button');button.type='button';button.className='clear-input';button.textContent='×';button.setAttribute('aria-label','Очистить поле');const sync=()=>button.hidden=!input.value;sync();wrapper.append(button);input.addEventListener('input',sync);button.onclick=()=>{input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));input.focus();};}
-function clearInputs(root=document){if(root.matches?.(clearableSelector))decorateClearInput(root);root.querySelectorAll?.(clearableSelector).forEach(decorateClearInput);}
-new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node.nodeType===1)clearInputs(node);}).observe(document.body,{childList:true,subtree:true});clearInputs();
-window.addEventListener('pagehide',flushPrefs);
-const teamLogoMutations=new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node.nodeType===1)bindTeamLogos(node);});teamLogoMutations.observe($('content'),{childList:true,subtree:true});bindTeamLogos($('content'));
-init().then(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('app-booting'))).catch(error=>{document.documentElement.classList.remove('app-booting');report(error);});
+function onPortMessage(message){
+ reconnectDelay=500;
+ if(message.kind==='ui-invalidate'){handleUiInvalidate(message);return;}
+ if(message.kind==='ui-stream'){reconcileServerViews();return;}
+ if(message.kind==='freshness'){
+  const kind=message.feed,target=snapshots[kind],f=message.freshness||{},failed=!!f.transportError;
+  if(target&&!target.offline){Object.assign(target,f);if(!failed&&target.persisted&&f.revision&&String(f.revision)===String(target.revision))target.persisted=false;}
+  else if(failed&&(target?.offline||f.failures>=2||!target))snapshots[kind]={events:[],offline:true,...f};
+  else if(target?.offline&&!failed)snapshots[kind]=null;
+  scheduleChrome();if(target?.offline||snapshots[kind]?.offline)scheduleRender(kind);
+  return;
+ }
+ if(message.kind==='live-provider'){const p=OddsProvider.normalize(message.provider);if(p!==OddsProvider.selected(prefs)){prefs.liveOddsProvider=p;}applyProviderSwitchLocally();return;}
+ if(message.kind==='initial'){for(const kind of ['live','prematch']){const s=message.snapshots?.[kind];if(s?.events&&!(kind==='live'&&s.liveOddsProvider&&s.liveOddsProvider!==OddsProvider.selected(prefs)))setSnapshot(kind,s);}scheduleRender('live');scheduleRender('prematch');scheduleChrome();return;}
+ if(message.push){
+  const kind=message.kind,before=snapshots[kind]?.offline?undefined:snapshots[kind];
+  const applied=FeedPush.applyProviderPatches(before,message.patches||[],message.meta||{},Number(message.meta?.receivedAt)||Date.now());
+  if(applied.snapshot){snapshots[kind]={...applied.snapshot,persisted:false};if(kind==='live'){noteScores(snapshots.live);liveByProvider.set(OddsProvider.selected(prefs),snapshots.live);}persist.save(kind,compactForDisk(snapshots[kind],kind));invalidateRows(kind);scheduleRender(kind);}
+  DetailPanel.onFeedPatches(message.patches);
+  window.dispatchEvent(new CustomEvent('monitor-feed-push',{detail:{kind,patches:message.patches||[],snapshot:snapshots[kind]}}));
+  return;
+ }
+ if(message.snapshot){setSnapshot(message.kind,message.snapshot);scheduleRender(message.kind);scheduleChrome();}
+}
+function sendActivity(){try{port?.postMessage({type:'activity',visible:!document.hidden,tab});}catch{}}
 
-
-async function openOddsGenerator(e){if(!prefs.generatorEnabled||prefs.hideOdds)return;if(e&&tab==='live'){try{const full=await fullEvent(e,'live');LiveGenerator.open(full,{modal,esc,base:BASE,request,load:()=>detailCache.get('live:'+String(e.id))?.event||full,reload:()=>fullEvent(e,'live')});}catch(error){report(error);}return;}const url=new URL(chrome.runtime.getURL('odds.html'));if(e){url.searchParams.set('team1',e.team1);url.searchParams.set('team2',e.team2);const bo=Number(e.bestOf)||Math.max(0,...refs(e).map(r=>Number(r.bestOf)||Number(String(r.league||'').match(/\bbo\s*(\d+)/i)?.[1])||0));if([1,3,5].includes(bo))url.searchParams.set('bo',bo);url.searchParams.set('ids',refs(e).map(r=>r.source+':'+(r.sourceEventId||r.id)).join(','));url.searchParams.set('auto','1');}chrome.runtime.sendMessage({type:'openOddsWindow',url:url.href}).then(r=>{if(r?.error)throw Error(r.error);}).catch(report);}
-$('oddsGenerator').onclick=()=>openOddsGenerator();
-
-StatisticsClient.configure({base:BASE,request,view:()=>tab,active:()=>['live','results'].includes(tab),render:()=>scheduleFeedRender()});
-Cs2Panel.configure({esc,request,logosEnabled:()=>prefs.teamLogos!==false,render:()=>render(true)});DotaStatsPanel.configure({enabled:()=>prefs.dotaStatsEnabled===true,logosEnabled:()=>prefs.teamLogos!==false,esc,request,render:()=>render(true)});
-function editLeagueGroup(id){
- const group=workingLinks.find(g=>g.id===id);if(!group)return;const chosen=new Set(LeagueModel.members(group).map(LeagueModel.id)),all=providers.flatMap(s=>catalog.providers[s]||[]).filter(r=>!LeagueModel.groupFor(r,workingLinks)||LeagueModel.groupFor(r,workingLinks).id===id);
- modal(`<h2>Состав группы</h2><input id="editGroupName" value="${esc(group.name||'')}" maxlength="150" aria-label="Название группы"><input id="editGroupSearch" type="search" placeholder="Найти лигу"><p class="muted">Снимите отметку для удаления из группы. Лиги из других групп сначала нужно разъединить.</p><div id="editGroupRows" class="edit-group-rows"></div><p id="editGroupError" role="alert"></p><div class="dialog-actions"><button id="editGroupCancel">Отмена</button><button id="editGroupSave">Сохранить черновик</button></div>`);
- function list(){const q=norm($('editGroupSearch').value);$('editGroupRows').innerHTML=all.filter(r=>!q||norm(r.category+' '+r.league+' '+r.source).includes(q)).sort((a,b)=>Number(chosen.has(LeagueModel.id(b)))-Number(chosen.has(LeagueModel.id(a)))||alphabet.compare(a.league,b.league)).map(r=>`<label class="controls"><input type="checkbox" data-edit-member="${esc(LeagueModel.id(r))}" ${chosen.has(LeagueModel.id(r))?'checked':''}><span>${esc(providerName(r.source)+' · '+leagueText(r.league))}<small>${esc(r.category)}</small></span></label>`).join('');}
- list();let editSearchTimer=0;$('editGroupSearch').oninput=()=>{clearTimeout(editSearchTimer);editSearchTimer=setTimeout(list,70);};$('editGroupRows').onchange=e=>{const key=e.target.dataset.editMember;if(key){if(e.target.checked)chosen.add(key);else chosen.delete(key);}};$('editGroupCancel').onclick=()=>$('modal').close();
- $('editGroupSave').onclick=async()=>{const members=all.filter(r=>chosen.has(LeagueModel.id(r))),name=$('editGroupName').value.trim();if(members.length<2){$('editGroupError').textContent='Оставьте минимум две лиги; для удаления всей группы используйте «Разъединить»';return;}const category=await chooseLeagueCategory(members);if(!category)return;const updated=LeagueModel.shape({...group,name:name||group.name,category,astekLeagues:members.filter(r=>r.source==='astek'),fonbetLeagues:members.filter(r=>r.source==='fonbet'),pinnacleLeagues:members.filter(r=>r.source==='pinnacle'),ggbetLeagues:members.filter(r=>r.source==='ggbet'),updatedAt:Date.now()});workingLinks=workingLinks.map(g=>g.id===id?updated:g);$('modal').close();renderLeagues();toast('Состав изменён в черновике. Нажмите «Опубликовать».');};
+// Switching GGBET <-> DataBet: the rows of the other bookmakers stay on screen; the last list of the chosen provider
+// (if this session saw one) is shown at once; the service worker reconnects and the fresh feed patches it in.
+function applyProviderSwitchLocally(){
+ const next=OddsProvider.selected(prefs),cached=liveByProvider.get(next);
+ details.remove(key=>key.startsWith('live:'));
+ if(cached)snapshots.live={...cached,persisted:true};
+ else if(snapshots.live?.events)snapshots.live={...snapshots.live,events:snapshots.live.events.map(e=>({...e,sourceRefs:refs(e).filter(r=>!OddsProvider.isOddsProvider(r.source)||r.source===next)})).filter(e=>e.sourceRefs.length),persisted:true};
+ invalidateRows('live');updateProviderButtons();scheduleRender('live');scheduleRender('compare');scheduleChrome();
+ if(DetailPanel.isOpen()&&tab==='live'){const e=findRow('live',DetailPanel.currentId());if(e)DetailPanel.show(e,'live');}
+}
+function selectLiveOddsProvider(provider){
+ const next=OddsProvider.normalize(provider);if(OddsProvider.selected(prefs)===next&&prefs[next]!==false)return;
+ const started=performance.now();prefs.liveOddsProvider=next;prefs[next]=true;chrome.storage.local.set({prefs}).catch(report);
+ applyProviderSwitchLocally();Perf.frame('provider.switch.paint');Perf.measure('provider.switch.sync',started);
 }
 
-// Remote image failures keep the team/hero identity readable and retain layout.
-document.addEventListener('error',event=>{const image=event.target;if(!(image instanceof HTMLImageElement))return;if(image.classList.contains('team-logo')){image.hidden=true;return;}if(image.matches('.hawk-team-logo,.cs2-logo')){const name=image.closest('.hawk-board-team,.cs2-team')?.querySelector('strong')?.textContent||'?';const fallback=document.createElement('span');fallback.className=image.className+' fallback';fallback.textContent=name.trim().slice(0,2).toUpperCase();image.replaceWith(fallback);}else if(image.closest('.hawk-hero')){const fallback=document.createElement('div');fallback.className='hawk-hero-fallback';fallback.textContent=(image.closest('.hawk-hero').querySelector('b')?.textContent||'?').slice(0,2);image.replaceWith(fallback);}},true);
+// ---------------------------------------------------------------------------------------------------- rows ------
+function rules(){return [settingsState.catalog,snapshots.live?.leagueRules,snapshots.prematch?.leagueRules].filter(Boolean).sort((a,b)=>(b.revision||0)-(a.revision||0))[0]||{};}
+function hiddenKeys(view){return [...(prefs.hiddenLeagues||[]),...(prefs.hiddenLeaguesByView?.[view]||[])];}
+function canonicalEventCategory(e){if(!GameCategories.generic(e.category)&&GameCategories.info(e.category).key!=='other')return e.category;const exact=refs(e).map(r=>r.category).find(c=>!GameCategories.generic(c)&&GameCategories.info(c).key!=='other');return exact||GameCategories.resolve(e.category,e.league);}
+const rowsCache={live:{key:'',rows:[]},prematch:{key:'',rows:[]}};
+function invalidateRows(kind){if(rowsCache[kind])rowsCache[kind].key='';}
+function feedRows(kind){
+ const s=snapshots[kind],key=JSON.stringify([s?.structureRevision??s?.revision,s?.receivedAt,s?.events?.length,rules().revision,s?.persisted]);
+ if(rowsCache[kind].key===key)return rowsCache[kind].rows;
+ const rows=(s?.events||[]).map(event=>{const sourceRefs=refs(event).map(r=>kind==='live'?{...r,inLive:true,enteredLiveAt:Number(r.enteredLiveAt||r.firstSeenAt||0)}:r);return {...event,sourceRefs,...(kind==='live'?{inLive:true}:{inPrematch:true}),category:canonicalEventCategory({...event,sourceRefs})};});
+ rowsCache[kind]={key,rows};return rows;
+}
+const favoriteKeys=e=>[...(e.entityAliases||[]),...refs(e).flatMap(r=>[...(r.aliases||[]),`${r.source}:${r.sourceEventId||r.id}`])];
+const matchFavorite=e=>favoriteKeys(e).some(k=>prefs.favorites.includes(k));
+const favorite=e=>[e.leagueKey,...refs(e).map(r=>LeagueModel.id(r)),...favoriteKeys(e)].some(k=>prefs.favorites.includes(k));
+function toggleFavorite(e){const keys=favoriteKeys(e);prefs.favorites=matchFavorite(e)?prefs.favorites.filter(k=>!keys.includes(k)):[...new Set([...prefs.favorites,...keys])];savePrefs();markDirty();if(prefs.onlyFavorites&&['results','history'].includes(tab))reloadServerView(tab);}
+
+// filters live in prefs.viewFilters[view] (persisted), never read back from the DOM
+const FILTER_DEFAULTS={search:'',category:'',availability:'all',startWindow:'',historyPhase:''};
+function filters(view=tab){return {...FILTER_DEFAULTS,...(prefs.viewFilters?.[view]||{})};}
+function setFilter(key,value,view=tab){prefs.viewFilters={...prefs.viewFilters,[view]:{...filters(view),[key]:value}};savePrefs();}
+function filterCount(view=tab){const f=filters(view);return [!!f.search,!!f.category,f.availability!=='all',!!f.startWindow&&view!=='live',view==='history'&&!!f.historyPhase,!!prefs.onlyFavorites].filter(Boolean).length;}
+function inStartWindow(e,view,f){if(view==='live'||!f.startWindow)return true;const date=resultsDate;const end=view==='results'&&date<dayKey()?Date.parse(date+'T23:59:59.999+04:00'):Date.now();return MatchView.inWindow(e,f.startWindow,view,end);}
+function visible(rows,view=tab,{ignoreCategory=false}={}){
+ const rule=rules(),f=filters(view),state={publishedLeagueLinks:rule.links||[],excludedLeagueKeys:[...hiddenKeys(view),...(rule.visibility?.excludedLeagueKeys||[])],excludedCategoryKeys:rule.visibility?.excludedCategoryKeys||[]};
+ const q=norm(f.search).split(' ').filter(Boolean),category=ignoreCategory?'':f.category,availability=f.availability,projectView=view==='compare'?(prefs.compareScope==='live'?'live':'prematch'):view;
+ return (rows||[]).map(e=>MatchView.project(e,prefs,projectView)).filter(e=>{if(!e)return false;const sources=new Set(refs(e).map(r=>r.source));const available=availability==='all'||(availability==='both'&&sources.size>1)||(availability==='unique'&&sources.size===1)||(sources.size===1&&sources.has(availability));
+  return inStartWindow(e,view,f)&&available&&(!category||norm(e.category)===category)&&!LeagueModel.hidden(e,state)&&(!prefs.onlyFavorites||favorite(e))&&(prefs.showExtras!==false||!isExtraEvent(e))&&q.every(t=>norm([e.category,e.league,e.team1,e.team2,...refs(e).map(r=>r.league)].join(' ')).includes(t));});
+}
+const leagueText=value=>{let text=(ScheduleImport.leagueInfo(value).league||value||'').replace(/\bbo\s*\d+\b/gi,'').replace(/^[\s.,:;–—-]+|[\s.,:;–—-]+$/g,'').trim();text=text.replace(/\bUnited\s+21\b/gi,'United21');const suffix=/(?:\s*[:.–—-]\s*)(?:division|div\.?|season|stage|group|groups|playoffs?|qualifiers?|qualification|regular season|swiss stage|upper bracket|lower bracket)\b.*$/i;if(suffix.test(text))text=text.replace(suffix,'').trim();text=text.replace(/\s+series$/i,'').trim();return text||String(value||'').trim();};
+const leagueTitle=e=>leagueText(e.displayLeague||e.league);
+function gameIcon(category){const {key,abbr}=GameCategories.info(category);return '<span class="game-icon icon-'+key+'" aria-hidden="true">'+abbr+'</span>';}
+function starIcon(active){return '<svg viewBox="0 0 24 24" fill="'+(active?'currentColor':'none')+'" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.55 4.44 1.08 6.26L12 17.35l-5.63 2.95 1.08-6.26L2.9 9.6l6.3-.9L12 3Z"/></svg>';}
+function eventUrl(r){try{const u=new URL(r.url);return ['https:','http:'].includes(u.protocol)?u.href:'';}catch{return '';}}
+function logoUrl(value){if(/^\/api\/team-logos\/[a-f0-9]{32}$/.test(value||''))return BASE+value;try{const u=new URL(value);return u.protocol==='https:'&&u.hostname==='v2l.traincdn.com'&&/^\/sfiles\/logo_teams\/[a-f\d]{32}\.(png|webp|jpe?g)$/i.test(u.pathname)?u.href:'';}catch{return '';}}
+const rememberedLogos=new Map();
+function teamLogo(e,side){if(prefs.teamLogos===false)return '';const key=norm((e?.category||'')+'|'+(e?.['team'+side]||'')),fresh=logoUrl(e?.['team'+side+'Logo']||refs(e).find(r=>r?.['team'+side+'Logo'])?.['team'+side+'Logo']);if(fresh){rememberedLogos.set(key,fresh);if(rememberedLogos.size>3000)rememberedLogos.delete(rememberedLogos.keys().next().value);return fresh;}return rememberedLogos.get(key)||'';}
+function copyText(e){return `${stamp(e.startAt)} Киберспорт. ${leagueTitle(e).replace(/[.\s]+$/,'')}. "${e.team1} - ${e.team2}"`;}
+async function copy(text){await navigator.clipboard.writeText(text);toast('Скопировано');}
+
+// ---------------------------------------------------------------------------------------------------- row markup
+function quotesOf(e,books){const out={};for(const r of refs(e))if(books.includes(r.source)&&!out[r.source])out[r.source]=MatchFormat.orientQuote(r);return out;}
+function priceCell(e,source,ref,q,bestOf){
+ if(!ref)return `<div class="price-col absent" aria-label="${providerName(source)}: нет матча"></div>`;
+ const key=`${source}:${ref.sourceEventId||ref.id}`;
+ if(!q)return `<div class="price-col" data-source-ref="${esc(key)}" title="${providerName(source)}: коэффициенты появятся после открытия линии"><span class="price none">—</span><span class="price none">—</span></div>`;
+ if(q.s)return `<div class="price-col" data-source-ref="${esc(key)}" title="${providerName(source)}: ${q.s==='c'?'рынок закрыт':'приём ставок приостановлен'}"><span class="price closed" aria-label="приостановлено">⏸</span><span class="price closed"></span></div>`;
+ // "Best" is marked only when at least two bookmakers price that side; text alternative for screen readers.
+ const cell=side=>{const v=MatchFormat.openPrice(q[side]);if(v==null)return '<span class="price none">—</span>';const t=quoteTracker.track(`${key}:${side}`,v),best=bestOf[side]===v&&bestOf.countSide[side]>1;return `<span class="price${best?' best':''}"${best?` aria-label="${esc(MatchFormat.formatPrice(v))}, лучший коэффициент"`:''}>${t.dir?`<span class="chg ${t.dir}" aria-label="${t.dir==='up'?'вырос':'снизился'} с ${esc(MatchFormat.formatPrice(t.was))}">${t.dir==='up'?'▲':'▼'}</span>`:''}${esc(MatchFormat.formatPrice(v))}</span>`;};
+ return `<div class="price-col" data-source-ref="${esc(key)}" data-book="${esc(source)}" title="${providerName(source)}${q.at?' · обновлено '+stamp(q.at,false,true):''}">${cell('h')}${cell('a')}</div>`;
+}
+function bestFor(quotes){const best=MatchFormat.bestPrices(quotes),countSide={h:0,a:0,d:0};for(const q of Object.values(quotes))if(q&&!q.s&&!q.stale)for(const side of ['h','a','d'])if(MatchFormat.openPrice(q[side])!=null)countSide[side]++;return {...best,countSide};}
+// Live score of a fixture: SSE patches update the bookmaker refs, so take the most recently changed visible ref
+// (AstekBet first when none changed yet); the logical event only carries the score of its last full snapshot.
+const SCORE_ORDER={astek:0,fonbet:1,pinnacle:2,ggbet:3,databet:3};
+function scoreOf(e){
+ const list=refs(e).filter(r=>r&&bookVisible(r.source)&&(r.scoreText||r.seriesScore));if(!list.length)return e;
+ const changedAt=r=>scoreChanged.get(`${r.source}:${r.sourceEventId||r.id}`)||0;
+ const r=[...list].sort((a,b)=>changedAt(b)-changedAt(a)||(SCORE_ORDER[a.source]??9)-(SCORE_ORDER[b.source]??9))[0];
+ return {...e,scoreText:r.scoreText||e.scoreText,seriesScore:r.seriesScore||e.seriesScore,mapScores:r.mapScores||e.mapScores,activeMap:r.activeMap||e.activeMap,bestOf:Number(r.bestOf)||Number(e.bestOf)||0};
+}
+function scoreCell(e,view){
+ const live=view==='live',parts=MatchFormat.scoreParts(scoreOf(e),e),changed=refs(e).some(r=>Date.now()-(scoreChanged.get(`${r.source}:${r.sourceEventId||r.id}`)||0)<3000);
+ if(view==='prematch')return `<div class="start-col"><b>${esc(timeFmt.format(Number(e.startAt)||Date.now()))}</b>${dateFmt.format(Number(e.startAt)||Date.now())===dateFmt.format(Date.now())?'сегодня':esc(dateFmt.format(Number(e.startAt)||Date.now()))}</div>`;
+ if(!parts.series)return `<div class="score-col"><span class="score-text${changed?' changed':''}">${esc(parts.text||'—')}</span></div>`;
+ const status=live?[parts.mapNumber&&parts.maps.length>1?`Карта ${parts.mapNumber}`:'',parts.bestOf?`Bo${parts.bestOf}`:''].filter(Boolean).join(' · '):(parts.bestOf?`Bo${parts.bestOf}`:'');
+ const maps=parts.map&&parts.maps.length>0&&live?`<span class="maps num" aria-label="счёт на карте ${parts.mapNumber}"><span>${parts.map[0]}</span><span>${parts.map[1]}</span></span>`:'<span class="maps"></span>';
+ return `<div class="score-col${changed?' changed':''}" title="${esc(parts.text)}" aria-label="счёт ${esc(parts.text)}">${maps}<span class="series num${changed?' changed':''}"><span>${parts.series[0]}</span><span>${parts.series[1]}</span></span>${status?`<span class="status">${esc(status)}</span>`:''}</div>`;
+}
+function teamsCell(e,{meta=true}={}){
+ const l1=teamLogo(e,1),l2=teamLogo(e,2),logo=url=>url?`<img class="team-logo" src="${esc(url)}" alt="" aria-hidden="true" width="18" height="18" loading="lazy" decoding="async">`:'<span class="logo-ph"></span>';
+ return `<div class="teams">${meta?`<div class="meta">${gameIcon(e.category)}<span>${esc(e.category||'')} · ${esc(leagueTitle(e))}</span>${isExtraEvent(e)?'<span class="extra-tag">доп.</span>':''}</div>`:''}<div class="team">${logo(l1)}<span class="name">${esc(e.team1)}</span></div><div class="team">${logo(l2)}<span class="name">${esc(e.team2)}</span></div></div>`;
+}
+function sourcesCell(e,view){return `<div class="sources-col">${refs(e).filter(r=>bookVisible(r.source)).map(r=>`<span class="chip" data-source-ref="${esc(r.source+':'+(r.sourceEventId||r.id))}"><span class="book-mark ${esc(r.source)}" aria-hidden="true"></span>${esc(providerName(r.source))}</span>`).join('')}</div>`;}
+function matchRow(e,view,{meta=true,books=[]}={}){
+ const sel=selectedId(view)===String(e.id),fav=matchFavorite(e),odds=!prefs.hideOdds&&books.length&&['live','prematch'].includes(view);
+ let tail='';
+ if(odds){const quotes=quotesOf(e,books),best=bestFor(quotes),byBook=new Map(refs(e).map(r=>[r.source,r]));tail=books.map(b=>priceCell(e,b,byBook.get(b),quotes[b],best)).join('');}
+ else tail=sourcesCell(e,view);
+ return `<article class="match cols${odds?'':' no-odds'}" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}"><div class="fav"><button class="icon-btn" data-fav aria-pressed="${fav}" aria-label="${fav?'Убрать из избранного':'В избранное'}">${starIcon(fav)}</button></div>${teamsCell(e,{meta})}${scoreCell(e,view)}${tail}<span class="go" aria-hidden="true">›</span></article>`;
+}
+function listHeader(view,books){
+ const odds=!prefs.hideOdds&&books.length&&['live','prematch'].includes(view);
+ return `<div class="col-head cols${odds?'':' no-odds'}" data-group="head"><span></span><span>Матч</span><span class="right">${view==='prematch'?'Начало':'Счёт'}</span>${odds?books.map(b=>{const h=bookHealth(b);return `<span class="book-col" title="${esc(providerName(b))}${h&&!h.ok?' — '+esc(h.reason):''}"><span class="book-mark ${b}" aria-hidden="true"></span>${esc(providerName(b))}${h&&!h.ok?' <span aria-label="недоступен">⚠</span>':''}</span>`;}).join(''):'<span class="right">Конторы</span>'}<span></span></div>`;
+}
+
+// ---------------------------------------------------------------------------------------------------- views -----
+let tab='live';
+const selectedIds=new Map();const selectedId=view=>selectedIds.get(view)||null;
+const viewSignatures=new Map();
+const viewEl=view=>document.querySelector(`#content>.list[data-view="${view}"]`);
+let renderFrames=new Set(),renderFrame=0,chromeFrame=0;
+function scheduleRender(kind){const views=kind==='live'?['live','compare']:kind==='prematch'?['prematch','compare']:[kind];for(const v of views)renderFrames.add(v);if(renderFrame)return;renderFrame=requestAnimationFrame(()=>{renderFrame=0;const list=[...renderFrames];renderFrames.clear();for(const v of list)if(v===tab)renderView(v);else viewSignatures.delete(v);updateNavCounts();});}
+function scheduleChrome(){if(chromeFrame)return;chromeFrame=requestAnimationFrame(()=>{chromeFrame=0;renderChrome();});}
+function markDirty(){for(const v of VIEWS)viewSignatures.delete(v);renderView(tab);updateNavCounts();}
+
+// keyed DOM morph: rows keep their nodes (focus, hover, scroll) across updates
+function morphInto(parent,html){
+ const t=document.createElement('template');t.innerHTML=html;
+ const key=n=>n.nodeType===1?(n.dataset.id||n.dataset.group||''):'';
+ (function morph(target,fresh){
+  const keyed=new Map([...target.childNodes].filter(key).map(n=>[key(n),n]));let cursor=target.firstChild;
+  for(const desired of [...fresh.childNodes]){
+   let node=key(desired)?keyed.get(key(desired)):cursor&&!key(cursor)&&cursor.nodeType===desired.nodeType&&cursor.nodeName===desired.nodeName?cursor:null;
+   if(!node||node.nodeName!==desired.nodeName){node=desired.cloneNode(true);target.insertBefore(node,cursor);}
+   else{if(node!==cursor)target.insertBefore(node,cursor);
+    if(node.nodeType===3){if(node.nodeValue!==desired.nodeValue)node.nodeValue=desired.nodeValue;}
+    else if(node.nodeType===1){
+     if(node.isEqualNode(desired)){cursor=node.nextSibling;continue;}
+     for(const a of [...node.attributes])if(!desired.hasAttribute(a.name)&&!(a.name==='open'&&node.matches('details')))node.removeAttribute(a.name);
+     for(const a of desired.attributes)if(a.name!=='open'&&node.getAttribute(a.name)!==a.value)node.setAttribute(a.name,a.value);
+     if(node.matches('details[data-group]')&&desired.hasAttribute('open')!==node.open&&!node.dataset.userToggled)node.open=desired.hasAttribute('open');
+     morph(node,desired);
+    }}
+   cursor=node.nextSibling;
+  }
+  while(cursor){const next=cursor.nextSibling;cursor.remove();cursor=next;}
+ })(parent,t.content);
+}
+
+function renderView(view,force=false){
+ if(view!==tab||$('settingsView').hidden===false)return;
+ const started=performance.now();
+ if(view==='live')renderLive(force);else if(view==='prematch')renderLine(force);else if(view==='results')renderResults(force);else if(view==='history')renderHistory(force);else if(view==='compare')renderCompare(force);
+ renderChrome();Perf.measure('render.'+view,started);
+}
+function renderState(el,{icon='—',title,text='',kind='',actions=''}){morphInto(el,`<div class="state ${kind}" data-group="state"><div class="state-icon" aria-hidden="true">${icon}</div><strong>${esc(title)}</strong>${text?`<p>${esc(text)}</p>`:''}${actions?`<div class="actions">${actions}</div>`:''}</div>`);}
+function skeleton(el,n=8){morphInto(el,`<div data-group="skeleton" aria-busy="true" aria-label="Загрузка">${Array.from({length:n},(_,i)=>`<div class="skeleton-row"><div class="skeleton sk" style="width:16px"></div><div class="skeleton sk two" style="width:${55+(i*13)%40}%"></div><div class="skeleton sk"></div><div class="skeleton sk"></div></div>`).join('')}</div>`);}
+function emptyFor(view,current){
+ const f=filters(view),none=BOOKS.every(s=>prefs[s]===false);
+ if(none)return {title:'Все конторы выключены',text:'Включите хотя бы одну контору в списке источников.',actions:'<button class="btn" data-enable-books>Включить все конторы</button>'};
+ if(current?.offline||current?.transportError&&!current?.events?.length)return {kind:'bad',icon:'!',title:'Сервер недоступен',text:`Не удаётся подключиться к ${BASE}. Запросы повторяются автоматически.`,actions:'<button class="btn" data-open-settings="server">Настройки сервера</button>'};
+ if(prefs.onlyFavorites&&!f.search)return {title:'В избранном пока пусто',text:'Отметьте ☆ матч или лигу, чтобы видеть их здесь.',actions:'<button class="btn" data-reset-filters>Показать все матчи</button>'};
+ if(filterCount(view))return {title:'Ничего не найдено',text:'Измените поиск или фильтры.',actions:'<button class="btn" data-reset-filters>Сбросить фильтры</button>'};
+ if(view==='live')return {title:'Сейчас нет матчей в LIVE',text:'Список обновится автоматически, как только матч начнётся.'};
+ return {title:'Матчей нет',text:'Список обновится автоматически.'};
+}
+function categoryOptions(rows,facets=null,view=tab){
+ const select=$('category'),value=filters(view).category,groups=new Map();
+ if(Array.isArray(facets))for(const f of facets){const label=String(f?.name||'Esports');groups.set(norm(label),{label,count:Number(f?.count)||0});}
+ else for(const e of rows){const key=norm(e.category),g=groups.get(key)||{label:e.category||'Esports',count:0};g.count++;groups.set(key,g);}
+ if(value&&!groups.has(value))groups.set(value,{label:filters(view).categoryLabel||value,count:0});
+ const total=[...groups.values()].reduce((n,g)=>n+g.count,0);
+ const html=`<option value="">Все игры · ${total}</option>`+[...groups].sort((a,b)=>a[1].label.localeCompare(b[1].label)).map(([key,g])=>`<option value="${esc(key)}">${esc(g.label)} · ${g.count}</option>`).join('');
+ if(select.dataset.html!==html){select.innerHTML=html;select.dataset.html=html;}
+ select.value=groups.has(value)?value:'';
+}
+
+function liveRowsVisible(){const all=visible(feedRows('live'),'live',{ignoreCategory:true});return {all,rows:filters('live').category?all.filter(e=>norm(e.category)===filters('live').category):all};}
+function renderLive(force){
+ const el=viewEl('live'),s=snapshots.live,{all,rows}=liveRowsVisible();categoryOptions(all,null,'live');
+ const books=viewBooks('live').filter(bookVisible);
+ const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.liveSort,prefs.hideOdds,books,prefs.favorites.length,filters('live'),prefs.onlyFavorites,prefs.teamLogos,selectedId('live')]);
+ if(!force&&viewSignatures.get('live')===sig)return;viewSignatures.set('live',sig);
+ el.style.setProperty('--books',books.length);
+ if(!rows.length){if(!s)skeleton(el);else renderState(el,emptyFor('live',s));updateListHead('live',0);return;}
+ const order=prefs.liveSort==='asc'?1:-1;
+ const sorted=[...rows].sort((a,b)=>Number(matchFavorite(b))-Number(matchFavorite(a))||order*(MatchView.clock(a,'live')-MatchView.clock(b,'live'))||alphabet.compare(String(a.id),String(b.id)));
+ let html=listHeader('live',books);
+ if(prefs.liveSort==='league'){
+  const groups=new Map();for(const e of sorted){const key=norm(e.category)+'|'+norm(leagueTitle(e));if(!groups.has(key))groups.set(key,[]);groups.get(key).push(e);}
+  const ordered=[...groups.values()].sort((a,b)=>Number(b.some(matchFavorite))-Number(a.some(matchFavorite))||alphabet.compare(a[0].category||'',b[0].category||'')||alphabet.compare(leagueTitle(a[0]),leagueTitle(b[0])));
+  html+=ordered.map(list=>{const e=list[0],lk=e.leagueKey||LeagueModel.id(refs(e)[0]),lf=prefs.favorites.includes(lk);return `<section data-group="g:${esc(norm(e.category)+'|'+norm(leagueTitle(e)))}"><div class="group-head">${gameIcon(e.category)}<span>${esc(e.category||'')}</span><span class="league">${esc(leagueTitle(e))}</span><span class="n">${list.length}</span><button class="icon-btn" data-league-fav="${esc(lk)}" aria-pressed="${lf}" aria-label="${lf?'Убрать лигу из избранного':'Лига в избранное'}">${starIcon(lf)}</button></div>${list.map(x=>matchRow(x,'live',{meta:false,books})).join('')}</section>`;}).join('');
+ }else html+=`<section data-group="flat">${sorted.map(e=>matchRow(e,'live',{books})).join('')}</section>`;
+ morphInto(el,html);
+ updateListHead('live',rows.length);
+ scheduleOddsWatch(sorted);
+ StatisticsClient.observe(rows);
+ if(DetailPanel.isOpen()&&tab==='live'){const sel=rows.find(e=>String(e.id)===DetailPanel.currentId());if(sel)DetailPanel.update(sel);}
+}
+
+// Line: grouped by game > league (lazy league bodies) or a flat schedule rendered in pages.
+let lineClosed=new Set();let lineSchedulePages=1,lineFullRender=false;
+const plural=(n,[one,few,many])=>{const m=n%10,h=n%100;return `${n} ${m===1&&h!==11?one:m>=2&&m<=4&&(h<12||h>14)?few:many}`;};
+function renderLine(force){
+ const el=viewEl('prematch'),s=snapshots.prematch,all=visible(feedRows('prematch'),'prematch',{ignoreCategory:true});categoryOptions(all,null,'prematch');
+ const cat=filters('prematch').category,rows=cat?all.filter(e=>norm(e.category)===cat):all,books=viewBooks('prematch').filter(bookVisible);
+ const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.lineMode,prefs.hideOdds,books,prefs.favorites.length,filters('prematch'),prefs.onlyFavorites,[...lineClosed].join('|'),lineSchedulePages,prefs.teamLogos,selectedId('prematch'),Math.floor(Date.now()/60000)]);
+ if(!force&&viewSignatures.get('prematch')===sig)return;viewSignatures.set('prematch',sig);
+ el.style.setProperty('--books',books.length);
+ if(!rows.length){if(!s)skeleton(el);else renderState(el,emptyFor('prematch',s));updateListHead('prematch',0);return;}
+ const sorted=[...rows].sort((a,b)=>Number(a.startAt||Infinity)-Number(b.startAt||Infinity)||alphabet.compare(String(a.id),String(b.id)));
+ // First paint of an empty Line view: the first screen now, everything else right after it has painted.
+ const firstScreen=!el.childElementCount&&!lineFullRender&&rows.length>60;
+ if(firstScreen){lineFullRender=true;setTimeout(()=>{viewSignatures.delete('prematch');if(tab==='prematch')renderView('prematch',true);lineFullRender=false;},0);}
+ let budget=firstScreen?40:Infinity;const take=list=>{const n=Math.max(0,Math.min(list.length,budget));budget-=n;return list.slice(0,n);};
+ let html=listHeader('prematch',books);
+ if(prefs.lineMode==='schedule'){
+  const limit=Math.min(LINE_SCHEDULE_PAGE*lineSchedulePages,budget),shown=sorted.slice(0,limit),days=new Map();for(const e of shown){const d=dayKey(Number(e.startAt)||Date.now());if(!days.has(d))days.set(d,[]);days.get(d).push(e);}
+  html+=[...days].map(([d,list])=>`<section data-group="d:${d}"><div class="group-head"><span>${esc(weekdayFmt.format(Date.parse(d+'T12:00:00Z')))}</span><span class="n">${list.length}</span></div>${list.map(e=>matchRow(e,'prematch',{books})).join('')}</section>`).join('');
+  if(!firstScreen&&sorted.length>limit)html+=`<div class="list-more" data-group="more"><button class="btn" data-line-more>Показать ещё · осталось ${sorted.length-limit}</button></div>`;
+ }else{
+  const games=new Map();for(const e of sorted){const g=norm(e.category);if(!games.has(g))games.set(g,{name:e.category||'Esports',leagues:new Map(),count:0});const game=games.get(g),lk=g+'|'+norm(leagueTitle(e));game.count++;if(!game.leagues.has(lk))game.leagues.set(lk,[]);game.leagues.get(lk).push(e);}
+  const filtered=!!(filters('prematch').search||prefs.onlyFavorites);
+  html+=[...games].sort((a,b)=>a[1].name.localeCompare(b[1].name)).map(([gk,g])=>`<section data-group="game:${esc(gk)}"><div class="group-head">${gameIcon(g.name)}<span>${esc(g.name)}</span><span class="n">${plural(g.count,['матч','матча','матчей'])}</span></div>${[...g.leagues].sort((a,b)=>Number(a[1][0].startAt||0)-Number(b[1][0].startAt||0)||alphabet.compare(leagueTitle(a[1][0]),leagueTitle(b[1][0]))).map(([lk,list])=>{const open=filtered||!lineClosed.has(lk)||list.some(e=>String(e.id)===selectedId('prematch')),e=list[0],key=e.leagueKey||LeagueModel.id(refs(e)[0]),lf=prefs.favorites.includes(key);return `<details class="group" data-group="l:${esc(lk)}" ${open?'open':''}><summary class="group-head" style="top:31px;background:var(--surface);font-weight:500"><span class="caret" aria-hidden="true">›</span><span class="league" style="color:var(--text)">${esc(leagueTitle(e))}</span><span class="n">${list.length} · с ${esc(stamp(e.startAt,true))}</span><button class="icon-btn" data-league-fav="${esc(key)}" aria-pressed="${lf}" aria-label="${lf?'Убрать лигу из избранного':'Лига в избранное'}">${starIcon(lf)}</button></summary>${open?take(list).map(x=>matchRow(x,'prematch',{meta:false,books})).join(''):''}</details>`;}).join('')}</section>`).join('');
+ }
+ morphInto(el,html);
+ updateListHead('prematch',rows.length);
+ if(DetailPanel.isOpen()&&tab==='prematch'){const sel=rows.find(e=>String(e.id)===DetailPanel.currentId());if(sel)DetailPanel.update(sel);}
+}
+
+// Results: server view, cached per query (instant), refreshed with deltas.
+let resultsDate=dayKey(),resultsLimit=RESULTS_PAGE_SIZE;
+function serverQuery(view,limit,offset=0){
+ const p=new URLSearchParams(),f=filters(view);p.set('limit',String(limit));if(offset>0)p.set('offset',String(offset));p.set('thin','1');
+ if(f.search.trim())p.set('q',f.search.trim());if(f.category)p.set('category',f.category);if(f.availability&&f.availability!=='all')p.set('availability',f.availability);
+ p.set('sources',BOOKS.filter(src=>prefs[src]!==false&&bookVisible(src)&&!OddsProvider.isOddsProvider(src)).join(','));
+ p.set('showExtras',prefs.showExtras!==false?'1':'0');const hidden=hiddenKeys(view);if(hidden.length)p.set('hidden',hidden.join(','));
+ if(prefs.onlyFavorites){p.set('favoriteOnly','1');if(prefs.favorites?.length)p.set('favorites',prefs.favorites.join(','));}
+ if(f.startWindow)p.set('hours',f.startWindow);
+ if(view==='results'&&f.startWindow){const end=resultsDate<dayKey()?Date.parse(resultsDate+'T23:59:59.999+04:00'):Math.floor(Date.now()/60000)*60000;p.set('end',String(end));}
+ if(view==='history'&&f.historyPhase)p.set('phase',f.historyPhase);
+ return p;
+}
+const resultsKey=()=>resultsDate+'|'+serverQuery('results',resultsLimit).toString();
+async function fetchResults(key,signal){
+ const [date,query]=[key.slice(0,10),key.slice(11)],p=new URLSearchParams(query),cached=resultsRes.peek(key)?.value;p.set('date',date);p.set('timezone',ZONE);
+ if(cached&&Number.isFinite(Number(cached.uiRevision)))p.set('deltaSince',String(cached.uiRevision));
+ const data=await client.get('/api/ui/results?'+p.toString(),{signal});
+ if(!data?.delta)return {...data,receivedAt:Date.now()};
+ const map=new Map((cached?.events||[]).map(e=>[String(e.id),e]));for(const id of data.remove||[])map.delete(String(id));for(const event of data.upsert||[])map.set(String(event.id),event);
+ const ordered=[],seen=new Set();for(const id of data.order||[]){const ev=map.get(String(id));if(ev){ordered.push(ev);seen.add(String(id));}}for(const [id,ev] of map)if(!seen.has(id))ordered.push(ev);
+ return {...cached,...data,events:ordered,receivedAt:Date.now(),delta:false};
+}
+let resultsError='';
+function loadResults(force=false){
+ const key=resultsKey(),date=resultsDate;
+ const res=resultsRes.swr(key,{force,onValue:value=>{resultsError='';if(date===resultsDate){if(date===dayKey())persist.save('results',{key,value});if(tab==='results')renderView('results',true);}},onError:error=>{resultsError=errorText(error);if(tab==='results')renderView('results',true);}});
+ return res;
+}
+function renderResults(force){
+ const el=viewEl('results'),key=resultsKey(),entry=resultsRes.peek(key),current=entry?.value;
+ if(!entry||!entry.fresh)loadResults(false);
+ const rows=(current?.events||[]).map(e=>MatchView.project(e,prefs,'results')).filter(Boolean).sort((a,b)=>MatchView.clock(b,'results')-MatchView.clock(a,'results')||alphabet.compare(String(a.id),String(b.id)));
+ categoryOptions(rows,current?.facets?.categories,'results');
+ const sig=JSON.stringify([key,current?.uiRevision,current?.receivedAt,current?.status,resultsError,rows.length,prefs.favorites.length,selectedId('results'),prefs.teamLogos]);
+ if(!force&&viewSignatures.get('results')===sig)return;viewSignatures.set('results',sig);
+ if(!rows.length){
+  const loading=!current||!current.complete||['loading','queued','preparing'].includes(current.status);
+  if(!current&&!resultsError)skeleton(el);
+  else if(resultsError&&!current)renderState(el,{kind:'bad',icon:'!',title:'Результаты не загрузились',text:resultsError,actions:'<button class="btn" data-retry-results>Повторить</button>'});
+  else if(loading)renderState(el,{icon:'…',title:'Собираем результаты дня',text:current?.status==='retrying'?'Получение прервано, сервер повторит запрос.':'Сервер получает данные контор. Это может занять до минуты для архивных дат.'});
+  else renderState(el,emptyFor('results',current));
+  updateListHead('results',0,current);return;
+ }
+ const html=`<div class="col-head cols results" data-group="head"><span></span><span>Матч</span><span class="right">Итог</span><span class="right">Окончание</span><span class="right">Конторы</span><span></span></div><section data-group="rows">${rows.map(e=>resultRow(e)).join('')}</section>${current?.hasMore?`<div class="list-more" data-group="more"><button class="btn" data-more-results>Показать ещё · осталось ${Math.max(0,(current.total||0)-rows.length)}</button></div>`:''}`;
+ morphInto(el,html);
+ updateListHead('results',current?.total??rows.length,current);
+ StatisticsClient.observe(rows);
+ if(DetailPanel.isOpen()&&tab==='results'){const sel=rows.find(e=>String(e.id)===DetailPanel.currentId());if(sel)DetailPanel.update(sel);}
+}
+function lastRemoval(r){const t=(r.timeline||[]).filter(c=>c.type==='removed'&&c.phase==='live').map(c=>Number(c.at)||0),l=t.length?[]:(r.lifecycle||[]).filter(c=>c.type==='removed').map(c=>Number(c.at)||0);return Math.max(0,...t,...l,Number(r.removedAt||0))||Number(r.endedAt||0);}
+function resultRow(e){
+ const sel=selectedId('results')===String(e.id),fav=matchFavorite(e),parts=MatchFormat.scoreParts(refs(e)[0]||e,e),verified=refs(e).some(r=>r.resultVerified),ended=Math.max(0,...refs(e).map(lastRemoval));
+ const score=parts.series?`<span class="fs num">${parts.series[0]} : ${parts.series[1]}</span>`:`<span class="fs num">${esc(parts.text||'—')}</span>`;
+ const maps=parts.maps.length>1?`<span class="maps-line num">${esc(parts.maps.filter(m=>m[0]||m[1]).map(m=>m.join(':')).join(', '))}</span>`:'';
+ return `<article class="match cols results" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}"><div class="fav"><button class="icon-btn" data-fav aria-pressed="${fav}" aria-label="${fav?'Убрать из избранного':'В избранное'}">${starIcon(fav)}</button></div>${teamsCell(e)}<div class="final">${score}${maps}<span class="${verified?'verified':'unverified'}">${verified?'✓ подтверждён':'не подтверждён'}</span></div><div class="when"><b>${esc(stamp(ended,false))}</b>${esc(stamp(e.startAt,true))} начало</div>${sourcesCell(e,'results')}<span class="go" aria-hidden="true">›</span></article>`;
+}
+
+// History: first page from the bounded fast path, more pages while scrolling.
+let historyPagesShown=1,historyError='';
+const historyBaseKey=()=>serverQuery('history',HISTORY_PAGE_SIZE).toString();
+async function fetchHistoryPage(key,signal){const [base,offset]=key.split('#'),p=new URLSearchParams(base);p.set('offset',offset);if(Number(offset)===0)p.set('fast','1');const data=await client.get('/api/ui/history?'+p.toString(),{signal});if(data?.deferred)throw Object.assign(new Error('История готовится на сервере'),{deferred:true,retryAfterMs:data.retryAfterMs});return {...data,receivedAt:Date.now()};}
+function loadHistoryPage(index,force=false){
+ const key=historyBaseKey()+'#'+(index*HISTORY_PAGE_SIZE);
+ return historyRes.swr(key,{force,onValue:value=>{historyError='';if(index===0)persist.save('history',{key,value});if(tab==='history')renderView('history',true);},onError:error=>{historyError=errorText(error);if(error?.deferred){setTimeout(()=>{if(tab==='history')loadHistoryPage(index,true);},Math.max(3000,Number(error.retryAfterMs||0)));}if(tab==='history')renderView('history',true);}});
+}
+function historyRows(){const base=historyBaseKey(),out=[],seen=new Set();let meta=null;for(let i=0;i<historyPagesShown;i++){const entry=historyRes.peek(base+'#'+(i*HISTORY_PAGE_SIZE));if(!entry)break;if(i===0)meta=entry.value;for(const e of entry.value.events||[]){const id=String(e.id);if(!seen.has(id)){seen.add(id);out.push(e);}}}return {rows:out,meta};}
+function renderHistory(force){
+ const el=viewEl('history'),base=historyBaseKey();
+ for(let i=0;i<historyPagesShown;i++){const entry=historyRes.peek(base+'#'+(i*HISTORY_PAGE_SIZE));if(!entry||!entry.fresh)loadHistoryPage(i);if(!entry)break;}
+ const {rows:raw,meta}=historyRows(),rows=raw.map(e=>MatchView.project(e,prefs,'history')).filter(Boolean).sort((a,b)=>MatchView.appearance(b)-MatchView.appearance(a)||alphabet.compare(String(a.id),String(b.id)));
+ categoryOptions(rows,meta?.facets?.categories,'history');
+ const total=Number(meta?.total||meta?.totalHint||rows.length);
+ const sig=JSON.stringify([base,historyPagesShown,meta?.receivedAt,rows.length,historyError,prefs.favorites.length,selectedId('history'),prefs.teamLogos]);
+ if(!force&&viewSignatures.get('history')===sig)return;viewSignatures.set('history',sig);
+ if(!rows.length){if(!meta&&!historyError)skeleton(el,10);else if(historyError&&!meta)renderState(el,{kind:historyError.includes('готовится')?'':'bad',icon:historyError.includes('готовится')?'…':'!',title:historyError.includes('готовится')?'История готовится':'История не загрузилась',text:historyError.includes('готовится')?'Сервер собирает историю, страница появится автоматически.':historyError,actions:'<button class="btn" data-retry-history>Повторить</button>'});else renderState(el,emptyFor('history',meta));updateListHead('history',0);return;}
+ const more=rows.length<total;
+ const html=`<div class="col-head cols history" data-group="head"><span></span><span>Матч</span><span class="right">В линии</span><span class="right">Начало</span><span class="right">Конторы</span><span></span></div><section data-group="rows">${rows.map(e=>historyRow(e)).join('')}</section>${more?`<div class="list-more" data-group="more" id="historySentinel"><button class="btn" data-more-history>Показать ещё · осталось ${Math.max(0,total-rows.length)}</button></div>`:'<div class="list-end" data-group="end">Это вся история по фильтрам</div>'}`;
+ morphInto(el,html);
+ updateListHead('history',total);
+ const sentinel=$('historySentinel');historyObserver.disconnect();if(sentinel)historyObserver.observe(sentinel);
+ if(DetailPanel.isOpen()&&tab==='history'){const sel=rows.find(e=>String(e.id)===DetailPanel.currentId());if(sel)DetailPanel.update(sel);}
+}
+const historyObserver=new IntersectionObserver(entries=>{if(tab==='history'&&entries.some(e=>e.isIntersecting))showMoreHistory();},{rootMargin:'400px'});
+function showMoreHistory(){const base=historyBaseKey(),last=historyRes.peek(base+'#'+((historyPagesShown-1)*HISTORY_PAGE_SIZE));if(!last)return;historyPagesShown++;renderView('history',true);}
+function historyRow(e){
+ const sel=selectedId('history')===String(e.id),fav=matchFavorite(e),r=refs(e),live=r.some(x=>x.inLive),line=r.some(x=>x.inPrematch&&!x.inLive),phase=live?'<span class="phase live"><span class="dot bad" aria-hidden="true"></span>в LIVE</span>':line?'<span class="phase line"><span class="dot" style="background:var(--accent)" aria-hidden="true"></span>в линии</span>':'<span class="phase">снят</span>';
+ return `<article class="match cols history" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}"><div class="fav"><button class="icon-btn" data-fav aria-pressed="${fav}" aria-label="${fav?'Убрать из избранного':'В избранное'}">${starIcon(fav)}</button></div>${teamsCell(e)}<div class="when"><b>${esc(stamp(MatchView.appearance(e),true))}</b>${phase}</div><div class="when"><b>${esc(stamp(e.startAt,true))}</b></div>${sourcesCell(e,'history')}<span class="go" aria-hidden="true">›</span></article>`;
+}
+
+function reloadServerView(view){if(view==='results'){resultsLimit=RESULTS_PAGE_SIZE;loadResults(true);}else if(view==='history'){historyPagesShown=1;loadHistoryPage(0,true);}viewSignatures.delete(view);renderView(view,true);}
+function handleUiInvalidate(message={}){
+ const view=String(message.view||'');
+ if(view==='results'){resultsRes.invalidate(key=>!message.date||key.startsWith(String(message.date)+'|'));if(tab==='results'&&(!message.date||message.date===resultsDate))setTimeout(()=>loadResults(false),250);}
+ else if(view==='history'){historyRes.invalidate(()=>true);if(tab==='history')setTimeout(()=>loadHistoryPage(0,false),900);}
+ else if(view==='leagues'&&settingsState.catalog)settingsState.catalog.receivedAt=0;
+}
+function reconcileServerViews(){if(document.hidden)return;if(tab==='results')loadResults(false);if(tab==='history')loadHistoryPage(0,false);}
+
+// ---------------------------------------------------------------------------------------------------- chrome ----
+function bookHealth(source){
+ const s=source==='pinnacle'&&!snapshots.live?.providers?.pinnacle?snapshots.prematch:snapshots.live,r=s?.providers?.[source];
+ if(OddsProvider.isOddsProvider(source)){if(source!==OddsProvider.selected(prefs))return null;const h=OddsProvider.health(snapshots.live,prefs);return snapshots.live?.transportError?null:h;}
+ if(!s||s.transportError||!r)return null;
+ const error=String(r.lastError||'').trim(),http=Number(r.lastHttpStatus||0);
+ if(error||http>=400)return {ok:false,reason:error||`HTTP ${http}`};
+ if(r.stale&&!r.updating)return {ok:false,reason:'данные задерживаются'};
+ return {ok:true,reason:''};
+}
+function sourceRows(){
+ const serverDown=!!snapshots.live?.transportError;
+ return BOOKS.map(source=>{
+  const enabled=prefs[source]!==false,isOdds=OddsProvider.isOddsProvider(source),selectedOdds=!isOdds||source===OddsProvider.selected(prefs);
+  let state='online',text='работает',detail='';
+  const r=(source==='pinnacle'&&!snapshots.live?.providers?.pinnacle?snapshots.prematch:snapshots.live)?.providers?.[source];
+  if(!enabled){state='off';text='скрыт';}
+  else if(!selectedOdds){state='off';text='не выбран';detail='Коэффициенты LIVE: выбран '+OddsProvider.name(OddsProvider.selected(prefs));}
+  else if(serverDown){state='unknown';text='нет связи с сервером';}
+  else if(!snapshots.live&&!snapshots.prematch){state='unknown';text='ожидаем данные';}
+  else{const h=bookHealth(source);if(h&&!h.ok){state='bad';text='недоступен';detail=h.reason;}else if(r?.partial){state='warn';text='частичные данные';}
+   const at=Date.parse(r?.lastSuccessfulUpdateAt||r?.lastUpdateAt||'');if(at&&state==='online')detail=`обновлено ${stamp(at,false,true)}`;}
+  return {source,state,text,detail,enabled,isOdds};
+ });
+}
+function renderSources(){
+ const rows=sourceRows(),active=rows.filter(r=>r.state!=='off'),online=active.filter(r=>r.state==='online').length,bad=active.some(r=>r.state==='bad'),down=!!snapshots.live?.transportError&&!snapshots.live?.events?.length;
+ $('sourcesCount').textContent=down?'нет связи':`${online}/${active.length}`;
+ $('sourcesDot').className='dot '+(down?'bad':bad||online<active.length?'warn':'good');
+ $('sourcesButton').setAttribute('aria-label',`Источники: ${down?'нет связи с сервером':online+' из '+active.length+' работают'}`);
+ if($('sourcesPopover').hidden)return;
+ const html=`<h3>Источники данных</h3>${rows.map(r=>`<div class="source-row" data-group="${r.source}"><span class="book-mark ${r.source}" aria-hidden="true"></span><span class="who"><span class="name">${esc(providerName(r.source))}</span>${r.detail?`<small title="${esc(r.detail)}">${esc(r.detail)}</small>`:''}</span><span class="src-state ${r.state==='bad'?'bad':r.state==='warn'?'warn':''}"><span class="dot ${r.state==='online'?'good':r.state==='bad'?'bad':r.state==='warn'?'warn':''}" aria-hidden="true"></span>${esc(r.text)}</span>${r.isOdds?'<span></span>':`<label class="switch" title="Показывать ${esc(providerName(r.source))}"><input type="checkbox" data-book-toggle="${r.source}" ${r.enabled?'checked':''} aria-label="Показывать ${esc(providerName(r.source))}"></label>`}</div>`).join('')}<div class="popover-foot"><span>Сервер: ${esc(BASE.replace(/^https?:\/\//,''))}</span><button class="link-btn" data-open-settings="sources">Настроить</button></div>`;
+ morphInto($('sourcesPopover'),html);
+}
+function connectionState(){const s=snapshots.live;if(!s)return port?{kind:'loading'}:{kind:'loading'};if(s.offline||s.transportError&&!s.events?.length)return {kind:'down',error:s.transportError};if(s.transportError)return {kind:'stale',error:s.transportError,at:s.receivedAt};return {kind:s.persisted?'cached':'ok',at:s.receivedAt};}
+function renderBanner(){
+ const c=connectionState(),b=$('banner');let html='',cls='';
+ if(c.kind==='down'){cls='bad';const why=/^сервер недоступен$/i.test(String(c.error||'').trim())?'':String(c.error||'');html=`<strong>Сервер недоступен.</strong><span>${why?esc(why)+' · ':''}Переподключаемся автоматически.</span><button class="btn" data-open-settings="server">Настройки сервера</button>`;}
+ else if(c.kind==='stale'){cls='warn';html=`<strong>Нет связи с сервером.</strong><span>Показаны данные от ${esc(stamp(c.at,false,true))}. Переподключаемся…</span>`;}
+ b.hidden=!html;if(html&&b.dataset.html!==html){b.dataset.html=html;b.innerHTML=html;}b.className='banner '+cls;
+ const pn=$('providerNotice');
+ const health=tab==='live'&&!c.kind.match(/down|stale/)?OddsProvider.health(snapshots.live,prefs):null,show=health&&!health.ok&&prefs[OddsProvider.selected(prefs)]!==false;
+ if(show){const other=OddsProvider.PROVIDERS.find(p=>p!==health.provider),h=`<strong>${esc(health.label)} временно недоступен</strong><span>${health.reason?esc(health.reason)+' · ':''}его коэффициенты не показываются; AstekBet, Fonbet и Pinnacle работают.</span><button class="btn" data-switch-provider="${esc(other)}">Переключиться на ${esc(OddsProvider.name(other))}</button>`;if(pn.dataset.html!==h){pn.dataset.html=h;pn.innerHTML=h;}}
+ pn.hidden=!show;
+}
+function updateListHead(view,count,meta=null){
+ if(view!==tab)return;
+ const s=view==='live'?snapshots.live:view==='prematch'?snapshots.prematch:meta;
+ $('viewCount').textContent=count?(view==='live'?`${count} в LIVE`:view==='prematch'?`${count} в линии`:view==='results'?plural(count,['результат','результата','результатов']):plural(count,['матч','матча','матчей'])):'';
+ let note='';if(view==='results')note=resultsNote(meta);
+ if(['live','prematch'].includes(view)){const stale=Object.entries(s?.providers||{}).filter(([k,r])=>r?.stale&&!r?.updating&&bookVisible(k)&&!OddsProvider.isOddsProvider(k)).map(([k])=>providerName(k));if(stale.length)note=`Задерживаются: ${stale.join(', ')} — показаны последние данные`;}
+ $('viewNote').textContent=note;
+ const at=s?.receivedAt||Date.parse(s?.generatedAt||'')||0,el=$('viewUpdated');
+ if(['live','prematch'].includes(view)){el.textContent=s?.persisted?`сохранено ${stamp(at,false,true)} · обновляем…`:at?`обновлено ${stamp(at,false,true)}`:'';el.classList.toggle('stale',!!s?.persisted||!!s?.transportError);}
+ else el.textContent=at?`обновлено ${stamp(at,false,true)}`:'';
+}
+function resultsNote(current){if(!current)return '';if(current.refreshing||current.queued)return current.queued?'обновление в очереди':'проверяем финальные счета…';const next=current.nextRefreshAt||current.nextRetryAt;if(next&&resultsDate===dayKey()){const s=Math.max(0,Math.ceil((next-Date.now())/1000));return s?`следующая проверка через ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`:'';}return '';}
+function updateNavCounts(){const n=liveRowsVisible().rows.length;$('liveCount').textContent=snapshots.live?String(n):'';}
+function updateProviderButtons(){const sel=OddsProvider.selected(prefs);for(const p of OddsProvider.PROVIDERS){$(p).setAttribute('aria-pressed',String(p===sel&&prefs[p]!==false));const h=p===sel?OddsProvider.health(snapshots.live,prefs):null;$(p).title=`${OddsProvider.name(p)}${h&&!h.ok?' — недоступен: '+h.reason:''}`;}}
+function renderChrome(){
+ for(const b of $('tabs').querySelectorAll('[data-tab]'))b.setAttribute('aria-current',b.dataset.tab===tab&&$('settingsView').hidden?'page':'false');
+ const t=tab,f=filters(t),inSettings=!$('settingsView').hidden;
+ $('toolbar').hidden=inSettings;
+ const show=(id,on)=>{$(id).hidden=!on;};
+ const cmpSchedule=t==='compare'&&prefs.compareMode==='schedule';
+ show('search',!cmpSchedule);$('search').closest('.search').hidden=cmpSchedule;
+ show('category',!cmpSchedule);show('availability',!['compare'].includes(t));show('startWindow',['prematch','results','history'].includes(t));
+ show('historyPhase',t==='history');show('liveSort',t==='live');show('lineMode',t==='prematch');show('dateControl',t==='results');
+ show('compareMode',t==='compare');show('compareScope',t==='compare'&&!cmpSchedule);show('favorites',!cmpSchedule);
+ show('oddsSource',(t==='live'||t==='compare'&&prefs.compareScope==='live'&&!cmpSchedule)&&!prefs.hideOdds);
+ if(document.activeElement!==$('search')&&$('search').value!==f.search)$('search').value=f.search;
+ $('availability').value=f.availability;$('historyPhase').value=f.historyPhase;$('liveSort').value=prefs.liveSort;
+ $('favorites').setAttribute('aria-pressed',String(!!prefs.onlyFavorites));
+ for(const b of $('lineMode').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.lineMode===prefs.lineMode));
+ for(const b of $('compareMode').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.compareMode===prefs.compareMode));
+ for(const b of $('compareScope').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.compareScope===prefs.compareScope));
+ for(const p of OddsProvider.PROVIDERS){const opt=$('availability').querySelector(`option[value=${p}]`);if(opt)opt.hidden=t!=='live'||p!==OddsProvider.selected(prefs);}
+ timeOptions(t);
+ $('dateButton').textContent=resultsDate===dayKey()?'Сегодня, '+resultsDate.split('-').reverse().slice(0,2).join('.'):resultsDate.split('-').reverse().join('.');$('nextDate').disabled=resultsDate>=dayKey();$('today').hidden=resultsDate===dayKey();
+ const n=filterCount(t);$('resetFilters').hidden=!n;$('resetFilters').textContent=`Сбросить · ${n}`;
+ updateProviderButtons();renderSources();renderBanner();
+}
+function timeOptions(view){
+ const sel=$('startWindow'),past=['history','results'].includes(view),archived=view==='results'&&resultsDate<dayKey();
+ const first=view==='history'?'Любое время появления':view==='results'?'Любое время результата':'Любое время начала';
+ const opts=[['',first],...[1,6,12,24].map(h=>[String(h),past?(archived?(h===24?'Весь день':`Последние ${h} ч дня`):(h===1?'За последний час':h===24?'За сутки':`За последние ${h} ч`)):(h===1?'В ближайший час':h===24?'В ближайшие сутки':`В ближайшие ${h} ч`)])];
+ const html=opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join('');if(sel.dataset.html!==html){sel.innerHTML=html;sel.dataset.html=html;}sel.value=filters(view).startWindow||'';
+}
+
+// ---------------------------------------------------------------------------------------------------- navigation
+function switchTab(next,{focus=false}={}){
+ if(!VIEWS.includes(next))next='live';
+ const started=performance.now(),wasSettings=!$('settingsView').hidden;
+ closeSettings(false);
+ if(next===tab&&!wasSettings){viewEl(tab).scrollTo({top:0,behavior:'smooth'});return;}
+ tab=next;prefs.lastTab=next;savePrefs();
+ for(const el of document.querySelectorAll('#content>.list'))el.hidden=el.dataset.view!==tab;
+ // The detail panel follows the tab: each tab remembers its own selected match.
+ const sel=selectedId(tab),row=sel?findRow(tab,sel):null;
+ if(row)DetailPanel.show(projected(tab,row),detailView(tab,row));else DetailPanel.hide();
+ layoutDetail();
+ // A section that is already rendered is shown as it is; newer data is applied right after the switch has painted.
+ // requestAnimationFrame + setTimeout: the data refresh runs after the next frame, never before it.
+ if(viewEl(tab).childElementCount){renderChrome();const shown=tab;requestAnimationFrame(()=>setTimeout(()=>{if(tab===shown)renderView(shown);},0));}else{renderView(tab);renderChrome();}
+ sendActivity();
+ if(focus)$('tabs').querySelector(`[data-tab="${tab}"]`)?.focus({preventScroll:true});
+ Perf.measure('tab.'+tab+'.sync',started);Perf.frame('tab.'+tab+'.paint');
+}
+function findRow(view,id){
+ if(!id)return null;const match=e=>String(e.id)===String(id);
+ if(view==='live')return feedRows('live').find(match)||null;
+ if(view==='prematch')return feedRows('prematch').find(match)||null;
+ if(view==='results')return (resultsRes.peek(resultsKey())?.value?.events||[]).find(match)||null;
+ if(view==='history')return historyRows().rows.find(match)||null;
+ if(view==='compare')return [...feedRows('live'),...feedRows('prematch')].find(match)||null;
+ return null;
+}
+const detailView=(view,e)=>view==='compare'?(e?.inLive?'live':'prematch'):view;
+function projected(view,e){return e?MatchView.project(e,prefs,detailView(view,e))||e:null;}
+function selectMatch(id,{focusPanel=false}={}){
+ const started=performance.now(),e=projected(tab,findRow(tab,id));if(!e)return;
+ selectedIds.set(tab,String(e.id));
+ for(const n of viewEl(tab).querySelectorAll('[aria-selected="true"]'))n.setAttribute('aria-selected','false');
+ viewEl(tab).querySelector(`[data-id="${CSS.escape(String(e.id))}"]`)?.setAttribute('aria-selected','true');
+ DetailPanel.show(e,detailView(tab,e));layoutDetail();
+ if(focusPanel)$('detailPane').querySelector('.detail-tabs .tab[aria-selected="true"]')?.focus({preventScroll:true});
+ Perf.measure('detail.open.sync',started);Perf.frame('detail.open.paint');
+}
+function layoutDetail(){const open=DetailPanel.isOpen();$('workspace').classList.toggle('with-detail',open);$('drawerBackdrop').hidden=!open;}
+function onDetailClosed(){selectedIds.delete(tab);for(const n of viewEl(tab).querySelectorAll('[aria-selected="true"]'))n.setAttribute('aria-selected','false');layoutDetail();}
+
+// ---------------------------------------------------------------------------------------------------- odds watch
+let oddsWatchIds=[],oddsWatchSig='',oddsWatchTimer=0;
+function scheduleOddsWatch(rows){const sel=selectedId('live'),ids=[...new Set([...(sel?[sel]:[]),...rows.slice(0,8).map(e=>String(e.id))])].slice(0,9),sig=ids.join('|');oddsWatchIds=ids;if(sig===oddsWatchSig)return;oddsWatchSig=sig;clearTimeout(oddsWatchTimer);oddsWatchTimer=setTimeout(pushOddsWatch,150);}
+async function pushOddsWatch(){const ids=tab==='live'&&!document.hidden&&!prefs.hideOdds?oddsWatchIds:[];try{await client.post('/api/ui/odds-watch',{ids});}catch{}}
+setInterval(()=>{if(tab==='live'&&!document.hidden&&oddsWatchIds.length)pushOddsWatch();},15000);
+
+// ---------------------------------------------------------------------------------------------------- events ----
+$('tabs').addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(b)switchTab(b.dataset.tab);});
+document.addEventListener('keydown',event=>{
+ if(event.defaultPrevented||document.querySelector('dialog[open]'))return;
+ if(event.ctrlKey&&!event.altKey&&!event.metaKey&&!event.shiftKey&&/^[1-5]$/.test(event.key)){event.preventDefault();switchTab(VIEWS[Number(event.key)-1],{focus:true});return;}
+ if(event.key==='Escape'){if(!$('sourcesPopover').hidden){toggleSources(false);return;}if(DetailPanel.isOpen()){const id=DetailPanel.currentId();DetailPanel.hide();viewEl(tab)?.querySelector(`[data-id="${CSS.escape(String(id))}"]`)?.focus({preventScroll:true});return;}}
+ if(event.target.closest('input,textarea,select,[contenteditable="true"]'))return;
+ if(event.target.closest('#tabs')&&['ArrowLeft','ArrowRight'].includes(event.key)){const pos=VIEWS.indexOf(tab),next=VIEWS[(pos+(event.key==='ArrowRight'?1:-1)+VIEWS.length)%VIEWS.length];event.preventDefault();switchTab(next,{focus:true});return;}
+ if(!['ArrowDown','ArrowUp','Enter'].includes(event.key)||!event.target.closest('#content'))return;
+ const rows=[...viewEl(tab).querySelectorAll('article.match,tr[data-id]')].filter(n=>n.offsetParent!==null),current=event.target.closest('[data-id]'),index=rows.indexOf(current);
+ if(event.key==='Enter'){if(current&&!event.target.closest('button')){event.preventDefault();selectMatch(current.dataset.id,{focusPanel:true});}return;}
+ event.preventDefault();const next=rows[Math.max(0,Math.min(rows.length-1,index+(event.key==='ArrowDown'?1:-1)))]||rows[0];if(!next)return;next.focus({preventScroll:false});next.scrollIntoView({block:'nearest'});if(DetailPanel.isOpen())selectMatch(next.dataset.id);
+});
+$('content').addEventListener('click',event=>{
+ const t=event.target;
+ if(t.closest('[data-reset-filters]')){resetFilters();return;}
+ if(t.closest('[data-enable-books]')){for(const s of BOOKS)prefs[s]=true;savePrefs();markDirty();return;}
+ if(t.closest('[data-retry-results]')){loadResults(true);return;}
+ if(t.closest('[data-retry-history]')){loadHistoryPage(0,true);return;}
+ if(t.closest('[data-more-results]')){resultsLimit+=RESULTS_PAGE_SIZE;loadResults(true);return;}
+ if(t.closest('[data-more-history]')){showMoreHistory();return;}
+ if(t.closest('[data-line-more]')){lineSchedulePages++;renderView('prematch',true);return;}
+ const settingsLink=t.closest('[data-open-settings]');if(settingsLink){openSettings(settingsLink.dataset.openSettings);return;}
+ const lf=t.closest('[data-league-fav]');if(lf){event.preventDefault();event.stopPropagation();const k=lf.dataset.leagueFav;prefs.favorites=prefs.favorites.includes(k)?prefs.favorites.filter(x=>x!==k):[...prefs.favorites,k];savePrefs();markDirty();return;}
+ const row=t.closest('[data-id]');if(!row)return;
+ if(t.closest('[data-fav]')){const e=findRow(tab,row.dataset.id);if(e)toggleFavorite(e);return;}
+ const cell=t.closest('[data-book]');selectMatch(row.dataset.id);
+ if(cell&&DetailPanel.isOpen()){const e=projected(tab,findRow(tab,row.dataset.id));if(e)DetailPanel.show(e,detailView(tab,e),{source:cell.dataset.book});}
+});
+$('content').addEventListener('toggle',event=>{const d=event.target;if(!d.matches?.('details[data-group]'))return;const key=d.dataset.group.slice(2);if(d.open)lineClosed.delete(key);else lineClosed.add(key);prefs.lineCollapsed=[...lineClosed].slice(-400);savePrefs();d.dataset.userToggled='1';viewSignatures.delete('prematch');if(d.open&&!d.querySelector('article'))renderView('prematch',true);},true);
+for(const type of ['pointerover','focusin'])$('content').addEventListener(type,event=>{const row=event.target.closest?.('[data-id]');if(!row||!['live','prematch','compare'].includes(tab))return;clearTimeout(prefetchTimer);prefetchTimer=setTimeout(()=>{const e=findRow(tab,row.dataset.id);if(e)prefetchDetail(e,tab==='compare'?(e.inLive?'live':'prematch'):tab);},140);});
+$('content').addEventListener('pointerout',event=>{if(!event.relatedTarget?.closest?.('[data-id]'))clearTimeout(prefetchTimer);});
+$('drawerBackdrop').addEventListener('click',()=>DetailPanel.hide());
+
+function filterChanged(){viewSignatures.delete(tab);if(['results','history'].includes(tab))reloadServerView(tab);else renderView(tab,true);renderChrome();updateNavCounts();}
+let searchTimer=0;
+$('search').addEventListener('input',()=>{setFilter('search',$('search').value);clearTimeout(searchTimer);searchTimer=setTimeout(filterChanged,['results','history'].includes(tab)?250:60);});
+$('category').addEventListener('change',()=>{setFilter('category',$('category').value);setFilter('categoryLabel',$('category').selectedOptions[0]?.textContent.replace(/ · \d+$/,'')||'');filterChanged();});
+$('availability').addEventListener('change',()=>{setFilter('availability',$('availability').value);filterChanged();});
+$('startWindow').addEventListener('change',()=>{setFilter('startWindow',$('startWindow').value);filterChanged();});
+$('historyPhase').addEventListener('change',()=>{setFilter('historyPhase',$('historyPhase').value);filterChanged();});
+$('liveSort').addEventListener('change',()=>{setPref('liveSort',$('liveSort').value);filterChanged();});
+$('lineMode').addEventListener('click',e=>{const b=e.target.closest('[data-line-mode]');if(!b)return;setPref('lineMode',b.dataset.lineMode);lineSchedulePages=1;filterChanged();});
+$('compareMode').addEventListener('click',e=>{const b=e.target.closest('[data-compare-mode]');if(!b)return;setPref('compareMode',b.dataset.compareMode);filterChanged();});
+$('compareScope').addEventListener('click',e=>{const b=e.target.closest('[data-compare-scope]');if(!b)return;setPref('compareScope',b.dataset.compareScope);DetailPanel.hide();filterChanged();});
+$('favorites').addEventListener('click',()=>{prefs.onlyFavorites=!prefs.onlyFavorites;savePrefs();for(const v of VIEWS)viewSignatures.delete(v);filterChanged();});
+$('resetFilters').addEventListener('click',resetFilters);
+function resetFilters(){prefs.viewFilters={...prefs.viewFilters,[tab]:{...FILTER_DEFAULTS}};prefs.onlyFavorites=false;savePrefs();$('search').value='';filterChanged();}
+for(const p of OddsProvider.PROVIDERS)$(p).addEventListener('click',()=>{if(OddsProvider.selected(prefs)!==p||prefs[p]===false)selectLiveOddsProvider(p);});
+$('providerNotice').addEventListener('click',e=>{const b=e.target.closest('[data-switch-provider]');if(b)selectLiveOddsProvider(b.dataset.switchProvider);});
+$('banner').addEventListener('click',e=>{const b=e.target.closest('[data-open-settings]');if(b)openSettings(b.dataset.openSettings);});
+function shiftResults(date){resultsDate=date;resultsLimit=RESULTS_PAGE_SIZE;DetailPanel.hide();selectedIds.delete('results');viewSignatures.delete('results');renderView('results',true);renderChrome();}
+$('prevDate').addEventListener('click',()=>shiftResults(shiftDay(resultsDate,-1)));
+$('nextDate').addEventListener('click',()=>{if(resultsDate<dayKey())shiftResults(shiftDay(resultsDate,1));});
+$('today').addEventListener('click',()=>shiftResults(dayKey()));
+$('dateButton').addEventListener('click',()=>{calendarMonth=resultsDate.slice(0,7);modal('','calendar');calendar();});
+function toggleSources(open=$('sourcesPopover').hidden){$('sourcesPopover').hidden=!open;$('sourcesButton').setAttribute('aria-expanded',String(open));if(open){renderSources();$('sourcesPopover').querySelector('input,button')?.focus({preventScroll:true});}}
+$('sourcesButton').addEventListener('click',e=>{e.stopPropagation();toggleSources();});
+$('sourcesPopover').addEventListener('change',e=>{const s=e.target.dataset.bookToggle;if(!s)return;prefs[s]=e.target.checked;if(!BOOKS.some(b=>prefs[b]!==false)){prefs[s]=true;e.target.checked=true;toast('Оставьте хотя бы одну контору');return;}savePrefs();markDirty();});
+$('sourcesPopover').addEventListener('click',e=>{const b=e.target.closest('[data-open-settings]');if(b){toggleSources(false);openSettings(b.dataset.openSettings);}});
+document.addEventListener('click',e=>{if(!$('sourcesPopover').hidden&&!e.target.closest('#sourcesPopover,#sourcesButton'))toggleSources(false);});
+$('settingsButton').addEventListener('click',()=>{if($('settingsView').hidden)openSettings();else closeSettings();});
+
+// ---------------------------------------------------------------------------------------------------- dialogs ---
+let modalReturnFocus=null,calendarMonth='';
+$('modal').addEventListener('click',event=>{if(event.target!==$('modal'))return;const r=$('modal').getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)$('modal').close();});
+$('modal').addEventListener('close',()=>{const node=modalReturnFocus;if(node?.isConnected)requestAnimationFrame(()=>{if(!$('modal').open)node.focus({preventScroll:true});});});
+function modal(html,kind=''){modalReturnFocus=document.activeElement;if($('modal').open)$('modal').close();$('modal').dataset.kind=kind;$('modal').classList.toggle('data-dialog',['scores','odds','book-odds','live-generator'].includes(kind));$('modal').innerHTML=html;$('modal').showModal();}
+function calendar(){const first=calendarMonth+'-01',month=new Date(first+'T12:00:00Z'),start=shiftDay(first,-((month.getUTCDay()+6)%7));$('modal').innerHTML=`<div class="calendar-header"><button id="calPrev" aria-label="Предыдущий месяц">‹</button><b>${month.toLocaleDateString('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'})}</b><button id="calNext" aria-label="Следующий месяц">›</button></div><div class="calendar">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(d=>`<span>${d}</span>`).join('')}${Array.from({length:42},(_,i)=>{const d=shiftDay(start,i);return `<button data-day="${d}" class="${d===resultsDate?'active':''} ${d.slice(0,7)!==calendarMonth?'outside':''}" ${d>dayKey()?'disabled':''}>${Number(d.slice(-2))}</button>`;}).join('')}</div><div class="dialog-actions"><button id="calClose">Закрыть</button></div>`;$('calPrev').onclick=()=>{month.setUTCMonth(month.getUTCMonth()-1);calendarMonth=month.toISOString().slice(0,7);calendar();};$('calNext').onclick=()=>{month.setUTCMonth(month.getUTCMonth()+1);calendarMonth=month.toISOString().slice(0,7);calendar();};$('calClose').onclick=()=>$('modal').close();$('modal').querySelectorAll('[data-day]').forEach(b=>b.onclick=()=>{$('modal').close();shiftResults(b.dataset.day);});}
+function scoreIds(e){const selected=new Set(refs(e).filter(r=>prefs[r.source]!==false).map(r=>r.source)),identity=r=>r.source+':'+String(r.sourceEventId||r.id||'').replace(/^fonbet-(?:result-)?/,'');return (e.entityAliases||refs(e).map(identity)).filter(k=>selected.has(k.split(':')[0])).join(',');}
+function openScoreHistory(e,view=tab){ScoreDialog.open(e,{ids:scoreIds(e),refs:refs(e).filter(r=>prefs[r.source]!==false),getCurrent:()=>{const fresh=findRow(view,e.id);return fresh?refs(fresh).filter(r=>prefs[r.source]!==false):null;},modal,esc,stamp,providerName});}
+function openOddsTimeline(e){OddsTimeline.open(e,{refs:refs(e),esc,stamp,modal,request});}
+async function openGenerator(e){if(!prefs.generatorEnabled)return;if(e&&(e.inLive||tab==='live')){try{const full=await details.get(detailKeyFor(e,'live'));LiveGenerator.open(full,{modal,esc,base:BASE,request,load:()=>details.peek(detailKeyFor(e,'live'))?.value||full,reload:()=>details.get(detailKeyFor(e,'live'),{force:true})});}catch(error){report(error);}return;}const url=new URL(chrome.runtime.getURL('odds.html'));if(e){url.searchParams.set('team1',e.team1);url.searchParams.set('team2',e.team2);const bo=Number(e.bestOf)||0;if([1,3,5].includes(bo))url.searchParams.set('bo',bo);url.searchParams.set('ids',refs(e).map(r=>r.source+':'+(r.sourceEventId||r.id)).join(','));url.searchParams.set('auto','1');}chrome.runtime.sendMessage({type:'openOddsWindow',url:url.href}).then(r=>{if(r?.error)throw Error(r.error);}).catch(report);}
+function openUrl(url){chrome.runtime.sendMessage({type:'openExternal',url}).then(r=>{if(r?.fallback)toast('Выбранный браузер недоступен — ссылка открыта в текущем');if(r?.error&&!r?.fallback)throw Error(r.error);}).catch(report);}
+
+DetailPanel.configure({esc,stamp,providerName,refsOf:refs,scoreOf,bookVisible,bookHealth,prefs:()=>prefs,setPref,errorText,base:()=>BASE,gameIcon,starIcon,leagueTitle,logo:teamLogo,eventUrl,isFavorite:matchFavorite,toggleFavorite:e=>{toggleFavorite(e);},copyMatch:e=>copy(copyText(e)).catch(report),openScoreHistory,openOddsTimeline,openGenerator,openUrl,
+ generatorAvailable:(e,view)=>!!prefs.generatorEnabled&&!prefs.hideOdds&&['live','prematch'].includes(view)&&GameCategories.info(e.category).key==='cs'&&!isExtraEvent(e),
+ statsAvailable:(e,view)=>['live','results'].includes(view)&&!isExtraEvent(e)&&((StatisticsClient.info(e)?.provider==='dota2'&&prefs.dotaStatsEnabled&&GameCategories.info(e.category).key==='dota')||(StatisticsClient.info(e)?.provider==='cs2'&&GameCategories.info(e.category).key==='cs')),
+ detail:(e,view,opts)=>detailSwr(e,view,opts),invalidateDetail:(e,view)=>details.invalidate(detailKeyFor(e,view==='compare'?'live':view)),onClosed:onDetailClosed});
+StatisticsClient.configure({base:BASE,request,view:()=>tab,active:()=>['live','results'].includes(tab),render:()=>{DetailPanel.render();}});
+Cs2Panel.configure({esc,request,logosEnabled:()=>prefs.teamLogos!==false,render:()=>DetailPanel.refreshStats()});
+DotaStatsPanel.configure({enabled:()=>prefs.dotaStatsEnabled===true,logosEnabled:()=>prefs.teamLogos!==false,esc,request,render:()=>DetailPanel.refreshStats()});
+
+// ---------------------------------------------------------------------------------------------------- boot ------
+document.addEventListener('visibilitychange',()=>{sendActivity();if(!document.hidden)reconcileServerViews();else persist.flush();});
+window.addEventListener('pagehide',()=>{flushPrefs();persist.flush();});
+setInterval(()=>{renderChrome();sendActivity();if(tab==='prematch')renderView('prematch');},20000);
+setInterval(()=>{if(tab==='results'&&$('settingsView').hidden)updateListHead('results',Number($('viewCount').textContent.split(' ')[0])||0,resultsRes.peek(resultsKey())?.value);},1000);
+document.addEventListener('error',event=>{const image=event.target;if(!(image instanceof HTMLImageElement))return;if(image.classList.contains('team-logo')){image.replaceWith(Object.assign(document.createElement('span'),{className:'logo-ph'}));return;}if(image.matches('.hawk-team-logo,.cs2-logo')){const name=image.closest('.hawk-board-team,.cs2-team')?.querySelector('strong')?.textContent||'?';const fallback=document.createElement('span');fallback.className=image.className+' fallback';fallback.textContent=name.trim().slice(0,2).toUpperCase();image.replaceWith(fallback);}else if(image.closest('.hawk-hero')){const fallback=document.createElement('div');fallback.className='hawk-hero-fallback';fallback.textContent=(image.closest('.hawk-hero').querySelector('b')?.textContent||'?').slice(0,2);image.replaceWith(fallback);}},true);
+document.addEventListener('copy',event=>{if(event.defaultPrevented)return;const text=getSelection()?.toString();if(text&&event.clipboardData){event.clipboardData.setData('text/plain',text);event.preventDefault();}});
+
+async function init(){
+ const started=performance.now();
+ // One storage read: prefs + last-known feeds/results/history (instant first paint, refreshed right after).
+ // Small keys first (prefs + LIVE, the default screen); the big Line/History copies load right after the first paint.
+ const saved=await chrome.storage.local.get(['prefs','lastKnown9:live','lastKnown9:results']);
+ prefs={...DEFAULT_PREFS,...saved.prefs};migratePrefs();savePrefs();lineClosed=new Set(Array.isArray(prefs.lineCollapsed)?prefs.lineCollapsed:[]);
+ document.documentElement.classList.toggle('team-logos-off',prefs.teamLogos===false);
+ const live=saved['lastKnown9:live'];
+ if(live?.events&&!snapshots.live)setSnapshot('live',live,{persisted:true});
+ const lr=saved['lastKnown9:results'];if(lr?.key&&lr.value)resultsRes.set(lr.key,lr.value,Number(lr.value.receivedAt)||0);
+ const restoreRest=async()=>{const more=await chrome.storage.local.get(['lastKnown9:prematch','lastKnown9:history']);const pre=more['lastKnown9:prematch'];if(pre?.events&&!snapshots.prematch){setSnapshot('prematch',pre,{persisted:true});scheduleRender('prematch');}const lh=more['lastKnown9:history'];if(lh?.key&&lh.value&&!historyRes.peek(lh.key)){historyRes.set(lh.key,lh.value,Number(lh.value.receivedAt)||0);if(tab==='history')renderView('history',true);}};
+ tab=VIEWS.includes(prefs.lastTab)?prefs.lastTab:'live';
+ for(const el of document.querySelectorAll('#content>.list'))el.hidden=el.dataset.view!==tab;
+ if(['prematch','history'].includes(tab))await restoreRest();
+ updateProviderButtons();renderView(tab,true);renderChrome();updateNavCounts();
+ Perf.measure('boot.firstRender',started);
+ connect();
+ if(!['prematch','history'].includes(tab))requestAnimationFrame(()=>setTimeout(()=>restoreRest().catch(()=>{}),0));
+}
+init().catch(error=>report(error));

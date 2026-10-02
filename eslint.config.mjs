@@ -24,7 +24,7 @@ export default [
     files: ['server/**/*.js', 'tools/**/*.mjs', 'extension/test/**/*.mjs', 'server/test/**/*.js'],
     languageOptions: { ecmaVersion: 2024, sourceType: 'module', globals: { ...globals.node, MonitorTime: 'readonly', LiveModel: 'readonly', OddsPricing: 'readonly' } },
   },
-  { files: ['tools/e2e-extension-smoke.mjs', 'tools/e2e/*.mjs'], languageOptions: { globals: { ...globals.browser, chrome: 'readonly', BASE: 'readonly', request: 'readonly', prefs: 'readonly', cache: 'readonly', self: 'readonly' } } },
+  { files: ['tools/e2e-extension-smoke.mjs', 'tools/e2e/*.mjs', 'tools/bench/*.mjs'], languageOptions: { globals: { ...globals.browser, chrome: 'readonly', BASE: 'readonly', request: 'readonly', prefs: 'readonly', cache: 'readonly', self: 'readonly' } } },
   { files: ['server/**/*.cjs'], languageOptions: { ecmaVersion: 2024, sourceType: 'commonjs', globals: { ...globals.node } } },
   {
     // Classic scripts that share globals through <script> tags (module pattern), so no-undef cannot apply.

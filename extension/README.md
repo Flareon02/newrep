@@ -1,7 +1,15 @@
-# Esports Monitor Extension 8.3.0 — priority realtime, LIVE odds provider GGBET or DataBet
+# Esports Monitor Extension 9.0.0 — product redesign
 
-New in 8.3.0: the LIVE odds provider selector (GGBET | DataBet), see `CHANGELOG-8.3.0.md` (DataBet needs server 4.5.0).
+Dark, dense monitoring interface: LIVE · Линия · Результаты · Сравнение · История, a right-side match detail with
+bookmaker odds, and Settings (sources, notifications, server, league links, diagnostics). See `CHANGELOG-9.0.0.md`
+and `docs/UI-PERFORMANCE-9.0.md`. Prices in lists and the odds comparison need server ≥ 4.7.0.
 
-Designed for Server 4.3.x (4.3.5 or later recommended). Client scheduling is LIVE-first, visible LIVE fixtures (maximum 8) are registered for bounded server-side odds warming, Results refresh through deltas while stale rows remain visible, and History paints the newest 500 first before canonical/older pages are fetched in idle gaps.
+Code map:
+- `app.html`, `ui.css` (design system + layout), `panels.css` (styles of the reused statistics/score/timeline modules)
+- `store.js` — data layer: deduplicated/cancellable requests, stale-while-revalidate resources, last-known snapshots
+- `app.js` — shell, feeds from the service worker, LIVE/Line/Results/History views, selection, keyboard
+- `detail-panel.js` — match detail (odds, statistics, sources); `app-compare.js` — odds comparison + schedule tool;
+  `app-settings.js` — settings, league links, diagnostics; `match-format.js` — pure score/price helpers
+- `background.js` — service worker: feeds (poll + SSE), notifications, windows (unchanged protocol)
 
-See `CHANGELOG-8.2.0.md` (configurable server address and access token) and `CHANGELOG-8.1.2.md` for details.
+Tests: `node --test extension/test/*.test.mjs`; browser: `tools/e2e/extension-suite.mjs`; speed: `tools/bench/ui-bench.mjs`.
