@@ -395,6 +395,10 @@ function scoreQuality(ref){return (ref.scoreText?5:0)+(ref.seriesScore?3:0)+(ref
 
 // Orient a provider record exactly once; keep its identity, URL and original
 // ordering for reconciliation and score-change comparisons.
+// Team logo of a logical fixture: AstekBet's first, then the other bookmakers of the SAME fixture (refs the resolver
+// matched and oriented to the event's team order), never a different fixture's team that only has a similar name.
+const LOGO_ORDER=['astek','ggbet','databet','fonbet','pinnacle'];
+export function fixtureLogo(refs,n,anchor={}){for(const source of LOGO_ORDER){const r=(refs||[]).find(x=>x?.source===source&&x['team'+n+'Logo']);if(r)return r['team'+n+'Logo'];}return anchor['team'+n+'Logo']||'';}
 export function orientEvent(event,anchor){
   if(!pairTeamSimilarity(anchor,event).swapped)return {...event};
   const flip=pair=>Array.isArray(pair)?[pair[1],pair[0]]:null;
@@ -553,7 +557,7 @@ function resolveCore(events,{mode='prematch'}={}){
       source:both?'merged':anchor.source,provider:both?uniq.map(r=>r.provider||r.source).join(' + '):anchor.provider,category,
       league,leagueKey:`logical:${normalizeKey(category)}:${normalizeKey(family)}`,
       leagueAliases:uniq.map(r=>({source:r.source,league:r.league,leagueId:r.leagueId,leagueKey:r.leagueKey,category,categoryKey:r.categoryKey})),
-      team1:chooseTeam(uniq,'team1'),team2:chooseTeam(uniq,'team2'),team1Logo:uniq.find(r=>r.source==='astek'&&r.team1Logo)?.team1Logo||anchor.team1Logo||'',team2Logo:uniq.find(r=>r.source==='astek'&&r.team2Logo)?.team2Logo||anchor.team2Logo||'',startAt:starts.length?Math.min(...starts):0,
+      team1:chooseTeam(uniq,'team1'),team2:chooseTeam(uniq,'team2'),team1Logo:fixtureLogo(uniq,1,anchor),team2Logo:fixtureLogo(uniq,2,anchor),startAt:starts.length?Math.min(...starts):0,
       firstSeenAt:firsts.length?Math.min(...firsts):0,enteredLiveAt:firsts.length?Math.min(...firsts):0,lastSeenAt:Math.max(0,...uniq.map(r=>Number(r.lastSeenAt||0))),
       removedAt:removeds.length===uniq.length?Math.max(...removeds):0,endedAt:Math.max(0,...uniq.map(r=>Number(r.endedAt||0))),resultVerified:uniq.some(r=>r.resultVerified),
       bestOf:Math.max(0,...uniq.map(r=>Number(r.bestOf||0)).filter(n=>[1,3,5,7].includes(n))),seriesScore:scoreRef?.seriesScore||null,mapScores:scoreRef?.mapScores||[],scoreText:scoreRef?.scoreText||'',
