@@ -26,7 +26,7 @@ Before: catalog + aggregate (50 soonest games, ~4 complete leagues) + **one requ
 league with ≥ 50 games was requested with `count=GC+1` (55 → 56 → HTTP 406 every cycle), so each cycle ended as a
 partial failure and rotated the origin.
 
-After (`server/src/prematch.js`):
+Tried in 482d1ba (`server/src/prematch.js`, later removed, see below):
 - the remaining leagues are packed into `champs=` groups of ≤ 4 leagues and < 50 expected games (stalest first),
   always `count=50`; a complete group answer can never reach the cap;
 - an incomplete/invalid group is retried league by league in the same cycle; an HTTP 4xx for a group splits the rest
@@ -40,27 +40,20 @@ Test `server/test/astek-requests-perf.test.js` (mock enforcing the limits above,
 market count). Leagues of up to 49 games: identical output. The league with 54 games now gets 50 fresh games plus the
 known later ones instead of an HTTP 406.
 
-### After the staging deploy of 4c10e67
+### Grouping dropped (after two staging deploys)
 
-The real API also rejects (HTTP 406) any `champs=` group that contains certain leagues (on staging: 2745824, "CS 2. CCT
-Europe Series 10", 1 game; the same league alone works, groups of 2–3 other leagues work). 4c10e67 then paused all
-grouping for 10 minutes, so staging stayed at 47 requests per cycle (data complete, no partial cycles).
+On the real line almost every `champs=` group contains a league that makes the grouped request HTTP 406 (the same
+leagues work alone; groups without them work). 4c10e67 paused grouping after a rejection, 9ad9188 tried to isolate
+the offending leagues; on staging the first cycle rejected all 11 groups and both stayed at ~46 requests per cycle.
+Grouped requests are removed: the line uses one request per league the aggregate misses (~46 per cycle, as before
+482d1ba), with the fixes that did hold:
 
-Now:
-- a rejected group sends only its own leagues one by one; the other groups of the cycle keep batching;
-- its leagues become *suspects* (30 min); next cycle every suspect gets its own group, and a rejected group holding one
-  suspect marks that league *group-incompatible* for an hour: asked alone, never grouped. After the hour it comes
-  back as a suspect, so the re-test costs one group per hour. Both maps are pruned to the catalog every cycle;
-- the line collector uses the same mirror rule as LIVE detail (`server/src/astek-origins.js`, shared): the last good
-  mirror first, a mirror fault (unreachable, timeout, 5xx, 403/429; any failure of the catalog request) cools it down
-  for 5 minutes and the next mirror is tried in the same cycle. HTTP 406 or an invalid answer for a league/group
-  request never moves the collector (before, any partial cycle rotated it to the unreachable -0021 mirror and the
-  next cycle failed);
-- a league over the cap drops a cached game when the fresh answer has the same teams and start time under a new id
-  (Astek re-issues ids; on staging this left one stale duplicate).
-
-Staging-shaped mock (catalog above + one group-incompatible league): **47 → 18, 18, then 15 requests per cycle**
-(the first two cycles find the league), same events as the one-league path.
+- `count=50` for every league request; a league over the 50-row cap keeps its known later games, and a cached game whose
+  teams and start time come back under a new id is dropped as a stale duplicate;
+- mirrors (`server/src/astek-origins.js`, shared with LIVE detail): the last good mirror first; a mirror fault
+  (unreachable, timeout, 5xx, 403/429, any failure of the catalog request) cools it down for 5 minutes and the next
+  mirror is tried in the same cycle. HTTP 406 or an invalid answer for a league request never moves the collector
+  (before, any partial cycle rotated it to the unreachable -0021 mirror and the next cycle failed).
 
 ## AstekBet LIVE detail
 

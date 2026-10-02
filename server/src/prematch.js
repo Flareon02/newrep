@@ -4,24 +4,9 @@ import {parseLiveFeed,inferCategoryFromLeague} from './parsers.js';
 import {fetchJson,withAstekRequest,readJson,writeJson} from './utils.js';
 import {astekOrigins,mirrorFault} from './astek-origins.js';
 
-export const ASTEK_ROW_LIMIT=50,ASTEK_GROUP_LEAGUES=4,GROUP_INCOMPATIBLE_MS=60*60_000,GROUP_SUSPECT_MS=30*60_000;
+export const ASTEK_ROW_LIMIT=50;
+// A wrong/incomplete answer to one league request: about the request, never a reason to distrust the mirror.
 const invalid=(message)=>Object.assign(new Error(message),{invalid:true});
-// Leagues the aggregate window did not cover, packed into `champs=` requests: at most ASTEK_GROUP_LEAGUES ids and
-// fewer than ASTEK_ROW_LIMIT expected games, so a complete answer can never touch the row cap. Order (stalest first)
-// is kept; a league that alone reaches the cap gets its own request. A group holds at most one `suspect` league (one
-// that was in a rejected group), so the next rejection names the league that breaks grouped requests.
-export function packLeagueGroups(leagues,maxLeagues=ASTEK_GROUP_LEAGUES,rowLimit=ASTEK_ROW_LIMIT,suspect=()=>false){
-  // Suspects open their own groups first (placed last they would find the groups full and go alone), then the
-  // groups are put back in stalest-first order.
-  const groups=[],at=new Map(leagues.map((c,i)=>[c,i]));
-  for(const c of [...leagues.filter(c=>suspect(c)),...leagues.filter(c=>!suspect(c))]){
-    if(c.gameCount>=rowLimit-1||maxLeagues<2){groups.push([c]);continue;}
-    const g=groups.find(x=>x.length<maxLeagues&&x[0].gameCount<rowLimit-1&&x.reduce((n,y)=>n+y.gameCount,0)+c.gameCount<rowLimit&&!(suspect(c)&&x.some(suspect)));
-    if(g)g.push(c);else groups.push([c]);
-  }
-  const first=g=>Math.min(...g.map(c=>at.get(c)));
-  return groups.sort((a,b)=>first(a)-first(b));
-}
 
 export function parseChamps(payload){
   if(payload?.Success===false||!Array.isArray(payload?.Value))throw new Error('Некорректный каталог AstekBet');
@@ -29,26 +14,26 @@ export function parseChamps(payload){
 }
 export class PrematchCollector {
   constructor(state,{request=fetchJson,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),persist=writeJson,origins=astekOrigins}={}){
-    Object.assign(this,{state,request,sleep,now,persist,origins,running:false,catalog:[],champCache:{},batchSupported:null,batchRetryAt:0,bulkAttempts:0,bulkSuccesses:0,bulkFallbackLeagues:0,lastAttemptAt:0,lastUrl:'',failures:[],lastCycleMs:0,requestsInCycle:0,cooldownUntil:0,transport:'astek-line',groupedRequests:0,groupFallbacks:0,cappedLeagueReads:0,staleReplaced:0,groupSuspects:new Map(),groupIncompatible:new Map(),origin:''});
+    Object.assign(this,{state,request,sleep,now,persist,origins,running:false,catalog:[],champCache:{},batchSupported:null,batchRetryAt:0,bulkAttempts:0,bulkSuccesses:0,bulkFallbackLeagues:0,lastAttemptAt:0,lastUrl:'',failures:[],lastCycleMs:0,requestsInCycle:0,cooldownUntil:0,transport:'astek-line',cappedLeagueReads:0,staleReplaced:0,origin:''});
   }
   async load(){this.champCache=await readJson('prematch-champs.json',{});}
   async get(url,origin){this.lastUrl=url;this.requestsInCycle++;const result=await withAstekRequest('prematch',(gateSignal)=>this.request(url,origin+'/line/esports',{timeoutMs:4500,signal:gateSignal}));this.state.progress?.(result);return result;}
   normalizeEvents(events){return events.filter(e=>e.team1&&e.team2).map(e=>({...e,url:e.url.replace('/live/','/line/'),scoreText:'',seriesScore:null,mapScores:[]}));}
   cacheLeague(c,events){this.champCache[c.champId]={champ:c,fetchedAt:this.now(),events:this.normalizeEvents(events.filter(e=>e.leagueId===c.champId))};}
-  // Astek's Get1x2 answers at most ASTEK_ROW_LIMIT rows whatever `count` says, accepts only a few `count` values
-  // (50 works; 51, 56... are HTTP 406) and up to ASTEK_GROUP_LEAGUES ids in `champs` (5+ is HTTP 406). Every line
-  // request therefore asks count=50; a league with more games than that is read once per cycle and its games
-  // beyond the window are kept from the previous cycle instead of failing (and rotating the origin) every minute.
-  async games(group,origin){
-    const wanted=new Set(group.map(c=>c.champId)),count=ASTEK_ROW_LIMIT;
-    const result=await this.get(urls.prematchGames(origin,[...wanted],count),origin);
+  // Astek's Get1x2 answers at most ASTEK_ROW_LIMIT rows whatever `count` says and accepts only a few `count` values
+  // (50 works; 51, 56... are HTTP 406). Every league request therefore asks count=50; a league with more games than
+  // that is read once per cycle and its games beyond the window are kept from the previous cycle instead of failing
+  // (and rotating the origin) every minute. (`champs=` groups of several leagues were tried and dropped: on the real
+  // line almost every group contains a league that makes the grouped request HTTP 406.)
+  async games(c,origin){
+    const count=ASTEK_ROW_LIMIT;
+    const result=await this.get(urls.prematchGames(origin,[c.champId],count),origin);
     if(!Array.isArray(result.payload?.Value))throw invalid('Некорректный список матчей');
-    const capped=group.length===1&&group[0].gameCount>=count&&result.payload.Value.length>=count;
+    const capped=c.gameCount>=count&&result.payload.Value.length>=count;
     if(result.payload.Value.length>=count&&!capped)throw invalid('Ответ достиг лимита: предыдущая линия сохранена');
-    let events=parseLiveFeed(result.payload,origin).filter(e=>e.team1&&e.team2);
-    if(events.some(e=>!wanted.has(e.leagueId)))throw invalid('Ответ содержит незапрошенную лигу');
-    if(capped){this.cacheCappedLeague(group[0],events);return result;}
-    for(const c of group){const rows=events.filter(e=>e.leagueId===c.champId);if(group.length>1&&rows.length<c.gameCount)throw invalid('Неполная лига '+c.champId+': '+rows.length+'/'+c.gameCount);this.cacheLeague(c,events);}
+    const events=parseLiveFeed(result.payload,origin).filter(e=>e.team1&&e.team2);
+    if(events.some(e=>e.leagueId!==c.champId))throw invalid('Ответ содержит незапрошенную лигу');
+    if(capped)this.cacheCappedLeague(c,events);else this.cacheLeague(c,events);
     return result;
   }
   cacheCappedLeague(c,events){
@@ -108,30 +93,21 @@ export class PrematchCollector {
       const catalog=parseChamps(catalogResult.payload);this.origins.ok(origin);this.origin=origin;this.catalog=catalog;
       if(!catalog.length&&this.state.events.length)throw new Error('Пустой каталог: сохранена последняя линия');
       const active=catalog.filter(c=>c.gameCount>0).sort((a,b)=>(this.champCache[a.champId]?.fetchedAt||0)-(this.champCache[b.champId]?.fetchedAt||0));
-      this.pruneGroupMemory(active);
       let fallback=active;
       if(active.length&&this.now()>=this.batchRetryAt){
         try{const bulk=await this.bulkGames(active,origin);fallback=bulk.missing;}
         catch(error){this.batchSupported=false;this.batchRetryAt=this.now()+config.prematchBulkRetryMs;log.warn('[prematch] bulk fallback:',error.message);}
       }
-      // Grouped requests only after the aggregate answered in this cycle; otherwise the conservative one-league path.
-      // Leagues known to break grouped requests go alone.
-      const now=this.now(),alone=c=>(this.groupIncompatible.get(c.champId)||0)>now;
-      const queue=this.batchSupported===true?[...fallback.filter(alone).map(c=>[c]),...packLeagueGroups(fallback.filter(c=>!alone(c)),ASTEK_GROUP_LEAGUES,ASTEK_ROW_LIMIT,c=>this.groupSuspects.has(c.champId))]:fallback.map(c=>[c]);
-      for(let i=0;i<queue.length;i++){
-        const group=queue[i];if(this.now()>=deadline){this.failures.push(...queue.slice(i).flat().map(c=>({id:c.champId,error:'Не успели за цикл'})));break;}
+      for(let i=0;i<fallback.length;i++){
+        const c=fallback[i];if(this.now()>=deadline){this.failures.push(...fallback.slice(i).map(x=>({id:x.champId,error:'Не успели за цикл'})));break;}
         // When bulk worked, only a small number of gaps remains. Keep a little
         // spacing to stay friendly to the upstream without spending a minute.
         await this.sleep(this.batchSupported?120:250);
-        try{if(group.length>1)this.groupedRequests++;await this.games(group,origin);if(group.length>1)for(const c of group)this.groupSuspects.delete(c.champId);}catch(error){
-          // A rejected or incomplete group: only its own leagues are retried one by one in this cycle; the other
-          // groups keep batching.
-          if(group.length>1&&(error.invalid||(error.status&&!mirrorFault(error)))){
-            this.groupFallbacks++;if(error.status)this.groupRejected(group);queue.push(...group.map(c=>[c]));continue;
-          }
-          this.failures.push(...group.map(c=>({id:c.champId,error:error.message})));
-          this.origins.fail(origin,error);
-          if(!error.status||[429,503,529].includes(error.status)){this.cooldownUntil=this.now()+Math.max(60000,error.retryAfterMs||0);this.failures.push(...queue.slice(i+1).flat().map(c=>({id:c.champId,error:'Цикл приостановлен'})));break;}
+        try{await this.games(c,origin);}catch(error){
+          this.failures.push({id:c.champId,error:error.message});
+          // Only a fault of the mirror itself cools it down; HTTP 406 or an invalid answer keeps the collector here.
+          if(!error.invalid)this.origins.fail(origin,error);
+          if(!error.status||[429,503,529].includes(error.status)){this.cooldownUntil=this.now()+Math.max(60000,error.retryAfterMs||0);this.failures.push(...fallback.slice(i+1).map(x=>({id:x.champId,error:'Цикл приостановлен'})));break;}
         }
       }
       const activeIds=new Set(active.map(c=>c.champId));for(const id of Object.keys(this.champCache))if(!activeIds.has(id))delete this.champCache[id];
@@ -143,21 +119,7 @@ export class PrematchCollector {
     }catch(error){await this.state.failure(error);log.warn('[prematch]',error.message);}
     finally{this.lastCycleMs=this.now()-this.lastAttemptAt;this.running=false;}
   }
-  // A group answered with an HTTP 4xx. Without a suspect in it, all its leagues become suspects and are spread over
-  // different groups next cycle; a rejected group holding exactly one suspect marks that league group-incompatible.
-  groupRejected(group){
-    const now=this.now(),suspects=group.filter(c=>this.groupSuspects.has(c.champId));
-    if(suspects.length===1){this.groupSuspects.delete(suspects[0].champId);this.groupIncompatible.set(suspects[0].champId,now+GROUP_INCOMPATIBLE_MS);return;}
-    for(const c of group)this.groupSuspects.set(c.champId,now+GROUP_SUSPECT_MS);
-  }
-  // Bounded by the catalog: entries of leagues that left it are dropped. An expired incompatible league comes back
-  // as a suspect, so the re-test is one group per hour and names it again at once if it still breaks.
-  pruneGroupMemory(active){
-    const now=this.now(),ids=new Set(active.map(c=>c.champId));
-    for(const [id,until] of this.groupIncompatible)if(!ids.has(id))this.groupIncompatible.delete(id);else if(until<=now){this.groupIncompatible.delete(id);this.groupSuspects.set(id,now+GROUP_SUSPECT_MS);}
-    for(const [id,until] of this.groupSuspects)if(!ids.has(id)||until<=now)this.groupSuspects.delete(id);
-  }
   start(){this.poll();this.timer=setInterval(()=>this.poll(),config.prematchCatalogIntervalMs);this.timer.unref?.();}
   async stop(){clearInterval(this.timer);while(this.running)await this.sleep(100);}
-  status(){return {transport:this.transport,catalogLeagues:this.catalog.length,cachedLeagues:Object.keys(this.champCache).length,lastPollStartedAt:this.lastAttemptAt,running:this.running,lastUrl:this.lastUrl,batchSupported:this.batchSupported,bulkAttempts:this.bulkAttempts,bulkSuccesses:this.bulkSuccesses,bulkFallbackLeagues:this.bulkFallbackLeagues,batchRetryAt:this.batchRetryAt||0,requestsInCycle:this.requestsInCycle,groupedRequests:this.groupedRequests,groupFallbacks:this.groupFallbacks,cappedLeagueReads:this.cappedLeagueReads,staleReplaced:this.staleReplaced,groupIncompatible:[...this.groupIncompatible].map(([id,until])=>({id,until})),groupSuspects:this.groupSuspects.size,origin:this.origin,origins:this.origins.status(),lastCycleMs:this.lastCycleMs,failedLeagues:this.failures,cooldownUntil:this.cooldownUntil};}
+  status(){return {transport:this.transport,catalogLeagues:this.catalog.length,cachedLeagues:Object.keys(this.champCache).length,lastPollStartedAt:this.lastAttemptAt,running:this.running,lastUrl:this.lastUrl,batchSupported:this.batchSupported,bulkAttempts:this.bulkAttempts,bulkSuccesses:this.bulkSuccesses,bulkFallbackLeagues:this.bulkFallbackLeagues,batchRetryAt:this.batchRetryAt||0,requestsInCycle:this.requestsInCycle,cappedLeagueReads:this.cappedLeagueReads,staleReplaced:this.staleReplaced,origin:this.origin,origins:this.origins.status(),lastCycleMs:this.lastCycleMs,failedLeagues:this.failures,cooldownUntil:this.cooldownUntil};}
 }

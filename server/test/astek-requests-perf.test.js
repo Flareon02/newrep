@@ -13,22 +13,21 @@ const good = await listen((req, res) => {
   res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ Success: true, Value: { ...game, I: id } }));
 });
 process.env.ASTEK_ORIGINS = `http://127.0.0.1:${bad.address().port},http://127.0.0.1:${good.address().port}`;
-const { PrematchCollector, packLeagueGroups, ASTEK_ROW_LIMIT, GROUP_INCOMPATIBLE_MS } = await import('../src/prematch.js');
+const { PrematchCollector, ASTEK_ROW_LIMIT } = await import('../src/prematch.js');
 const { OriginHealth } = await import('../src/astek-origins.js');
 const detail = await import('../src/astek-detail.js');
 test.after(() => { bad.close(); good.close(); });
 
 // ---- Astek line: a mock that enforces the limits observed on the real API ----------------------------------------
 // GetChampsZip catalog with GC per league; Get1x2_VZip answers at most 50 rows whatever `count` says, accepts count 50
-// or 100 only (56 → HTTP 406) and at most 4 ids in `champs` (5+ → HTTP 406); without `champs` it is the global
-// aggregate (the 50 soonest games). The league sizes are the staging catalog of 2026-10-02 (50 leagues, one with 54).
+// or 100 only (56 → HTTP 406); a `champs=` list of several leagues is HTTP 406 (on the real line almost every group
+// contains a league that breaks it); without `champs` it is the global aggregate (the 50 soonest games). The league sizes are the staging catalog of 2026-10-02 (50 leagues, one with 54).
 const GC = [54, 17, 12, 12, 8, 8, 7, 7, 7, 6, 6, 6, 5, 5, 5, 5, 4, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
 const T0 = 1_800_000_000;
 // Big leagues play often, so the aggregate's 50 soonest games are mostly theirs and only a few small leagues are
 // complete in it (on staging: 4 of 48 leagues), like the real line.
 const startOf = (gc, i, k) => (gc === 1 && i % 4 === 0 ? T0 + i : T0 + i * 7 + Math.round((k + 0.5) * (259200 / gc)));
-// `incompatible`: league ids that make any grouped request fail with HTTP 406 (on staging: one CCT league).
-function upstream(sizes = GC, { incompatible = [] } = {}) {
+function upstream(sizes = GC) {
   const leagues = sizes.map((gc, i) => ({ id: 3000 + i, gc }));
   const games = leagues.flatMap((l, i) => Array.from({ length: l.gc }, (_, k) => ({ I: l.id * 1000 + k, LI: l.id, LE: `Counter-Strike 2. League ${i}`, O1E: `Team ${l.id}-${k}a`, O2E: `Team ${l.id}-${k}b`, S: startOf(l.gc, i, k) })));
   const calls = [];
@@ -39,7 +38,7 @@ function upstream(sizes = GC, { incompatible = [] } = {}) {
     const count = Number(u.searchParams.get('count')), champs = u.searchParams.get('champs');
     if (![50, 100].includes(count)) throw Object.assign(new Error('HTTP 406'), { status: 406 });
     const ids = champs ? champs.split(',').map(Number) : null;
-    if (ids && (ids.length > 4 || (ids.length > 1 && ids.some((id) => incompatible.includes(id))))) throw Object.assign(new Error('HTTP 406'), { status: 406 });
+    if (ids && ids.length > 1) throw Object.assign(new Error('HTTP 406'), { status: 406 });
     return reply(games.filter((g) => !ids || ids.includes(g.LI)).sort((a, b) => a.S - b.S).slice(0, Math.min(count, ASTEK_ROW_LIMIT)));
   };
   return { leagues, games, calls, request };
@@ -62,77 +61,30 @@ async function oldCycle(up) {
 }
 
 const collector = (up, opts = {}) => { const state = lineState(); const c = new PrematchCollector(state, { request: up.request, sleep: async () => {}, persist: async () => {}, origins: new OriginHealth({ origins: () => ['https://a.example'] }), ...opts }); return { c, state }; };
-const grouped = (url) => (new URL(url).searchParams.get('champs') || '').includes(',');
 const lineCalls = (up) => up.calls.filter((u) => u.includes('Get1x2_VZip') && new URL(u).searchParams.get('champs'));
-const STAGING_INCOMPATIBLE = 3000 + GC.indexOf(1);   // a one-game league, like 2745824 on staging
 
-test('Astek line: on the staging-shaped line a cycle drops from ~47 to ~15 requests with the same events', async () => {
-  const before = await oldCycle(upstream(GC, { incompatible: [STAGING_INCOMPATIBLE] }));
-  const up = upstream(GC, { incompatible: [STAGING_INCOMPATIBLE] }), { c, state } = collector(up);
+test('Astek line: one request per league the aggregate misses, count=50 always, never a grouped request, no 406', async () => {
+  const before = await oldCycle(upstream());
+  const up = upstream(), { c, state } = collector(up);
   const cycles = [];
-  for (let i = 0; i < 4; i++) { const n = up.calls.length; await c.poll(); cycles.push(up.calls.length - n); }
-  console.log(`Astek line cycle: before ${before.requests} requests (${before.errors} HTTP 406); after: ${cycles.join(' → ')} requests per cycle`);
-  assert.ok(before.requests >= 45, `before ${before.requests}`);
-  assert.ok(cycles[0] <= 18 && cycles[1] <= 18, `learning cycles ${cycles}`);   // the rejected group's leagues retried alone
-  assert.ok(cycles[2] <= 15 && cycles[3] <= 15, `steady cycles ${cycles}`);
+  for (let i = 0; i < 3; i++) { const n = up.calls.length; await c.poll(); cycles.push(up.calls.length - n); }
+  console.log(`Astek line cycle: before ${before.requests} requests (${before.errors} HTTP 406); now ${cycles.join(', ')} requests per cycle`);
+  assert.ok(cycles.every((n) => n === before.requests), `${cycles} vs ${before.requests}`);
+  assert.equal(before.errors, 1, 'the old count=GC+1 request for the 54-game league');
   assert.equal(c.failures.length, 0); assert.equal(state.partial, undefined);
-  for (const url of up.calls.filter((u) => u.includes('Get1x2_VZip'))) {
-    const q = new URL(url).searchParams;
-    assert.equal(q.get('count'), '50', url);
-    assert.ok((q.get('champs') || '').split(',').length <= 4, url);
-  }
-  // Every game of every league that fits the row window, i.e. what the one-league path returns.
+  for (const url of lineCalls(up)) { const q = new URL(url).searchParams; assert.equal(q.get('count'), '50', url); assert.ok(!q.get('champs').includes(','), url); }
+  // Every game of every league that fits the row window.
   const fits = new Set(up.leagues.filter((l) => l.gc < ASTEK_ROW_LIMIT).map((l) => String(l.id)));
   assert.deepEqual(ids(state.events.filter((e) => fits.has(e.leagueId))), up.games.filter((g) => fits.has(String(g.LI))).map((g) => String(g.I)).sort());
-
-  // Same output as the one-league path on the same upstream (aggregate on, no groups).
-  const up2 = upstream(GC, { incompatible: [STAGING_INCOMPATIBLE] }), single = collector(up2);
+  assert.equal(state.events.filter((e) => !fits.has(e.leagueId)).length, ASTEK_ROW_LIMIT, 'the 54-game league: its 50-row window');
+  // The same rows as the path without the aggregate (one request per league).
+  const up2 = upstream(), single = collector(up2);
   single.c.batchSupported = false; single.c.batchRetryAt = Number.MAX_SAFE_INTEGER;
   await single.c.poll();
-  assert.equal(single.c.groupedRequests, 0);
   assert.deepEqual(project(state.events), project(single.state.events));
 });
 
-test('A: one rejected group out of twelve: only its leagues go one by one, the other groups keep batching', async () => {
-  const up = upstream(GC, { incompatible: [STAGING_INCOMPATIBLE] }), { c, state } = collector(up);
-  await c.poll();
-  const calls = lineCalls(up), groups = calls.filter(grouped);
-  const rejected = groups.filter((u) => new URL(u).searchParams.get('champs').split(',').map(Number).includes(STAGING_INCOMPATIBLE));
-  assert.ok(groups.length >= 10, `${groups.length} grouped requests`);
-  assert.equal(rejected.length, 1); assert.equal(c.groupFallbacks, 1);
-  const members = new URL(rejected[0]).searchParams.get('champs').split(',');
-  const singles = calls.filter((u) => !grouped(u)).map((u) => new URL(u).searchParams.get('champs'));
-  for (const id of members) assert.ok(singles.includes(id), `${id} retried alone`);
-  // Groups after the rejected one were still sent grouped.
-  assert.ok(calls.indexOf(rejected[0]) < calls.findLastIndex(grouped), 'batching continued after the rejection');
-  assert.equal(singles.length, members.length + 1, 'singles: the rejected group + the oversized league');
-  assert.deepEqual(ids(state.events.filter((e) => members.includes(e.leagueId))), up.games.filter((g) => members.includes(String(g.LI))).map((g) => String(g.I)).sort());
-  assert.equal(c.failures.length, 0);
-});
-
-test('B: a league that breaks grouped requests is named, then asked alone, and re-tested only once per hour', async () => {
-  let t = 5_000_000;
-  const up = upstream(GC, { incompatible: [STAGING_INCOMPATIBLE] }), { c } = collector(up, { now: () => t });
-  const rejectedIn = (from) => lineCalls(up).slice(from).filter((u) => grouped(u) && new URL(u).searchParams.get('champs').split(',').map(Number).includes(STAGING_INCOMPATIBLE)).length;
-  await c.poll(); t += 60_000;                     // rejected group → its leagues become suspects
-  await c.poll(); t += 60_000;                     // suspects in different groups → the rejected one names the league
-  assert.deepEqual(c.status().groupIncompatible.map((x) => x.id), [String(STAGING_INCOMPATIBLE)]);
-  assert.equal(c.status().groupSuspects, 0, 'the other suspects were cleared by their successful groups');
-  const from = lineCalls(up).length;
-  for (let i = 0; i < 30; i++) { await c.poll(); t += 60_000; }
-  assert.equal(rejectedIn(from), 0, 'never put in a group again during the hour');
-  assert.equal(lineCalls(up).slice(from).filter((u) => new URL(u).searchParams.get('champs') === String(STAGING_INCOMPATIBLE)).length, 30, 'asked alone every cycle');
-  // After the hour: one re-test group, named again at once, then alone again.
-  t += GROUP_INCOMPATIBLE_MS; const from2 = lineCalls(up).length;
-  for (let i = 0; i < 10; i++) { await c.poll(); t += 60_000; }
-  assert.equal(rejectedIn(from2), 1);
-  assert.deepEqual(c.status().groupIncompatible.map((x) => x.id), [String(STAGING_INCOMPATIBLE)]);
-  assert.equal(c.failures.length, 0);
-  // Memory is bounded by the catalog: a league that left it is forgotten.
-  c.pruneGroupMemory([]); assert.equal(c.groupIncompatible.size, 0); assert.equal(c.groupSuspects.size, 0);
-});
-
-test('C: a league over the 50-row cap keeps later games, and an old id re-issued as a new id is dropped', async () => {
+test('Astek line: a league over the 50-row cap keeps later games, and an old id re-issued as a new id is dropped', async () => {
   const up = upstream([54, 3, 2]), { c, state } = collector(up);
   await c.poll();
   const big = String(up.leagues[0].id), first = state.events.filter((e) => e.leagueId === big);
@@ -158,25 +110,20 @@ test('C: a league over the 50-row cap keeps later games, and an old id re-issued
   assert.equal(c.status().staleReplaced, 1);
 });
 
-test('D: HTTP 406 for a grouped request does not move the collector to another mirror', async () => {
-  const origins = new OriginHealth({ origins: () => ['https://astekbet-0021.example', 'https://astekbet.example'] });
-  origins.ok('https://astekbet.example');
-  const up = upstream(GC, { incompatible: [STAGING_INCOMPATIBLE] }), { c } = collector(up, { origins });
-  await c.poll(); await c.poll();
-  assert.ok(c.groupFallbacks >= 1);
-  assert.ok(up.calls.every((u) => new URL(u).hostname === 'astekbet.example'), 'every request on the working mirror');
-  assert.deepEqual(origins.status().coolingDown, []);
-  assert.equal(origins.order()[0], 'https://astekbet.example');
-  // A 406 for a single league neither.
-  const up2 = upstream([3, 2]); const strict = async (url) => { if (new URL(url).searchParams.get('champs')) throw Object.assign(new Error('HTTP 406'), { status: 406 }); return up2.request(url); };
-  const o2 = new OriginHealth({ origins: () => ['https://astekbet-0021.example', 'https://astekbet.example'] }); o2.ok('https://astekbet.example');
-  const s2 = lineState(), c2 = new PrematchCollector(s2, { request: strict, sleep: async () => {}, persist: async () => {}, origins: o2 });
-  c2.batchSupported = false; c2.batchRetryAt = Number.MAX_SAFE_INTEGER;
-  await c2.poll();
-  assert.ok(s2.partial); assert.equal(o2.order()[0], 'https://astekbet.example'); assert.deepEqual(o2.status().coolingDown, []);
+test('Astek line: HTTP 406 or an invalid answer for a league request does not move the collector to another mirror', async () => {
+  for (const fault of [Object.assign(new Error('HTTP 406'), { status: 406 }), 'invalid']) {
+    const up = upstream([3, 2, 1]);
+    const request = async (url) => { if (new URL(url).searchParams.get('champs')) { if (fault === 'invalid') return { payload: { Success: true, Value: 'x' }, status: 200 }; throw fault; } return up.request(url); };
+    const origins = new OriginHealth({ origins: () => ['https://astekbet-0021.example', 'https://astekbet.example'] }); origins.ok('https://astekbet.example');
+    const state = lineState(), c = new PrematchCollector(state, { request, sleep: async () => {}, persist: async () => {}, origins });
+    c.batchSupported = false; c.batchRetryAt = Number.MAX_SAFE_INTEGER;
+    await c.poll();
+    assert.ok(state.partial, String(fault));
+    assert.equal(origins.order()[0], 'https://astekbet.example', String(fault)); assert.deepEqual(origins.status().coolingDown, [], String(fault));
+  }
 });
 
-test('E: an unreachable mirror cools down and the cycle continues on the other one', async () => {
+test('Astek line: an unreachable mirror cools down and the cycle continues on the other one', async () => {
   let t = 9_000_000;
   const origins = new OriginHealth({ origins: () => ['https://astekbet-0021.example', 'https://astekbet.example'], now: () => t });
   const up = upstream([3, 2, 1]), hosts = [];
@@ -192,16 +139,6 @@ test('E: an unreachable mirror cools down and the cycle continues on the other o
   const down = async (url) => { const host = new URL(url).hostname; hosts.push(host); if (host === 'astekbet.example' && url.includes('Get1x2_VZip')) throw new Error('fetch failed'); return up.request(url); };
   c.request = down; c.champCache = {}; t += 6 * 60_000; await c.poll();
   assert.ok(c.cooldownUntil > t); assert.equal(origins.order(t)[0], 'https://astekbet-0021.example');
-});
-
-test('Astek line: groups never exceed 4 leagues or 49 expected games, hold one suspect at most, keep stalest-first order', () => {
-  const leagues = GC.map((gc, i) => ({ champId: String(i), gameCount: gc }));
-  const suspects = new Set(['20', '21', '22', '23', '24']);
-  const groups = packLeagueGroups(leagues, 4, 50, (c) => suspects.has(c.champId));
-  assert.deepEqual(groups.flat().map((c) => c.champId).sort(), leagues.map((c) => c.champId).sort());
-  for (const g of groups) { assert.ok(g.length <= 4); if (g.length > 1) assert.ok(g.reduce((n, c) => n + c.gameCount, 0) < 50); assert.ok(g.filter((c) => suspects.has(c.champId)).length <= 1); }
-  assert.deepEqual(groups.find((g) => g.some((c) => c.gameCount === 54)).length, 1);
-  assert.equal(groups[0][0].champId, '0');
 });
 
 // ---- Astek LIVE detail mirrors ------------------------------------------------------------------------------------
