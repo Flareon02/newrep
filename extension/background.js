@@ -1,4 +1,7 @@
-importScripts('server-config.js','league-model.js','feed-push.js','odds-provider.js');
+importScripts('server-config.js','league-model.js','feed-push.js','odds-provider.js','entitlements.js');
+// Capabilities of this user (saved by the app from GET /api/me): no notifications or favourites filter without them.
+const Ent=Entitlements.create();chrome.storage.local.get('entitlements9').then(d=>{if(d.entitlements9)Ent.set(d.entitlements9);}).catch(()=>{});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.entitlements9?.newValue)Ent.set(changes.entitlements9.newValue);});
 const PUSH_CHECKPOINT_MS=120000,STREAM_STALL_MS=50000;
 // Bumped whenever the server address/token changes; a response that belongs to an older epoch is discarded instead of
 // polluting the cache of the new server with the old server's data or failure.
@@ -23,7 +26,7 @@ async function notifyNew(kind,snapshot){
  const before=seenSets.get(kind)||new Set(seen[kind]||[]);if(!seenSets.has(kind))seenSets.set(kind,before);const all=snapshot.events||[];
  const ids=all.flatMap(e=>[logicalKey(e),...(e.sourceRefs||[e]).map(r=>`${r.source}:${r.sourceEventId||r.id}`)]);
  const quiet=kind==='live'&&suppressLiveNotifications;if(kind==='live')suppressLiveNotifications=false;
- if(seen[kind]&&prefs.notifications?.[kind]&&!quiet){
+ if(seen[kind]&&prefs.notifications?.[kind]&&!quiet&&Ent.can('notifications')&&Ent.canView(kind)){
   const rules=snapshot.leagueRules||{},hidden={publishedLeagueLinks:rules.links||[],excludedLeagueKeys:[...(prefs.hiddenLeagues||[]),...(prefs.hiddenLeaguesByView?.[kind]||[]),...(rules.visibility?.excludedLeagueKeys||[])],excludedCategoryKeys:rules.visibility?.excludedCategoryKeys||[]};
   let fresh=all.filter(e=>(e.sourceRefs||[e]).some(r=>prefs[r.source]!==false&&!before.has(`${r.source}:${r.sourceEventId||r.id}`))&&!LeagueModel.hidden(e,hidden));
   if(prefs.notifications.deduplicate)fresh=fresh.filter(e=>{

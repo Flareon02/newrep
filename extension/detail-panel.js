@@ -32,7 +32,7 @@ const DetailPanel=(()=>{
  function selectedRef(){const list=books();let r=list.find(x=>x.source===st.source)||list[0]||null;if(r&&r.source==='pinnacle'&&st.liveRef&&Date.now()-st.liveAt<15000)r={...r,...st.liveRef};return r;}
  function tabsFor(event,view){
   const tabs=[];
-  if(['live','prematch','compare'].includes(view)&&!ctx.prefs().hideOdds)tabs.push(['odds','Коэффициенты']);
+  if(['live','prematch','compare'].includes(view)&&!ctx.oddsHidden(view==='compare'?(event.inLive?'live':'prematch'):view))tabs.push(['odds','Коэффициенты']);
   if(ctx.statsAvailable(event,view))tabs.push(['stats','Статистика']);
   tabs.push(['info','Матч']);
   return tabs;
@@ -67,7 +67,7 @@ const DetailPanel=(()=>{
  }
 
  function loadDetail(force){
-  if(!st||!['live','prematch','compare'].includes(st.view)||ctx.prefs().hideOdds)return;
+  if(!st||!['live','prematch','compare'].includes(st.view)||ctx.oddsHidden(st.view==='compare'?(st.event.inLive?'live':'prematch'):st.view))return;
   const view=st.view==='compare'?(st.event.inLive||refs(st.event).some(r=>r.inLive)?'live':'prematch'):st.view,id=st.id;
   const res=ctx.detail(st.event,view,{force,onValue:value=>{if(!st||st.id!==id)return;st.detail=value;st.detailAt=Date.now();st.loading=false;st.error=Object.values(value?.marketDetailErrors||{})[0]||'';render();},onError:error=>{if(!st||st.id!==id)return;st.loading=false;st.error=ctx.errorText(error);render();}});
   if(res.cached&&st.detail!==res.cached){st.detail=res.cached;st.detailAt=res.at;}
@@ -192,7 +192,7 @@ const DetailPanel=(()=>{
   const e=st.event,rows=refs(e).filter(r=>ctx.bookVisible(r.source));
   const live=st.view==='live';
   const html=`<div class="detail-section" data-market-key="sources"><h3>Конторы</h3><table class="src-table"><thead><tr><th>Контора</th><th>Начало</th><th>${live?'В LIVE':st.view==='results'?'Окончание':'В линии'}</th><th class="num">Счёт</th></tr></thead><tbody>${rows.map(r=>{const url=ctx.eventUrl(r);return `<tr data-market-key="src:${esc(r.source)}"><td><span class="book-mark ${esc(r.source)}" aria-hidden="true"></span> <button class="link-btn" data-open-url="${esc(url)}" ${url?'':'disabled'} title="${url?'Открыть у букмекера':''}">${esc(ctx.providerName(r.source))}</button></td><td>${esc(ctx.stamp(r.startAt,true))}</td><td>${esc(ctx.stamp(live?r.enteredLiveAt:st.view==='results'?(r.endedAt||r.removedAt):r.firstPrematchAt,true,live))}</td><td class="num">${esc(r.scoreText||'—')}${st.view==='results'&&r.resultVerified?' <span class="verified">✓</span>':''}</td></tr>`;}).join('')}</tbody></table></div>
-  <div class="detail-section" data-market-key="actions"><h3>Действия</h3><div class="row-actions">${['live','results','prematch'].includes(st.view)?'<button class="btn" data-dp="scores">История счёта</button>':''}${['live','prematch','results'].includes(st.view)&&!ctx.prefs().hideOdds?'<button class="btn" data-dp="timeline">История коэффициентов</button>':''}${ctx.generatorAvailable(e,st.view)?'<button class="btn" data-dp="generator">Генератор CS2</button>':''}<button class="btn" data-dp="copy">Копировать матч</button></div></div>
+  <div class="detail-section" data-market-key="actions"><h3>Действия</h3><div class="row-actions">${['live','results','prematch'].includes(st.view)&&ctx.can('scores.history')?'<button class="btn" data-dp="scores">История счёта</button>':''}${['live','prematch','results'].includes(st.view)&&ctx.can('odds.history')&&!ctx.oddsHidden(st.view==='results'?'live':st.view)?'<button class="btn" data-dp="timeline">История коэффициентов</button>':''}${ctx.generatorAvailable(e,st.view)?'<button class="btn" data-dp="generator">Генератор CS2</button>':''}<button class="btn" data-dp="copy">Копировать матч</button></div></div>
   ${firstSeenSection(e)}${ctx.isAdmin?.()?scoreDiagnostics(e):''}${timeline(e)}`;
   if(body.dataset.kind!=='info'){body.dataset.kind='info';body.innerHTML='';}
   StableDOM.patch(body,html);

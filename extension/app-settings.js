@@ -2,12 +2,15 @@
 /* Settings (9.0): a full view instead of a modal. League links (formerly a primary tab) and diagnostics are
    management sections here; they never block the monitoring views. */
 const settingsState={section:'display',catalog:null,workingLinks:[],selection:new Set(),health:null,healthAt:0};
-const SETTINGS_SECTIONS=[['display','Отображение'],['sources','Источники'],['notifications','Уведомления'],['server','Сервер'],['leagues','Лиги и связи'],['diagnostics','Диагностика'],['backup','Резервная копия'],['about','О программе']];
+const SETTINGS_SECTIONS=[['display','Отображение'],['sources','Источники'],['notifications','Уведомления'],['server','Подключение'],['leagues','Лиги и связи'],['users','Пользователи'],['diagnostics','Диагностика'],['backup','Резервная копия'],['about','О программе']];
+// Ordinary users see their own preferences only; server internals, diagnostics and user management need capabilities.
+const settingsAllowed=id=>id==='notifications'?Ent.can('notifications'):id==='leagues'?Ent.can('leagues.manage'):id==='users'?Ent.can('admin.users'):id==='diagnostics'?Ent.can('admin.diagnostics'):true;
+const settingsSections=()=>SETTINGS_SECTIONS.filter(([id])=>settingsAllowed(id));
 const LEAGUE_PROVIDERS=['astek','fonbet','pinnacle','ggbet'],LEAGUE_PAGE_SIZE=120,LEAGUE_VIEWS=[['live','LIVE'],['prematch','Линия'],['results','Результаты'],['history','История'],['compare','Сравнение']];
 const leagueListLimits=new Map(LEAGUE_PROVIDERS.map(s=>[s,LEAGUE_PAGE_SIZE]));
 
 function openSettings(section){
- if(section)settingsState.section=SETTINGS_SECTIONS.some(s=>s[0]===section)?section:'display';
+ if(section)settingsState.section=settingsSections().some(s=>s[0]===section)?section:'display';
  $('workspace').hidden=true;$('toolbar').hidden=true;$('settingsView').hidden=false;$('providerNotice').hidden=true;
  renderSettings();renderChrome();
  $('settingsView').querySelector(`[data-settings-section="${settingsState.section}"]`)?.focus({preventScroll:true});
@@ -19,41 +22,42 @@ function closeSettings(render=true){
 }
 const line=(id,label,hint,checked,attrs='')=>`<div class="setting-line"><span class="text"><span>${label}</span>${hint?`<small>${hint}</small>`:''}</span><label class="switch"><input type="checkbox" id="${id}" ${checked?'checked':''} ${attrs} aria-label="${esc(label.replace(/<[^>]+>/g,''))}"></label></div>`;
 function renderSettings(){
+ if(!settingsAllowed(settingsState.section))settingsState.section='display';
  const v=$('settingsView'),sec=settingsState.section;
- v.innerHTML=`<nav class="settings-nav" aria-label="Разделы настроек"><h2>Настройки</h2>${SETTINGS_SECTIONS.map(([id,label])=>`<button data-settings-section="${id}" aria-current="${sec===id}">${label}</button>`).join('')}<div style="padding:12px 10px"><button class="btn" id="settingsDone">← К мониторингу</button></div></nav><div class="settings-body" id="settingsBody"></div>`;
+ v.innerHTML=`<nav class="settings-nav" aria-label="Разделы настроек"><h2>Настройки</h2>${settingsSections().map(([id,label])=>`<button data-settings-section="${id}" aria-current="${sec===id}">${label}</button>`).join('')}<div style="padding:12px 10px"><button class="btn" id="settingsDone">← К мониторингу</button></div></nav><div class="settings-body" id="settingsBody"></div>`;
  v.querySelectorAll('[data-settings-section]').forEach(b=>b.onclick=()=>{settingsState.section=b.dataset.settingsSection;renderSettings();v.querySelector(`[data-settings-section="${settingsState.section}"]`)?.focus();});
  $('settingsDone').onclick=()=>closeSettings();
  const body=$('settingsBody');
- ({display:settingsDisplay,sources:settingsSources,notifications:settingsNotifications,server:settingsServer,leagues:settingsLeagues,diagnostics:settingsDiagnostics,backup:settingsBackup,about:settingsAbout})[sec](body);
+ ({display:settingsDisplay,sources:settingsSources,notifications:settingsNotifications,server:settingsServer,leagues:settingsLeagues,users:settingsUsers,diagnostics:settingsDiagnostics,backup:settingsBackup,about:settingsAbout})[sec](body);
 }
 
 function settingsDisplay(body){
  body.innerHTML=`<h2>Отображение</h2><p class="lead">Что показывать в списках и в карточке матча.</p>
  <section class="setting-card"><h3>Списки матчей</h3>
- ${line('setOdds','Показывать коэффициенты','Цены основного рынка в списках, вкладка «Коэффициенты» в карточке матча и сравнение.',!prefs.hideOdds)}
+ ${Ent.can('odds.live')||Ent.can('odds.prematch')?line('setOdds','Показывать коэффициенты','Цены основного рынка в списках, вкладка «Коэффициенты» в карточке матча и сравнение.',!prefs.hideOdds):''}
  ${line('setLogos','Логотипы команд','',prefs.teamLogos!==false)}
  ${line('setExtras','Дополнительные события','Сравнения киллов, карт и раундов, которые конторы выставляют отдельными матчами.',prefs.showExtras!==false)}</section>
- <section class="setting-card"><h3>Статистика</h3>${line('setDota','Статистика матчей Dota 2','Вкладка «Статистика» в карточке LIVE-матча.',prefs.dotaStatsEnabled===true)}</section>
+ ${Ent.can('statistics.view')?`<section class="setting-card"><h3>Статистика</h3>${line('setDota','Статистика матчей Dota 2','Вкладка «Статистика» в карточке LIVE-матча.',prefs.dotaStatsEnabled===true)}</section>`:''}
  <section class="setting-card"><h3>Окно и ссылки</h3>
  <label class="field"><span>Открывать монитор</span><select id="setOpenMode" class="select"><option value="window">Отдельное окно приложения</option><option value="tab">Вкладка браузера</option></select><small>Применяется при следующем нажатии на значок расширения.</small></label>
  <label class="field"><span>Браузер для ссылок на конторы</span><select id="setBrowser" class="select" style="max-width:320px"><option value="current">Текущий браузер</option><option value="system">Системный браузер по умолчанию</option><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option><option value="firefox">Mozilla Firefox</option></select><small>Для другого браузера один раз установите помощник из папки browser-host. ID расширения: ${esc(chrome.runtime.id)}</small></label></section>
- <section class="setting-card"><h3>Экспериментальные функции</h3>${line('setGenerator','Генератор коэффициентов CS2','Расчёт собственной линии для матчей CS2 (нужен токен сервера).',prefs.generatorEnabled===true)}</section>`;
+ ${Ent.can('tools.generator')?`<section class="setting-card"><h3>Экспериментальные функции</h3>${line('setGenerator','Генератор коэффициентов CS2','Расчёт собственной линии для матчей CS2.',prefs.generatorEnabled===true)}</section>`:''}`;
  $('setOpenMode').value=prefs.openMode||'window';$('setBrowser').value=prefs.linkBrowser||'current';
- $('setOdds').onchange=()=>{setPref('hideOdds',!$('setOdds').checked);};
+ if($('setOdds'))$('setOdds').onchange=()=>{setPref('hideOdds',!$('setOdds').checked);};
  $('setLogos').onchange=()=>{setPref('teamLogos',$('setLogos').checked);document.documentElement.classList.toggle('team-logos-off',!prefs.teamLogos);};
  $('setExtras').onchange=()=>setPref('showExtras',$('setExtras').checked);
- $('setDota').onchange=()=>{setPref('dotaStatsEnabled',$('setDota').checked);if(!prefs.dotaStatsEnabled)DotaStatsPanel.clear?.();};
+ if($('setDota'))$('setDota').onchange=()=>{setPref('dotaStatsEnabled',$('setDota').checked);if(!prefs.dotaStatsEnabled)DotaStatsPanel.clear?.();};
  $('setOpenMode').onchange=()=>setPref('openMode',$('setOpenMode').value);
  $('setBrowser').onchange=()=>setPref('linkBrowser',$('setBrowser').value);
- $('setGenerator').onchange=()=>setPref('generatorEnabled',$('setGenerator').checked);
+ if($('setGenerator'))$('setGenerator').onchange=()=>setPref('generatorEnabled',$('setGenerator').checked);
 }
 function settingsSources(body){
- const rows=sourceRows();
- body.innerHTML=`<h2>Источники</h2><p class="lead">Конторы, которые участвуют в списках, и источник коэффициентов LIVE.</p>
- <section class="setting-card"><h3>Конторы</h3><p>Выключенная контора не показывается ни в одном разделе и не участвует в уведомлениях.</p>${['astek','fonbet','pinnacle'].map(s=>{const r=rows.find(x=>x.source===s);return line('book_'+s,`<span class="book-mark ${s}"></span> ${providerName(s)}`,`${esc(r.text)}${r.detail?' · '+esc(r.detail):''}`,prefs[s]!==false,`data-book-setting="${s}"`);}).join('')}</section>
- <section class="setting-card"><h3>Коэффициенты LIVE</h3><p>GGBET и DataBet — две ленты одной платформы. Одновременно показывается одна, они никогда не смешиваются.</p><div class="segmented" role="group" aria-label="Источник коэффициентов LIVE">${OddsProvider.PROVIDERS.map(p=>`<button type="button" data-odds-provider="${p}" aria-pressed="${OddsProvider.selected(prefs)===p}">${OddsProvider.name(p)}</button>`).join('')}</div>${(()=>{const h=OddsProvider.health(snapshots.live,prefs);return h&&!h.ok?`<p class="status-text warn" style="margin-top:10px">${esc(h.label)} сейчас недоступен: ${esc(h.reason)}</p>`:'';})()}</section>`;
+ const rows=sourceRows(),books=['astek','fonbet','pinnacle'].filter(s=>Ent.canProvider(s)),both=OddsProvider.PROVIDERS.every(p=>Ent.canProvider(p)),mode=['ggbet','databet'].includes(prefs.liveOddsMode)?prefs.liveOddsMode:'auto';
+ body.innerHTML=`<h2>Источники</h2><p class="lead">Конторы, которые участвуют в списках.</p>
+ <section class="setting-card"><h3>Конторы</h3><p>Выключенная контора не показывается ни в одном разделе и не участвует в уведомлениях.</p>${books.map(s=>{const r=rows.find(x=>x.source===s);return line('book_'+s,`<span class="book-mark ${s}"></span> ${providerName(s)}`,`${esc(r.text)}${r.detail?' · '+esc(r.detail):''}`,prefs[s]!==false,`data-book-setting="${s}"`);}).join('')||'<p class="muted">Нет доступных контор.</p>'}</section>
+ ${both?`<section class="setting-card"><h3>Коэффициенты LIVE</h3><p>GGBET и DataBet — две ленты одной платформы, одновременно показывается одна. «Авто» выбирает ту, что сейчас работает.</p><div class="segmented" role="group" aria-label="Источник коэффициентов LIVE">${[['auto','Авто'],['ggbet','GGBET'],['databet','DataBet']].map(([id,label])=>`<button type="button" data-odds-mode="${id}" aria-pressed="${mode===id}">${label}</button>`).join('')}</div><p class="muted">Сейчас показывается: ${esc(OddsProvider.name(OddsProvider.selected(prefs)))}</p></section>`:''}`;
  body.querySelectorAll('[data-book-setting]').forEach(c=>c.onchange=()=>{const s=c.dataset.bookSetting;prefs[s]=c.checked;if(!BOOKS.some(b=>prefs[b]!==false)){prefs[s]=true;c.checked=true;toast('Оставьте хотя бы одну контору');return;}savePrefs();});
- body.querySelectorAll('[data-odds-provider]').forEach(b=>b.onclick=()=>{selectLiveOddsProvider(b.dataset.oddsProvider);settingsSources(body);});
+ body.querySelectorAll('[data-odds-mode]').forEach(b=>b.onclick=async()=>{setPref('liveOddsMode',b.dataset.oddsMode);await chooseLiveOddsProvider();settingsSources(body);});
 }
 function settingsNotifications(body){
  const n=prefs.notifications||{};
@@ -61,7 +65,7 @@ function settingsNotifications(body){
  body.querySelectorAll('[data-notify]').forEach(c=>c.onchange=()=>{prefs.notifications={...prefs.notifications,[c.dataset.notify]:c.checked};savePrefs();});
 }
 function settingsServer(body){
- body.innerHTML=`<h2>Сервер</h2><p class="lead">Расширение показывает данные сервера Esports Monitor.</p><section class="setting-card"><label class="field"><span>Адрес сервера</span><input id="serverBase" class="input" type="url" value="${esc(ServerConfig.base)}" spellcheck="false" maxlength="200"><small>По умолчанию ${esc(ServerConfig.DEFAULT_BASE)}. Можно указать https://домен или https://домен/путь.</small></label><label class="field"><span>Токен доступа</span><input id="serverToken" class="input" type="password" autocomplete="off" maxlength="256" placeholder="${ServerConfig.token?'Токен сохранён — оставьте пустым, чтобы не менять':'Не задан'}"><small>Нужен для публикации связей лиг, генераторов и поиска HLTV.</small></label><div class="row-actions"><button id="serverSave" class="btn primary">Сохранить и перезапустить</button><button id="serverClearToken" class="btn">Удалить токен</button><button id="serverReset" class="btn ghost">Адрес по умолчанию</button></div><p id="serverMessage" class="muted" role="status"></p></section>`;
+ body.innerHTML=`<h2>Подключение</h2><p class="lead">Адрес сервера Esports Monitor и ваш ключ доступа.</p><section class="setting-card"><label class="field"><span>Адрес сервера</span><input id="serverBase" class="input" type="url" value="${esc(ServerConfig.base)}" spellcheck="false" maxlength="200"><small>По умолчанию ${esc(ServerConfig.DEFAULT_BASE)}. Можно указать https://домен или https://домен/путь.</small></label><label class="field"><span>Ключ доступа</span><input id="serverToken" class="input" type="password" autocomplete="off" maxlength="256" placeholder="${ServerConfig.token?'Ключ сохранён — оставьте пустым, чтобы не менять':'Не задан'}"><small>Ключ выдаёт администратор. От него зависит, какие разделы и конторы вам доступны.</small></label><div class="row-actions"><button id="serverSave" class="btn primary">Сохранить и перезапустить</button><button id="serverClearToken" class="btn">Удалить токен</button><button id="serverReset" class="btn ghost">Адрес по умолчанию</button></div><p id="serverMessage" class="muted" role="status"></p></section>`;
  $('serverSave').onclick=async()=>{const base=ServerConfig.normalize($('serverBase').value),message=$('serverMessage');if(!base){message.textContent='Введите адрес, начиная с http:// или https://';return;}const token=$('serverToken').value.trim()||ServerConfig.token;try{const pattern=ServerConfig.permissionPattern(base),defaultPattern=ServerConfig.permissionPattern(ServerConfig.DEFAULT_BASE),previous=ServerConfig.permissionPattern(ServerConfig.base);if(pattern!==defaultPattern){const origins=[pattern];if(!(await chrome.permissions.contains({origins}))&&!(await chrome.permissions.request({origins}))){message.textContent='Без разрешения на доступ к этому адресу расширение не сможет читать ответы сервера.';return;}}await ServerConfig.save({base,token});if(previous!==pattern&&previous!==defaultPattern)chrome.permissions.remove({origins:[previous]}).catch(()=>{});await flushPrefs();location.reload();}catch(error){report(error);}};
  $('serverClearToken').onclick=async()=>{try{await ServerConfig.save({base:ServerConfig.base,token:''});await flushPrefs();location.reload();}catch(error){report(error);}};
  $('serverReset').onclick=async()=>{try{const previous=ServerConfig.permissionPattern(ServerConfig.base),defaultPattern=ServerConfig.permissionPattern(ServerConfig.DEFAULT_BASE);await ServerConfig.save({base:ServerConfig.DEFAULT_BASE,token:ServerConfig.token});if(previous!==defaultPattern)await chrome.permissions.remove({origins:[previous]}).catch(()=>{});await flushPrefs();location.reload();}catch(error){report(error);}};

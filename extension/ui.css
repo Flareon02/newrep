@@ -419,3 +419,28 @@ dialog#modal .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;ma
 .final .fs{font-size:var(--fs-l);font-weight:700;letter-spacing:.02em;white-space:nowrap}
 .final .maps-line{font-size:var(--fs-xs);color:var(--text-2);white-space:nowrap}
 .final .verified,.final .unverified{white-space:nowrap}
+
+/* capabilities: what the user may not use is not shown */
+html.no-favorites [data-fav],html.no-favorites [data-league-fav],html.no-favorites #favorites,html.no-favorites [data-dp="fav"]{display:none!important}
+#tabs [data-tab][hidden]{display:none}
+
+/* Settings → Пользователи (administrators) */
+.admin-layout{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:var(--s3);align-items:start}
+@media (max-width:760px){.admin-layout{grid-template-columns:1fr}}
+.admin-users{display:grid;gap:4px;margin-bottom:10px}
+.admin-user{display:grid;text-align:left;gap:2px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-s);background:var(--control);color:var(--text);cursor:pointer}
+.admin-user small{color:var(--muted);font-size:var(--fs-xs)}
+.admin-user[aria-selected=true]{border-color:var(--accent);background:var(--accent-soft)}
+.admin-create{display:flex;gap:6px}.admin-create .input{flex:1;min-width:0}
+.admin-head{display:flex;flex-wrap:wrap;gap:10px;align-items:end}.admin-head .field{flex:1 1 180px;margin:0}
+.admin-caps{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin:8px 0}
+.admin-group{border:1px solid var(--line);border-radius:var(--radius-s);padding:6px 8px}
+.admin-group-head{display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);margin-bottom:4px}
+.admin-cap{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 8px;align-items:center;padding:3px 0;font-size:var(--fs-s)}
+.admin-cap code{grid-column:2;color:var(--muted);font-size:10px}
+.admin-cap .pill{grid-column:3;grid-row:1/3;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid var(--line)}
+.admin-cap .pill.on{color:#9fe0b3;border-color:rgba(70,180,110,.5)}.admin-cap .pill.off{color:var(--muted)}
+.admin-actions .spacer{flex:1}
+.admin-token{display:grid;gap:6px;margin-bottom:var(--s3);padding:10px 12px;border:1px solid rgba(224,168,58,.5);border-radius:var(--radius);background:var(--warn-soft)}
+.admin-token code{user-select:all;word-break:break-all;font-size:var(--fs-s)}
+.btn.danger{color:#ff9a95}

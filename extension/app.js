@@ -29,6 +29,11 @@ const Perf=(()=>{const log=[],dev=(()=>{try{return localStorage.getItem('devPerf
  return {measure,frame,log};})();
 window.__perf=Perf.log;
 
+// ---------------------------------------------------------------------------------------------------- capabilities
+// What this user may use (server 4.9+, GET /api/me). The server enforces it; the UI only leaves out what cannot be used.
+const Ent=Entitlements.create();
+const oddsHidden=view=>prefs.hideOdds||!Ent.oddsFor(view==='compare'?(prefs.compareScope==='prematch'?'prematch':'live'):view);
+
 // ---------------------------------------------------------------------------------------------------- prefs -----
 const DEFAULT_PREFS={astek:true,fonbet:true,pinnacle:true,ggbet:true,databet:true,liveOddsProvider:'ggbet',linkBrowser:'current',openMode:'window',dotaStatsEnabled:true,teamLogos:true,favorites:[],hiddenLeagues:[],hiddenLeaguesByView:{},notifications:{live:false,prematch:false,favoritesOnly:false,sound:false},viewFilters:{},liveSort:'league',lineMode:'leagues',compareMode:'odds',compareScope:'live',showExtras:true,hideOdds:false,historyEnabled:true,detailTab:'odds',detailBook:'',onlyFavorites:false};
 let prefs={...DEFAULT_PREFS};
@@ -52,13 +57,14 @@ function migratePrefs(){
  for(const key of ['favorites','hiddenLeagues'])if(!Array.isArray(prefs[key]))prefs[key]=[];
  prefs.notifications={...DEFAULT_PREFS.notifications,...prefs.notifications};
 }
-const bookVisible=source=>prefs[source]!==false&&OddsProvider.visible(source,prefs);
-const viewBooks=view=>(view==='live'?['astek','fonbet','pinnacle',OddsProvider.selected(prefs)]:view==='results'?['astek','fonbet']:view==='history'?['astek','fonbet','pinnacle']:['astek','fonbet','pinnacle']).filter(s=>prefs[s]!==false);
+const bookVisible=source=>prefs[source]!==false&&OddsProvider.visible(source,prefs)&&Ent.canProvider(source);
+const viewBooks=view=>(view==='live'?['astek','fonbet','pinnacle',OddsProvider.selected(prefs)]:view==='results'?['astek','fonbet']:view==='history'?['astek','fonbet','pinnacle']:['astek','fonbet','pinnacle']).filter(s=>prefs[s]!==false&&Ent.canProvider(s));
 
 // ---------------------------------------------------------------------------------------------------- toast/errors
 const clientErrors=[];
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,3200);}
-function errorText(error){return error?ServerConfig.errorText(error):'Неизвестная ошибка';}
+// Plain words for users; the sanitized technical reason only for administrators (user-text.js).
+function errorText(error){return error?UserText.error(error,{admin:Ent.isAdmin()}):'Неизвестная ошибка';}
 function report(error){if(error?.name==='AbortError')return;const message=errorText(error);clientErrors.push({at:new Date().toISOString(),message});if(clientErrors.length>50)clientErrors.shift();toast(message);}
 
 // ---------------------------------------------------------------------------------------------------- data layer
@@ -76,7 +82,7 @@ function hydrateDetail(data){return data?.marketDetailErrors&&Object.keys(data.m
 const FULL_LEASE='p'+(globalThis.crypto?.randomUUID?.()||(Math.random().toString(36).slice(2)+Date.now().toString(36))).replace(/-/g,'').slice(0,40);
 let fullLeaseId='',panelDetailKey='';
 function leaseFull(event,view){
- const live=view==='live'||(view==='compare'&&!!event?.inLive),provider=OddsProvider.selected(prefs),id=live&&provider==='ggbet'&&event?String(event.id):'';
+ const live=view==='live'||(view==='compare'&&!!event?.inLive),provider=OddsProvider.selected(prefs),id=live&&provider==='ggbet'&&event&&Ent.can('odds.fullMarkets')&&Ent.canProvider('ggbet')?String(event.id):'';
  if(!id){releaseFull();return;}
  fullLeaseId=id;client.post('/api/ui/full-markets',{lease:FULL_LEASE,action:'acquire',view:'live',id,provider}).catch(()=>{});
 }
@@ -87,7 +93,7 @@ function detailKeyFor(event,view){const key=OddsProvider.detailKey(view,event.id
 function detailSwr(event,view,{force=false,onValue,onError,signal}={}){const started=performance.now(),key=detailKeyFor(event,view);panelDetailKey=key;const res=details.swr(key,{force,signal,onValue:(v)=>{Perf.measure('detail.network',started);onValue?.(v);},onError});return res;}
 let prefetchController=null,prefetchTimer=0;
 function prefetchDetail(event,view){
- if(!event||!['live','prematch'].includes(view)||prefs.hideOdds)return;
+ if(!event||!['live','prematch'].includes(view)||oddsHidden(view))return;
  const key=detailKeyFor(event,view),cached=details.peek(key);if(cached?.fresh||details.isLoading(key))return;
  prefetchController?.abort();prefetchController=new AbortController();
  details.load(key,{signal:prefetchController.signal}).catch(()=>{});
@@ -181,7 +187,7 @@ function feedRows(kind){
 const favoriteKeys=e=>[...(e.entityAliases||[]),...refs(e).flatMap(r=>[...(r.aliases||[]),`${r.source}:${r.sourceEventId||r.id}`])];
 const matchFavorite=e=>favoriteKeys(e).some(k=>prefs.favorites.includes(k));
 const favorite=e=>[e.leagueKey,...refs(e).map(r=>LeagueModel.id(r)),...favoriteKeys(e)].some(k=>prefs.favorites.includes(k));
-function toggleFavorite(e){const keys=favoriteKeys(e);prefs.favorites=matchFavorite(e)?prefs.favorites.filter(k=>!keys.includes(k)):[...new Set([...prefs.favorites,...keys])];savePrefs();markDirty();if(prefs.onlyFavorites&&['results','history'].includes(tab))reloadServerView(tab);}
+function toggleFavorite(e){if(!Ent.can('favorites'))return;const keys=favoriteKeys(e);prefs.favorites=matchFavorite(e)?prefs.favorites.filter(k=>!keys.includes(k)):[...new Set([...prefs.favorites,...keys])];savePrefs();markDirty();if(prefs.onlyFavorites&&['results','history'].includes(tab))reloadServerView(tab);}
 
 // filters live in prefs.viewFilters[view] (persisted), never read back from the DOM
 const FILTER_DEFAULTS={search:'',category:'',availability:'all',startWindow:'',historyPhase:''};
@@ -242,12 +248,12 @@ function teamsCell(e,{meta=true}={}){
 }
 function sourcesCell(e,view){return `<div class="sources-col">${refs(e).filter(r=>bookVisible(r.source)).map(r=>`<span class="chip" data-source-ref="${esc(r.source+':'+(r.sourceEventId||r.id))}"><span class="book-mark ${esc(r.source)}" aria-hidden="true"></span>${esc(providerName(r.source))}</span>`).join('')}</div>`;}
 function cachedRow(e,view,opts){
- const sig=[view,opts.meta!==false,opts.books.join(','),selectedId(view)===String(e.id),matchFavorite(e),prefs.hideOdds,prefs.teamLogos,BASE].join('|');
+ const sig=[view,opts.meta!==false,opts.books.join(','),selectedId(view)===String(e.id),matchFavorite(e),oddsHidden(view),prefs.teamLogos,BASE,Ent.can('favorites')].join('|');
  const hit=rowHtmlMemo.get(e);if(hit&&hit.sig===sig)return hit.html;
  const html=matchRow(e,view,opts);if(!/class="chg |changed/.test(html))rowHtmlMemo.set(e,{sig,html});else rowHtmlMemo.delete(e);return html;
 }
 function matchRow(e,view,{meta=true,books=[]}={}){
- const sel=selectedId(view)===String(e.id),fav=matchFavorite(e),odds=!prefs.hideOdds&&books.length&&['live','prematch'].includes(view);
+ const sel=selectedId(view)===String(e.id),fav=matchFavorite(e),odds=!oddsHidden(view)&&books.length&&['live','prematch'].includes(view);
  let tail='';
  if(odds){const quotes=quotesOf(e,books),best=bestFor(quotes),byBook=new Map(refs(e).map(r=>[r.source,r]));tail=`<div class="prices">${books.map(b=>priceCell(e,b,byBook.get(b),quotes[b],best)).join('')}</div>`;}
  else tail=sourcesCell(e,view);
@@ -255,7 +261,7 @@ function matchRow(e,view,{meta=true,books=[]}={}){
  return `<article class="match cols${odds?'':' no-odds'}" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}"${seenTitle?` title="${esc(seenTitle)}"`:''}><div class="fav"><button class="icon-btn" data-fav aria-pressed="${fav}" aria-label="${fav?'Убрать из избранного':'В избранное'}">${starIcon(fav)}</button></div>${teamsCell(e,{meta})}${scoreCell(e,view)}${tail}<span class="go" aria-hidden="true">›</span></article>`;
 }
 function listHeader(view,books){
- const odds=!prefs.hideOdds&&books.length&&['live','prematch'].includes(view);
+ const odds=!oddsHidden(view)&&books.length&&['live','prematch'].includes(view);
  return `<div class="col-head cols${odds?'':' no-odds'}" data-group="head"><span></span><span>Матч</span><span class="right">${view==='prematch'?'Начало':'Счёт'}</span>${odds?'<span class="prices">'+books.map(b=>{const h=bookHealth(b);return `<span class="book-col" title="${esc(providerName(b))}${h&&!h.ok?' — '+esc(h.reason):''}"><span class="book-mark ${b}" aria-hidden="true"></span>${esc(providerName(b))}${h&&!h.ok?' <span aria-label="недоступен">⚠</span>':''}</span>`;}).join('')+'</span>':'<span class="right">Конторы</span>'}<span></span></div>`;
 }
 
@@ -328,6 +334,8 @@ function patchTree(parent,items){
 function renderView(view,force=false){
  if(view!==tab||$('settingsView').hidden===false)return;
  const started=performance.now();invalidateNav();
+ // A user whose administrator has not opened any section yet: say so instead of an empty screen.
+ if(!Ent.views().length){$('toolbar').hidden=true;renderState(viewEl(view),Ent.needsKey()?{icon:'🔑',title:'Нужен ключ доступа',text:'Укажите ключ, который выдал администратор.',actions:'<button class="btn" data-open-settings="server">Подключение</button>'}:{title:'Нет доступных разделов',text:'Администратор ещё не открыл вам разделы. Изменения применяются без переустановки.'});updateListHead(view,0);return;}
  if(view==='live')renderLive(force);else if(view==='prematch')renderLine(force);else if(view==='results')renderResults(force);else if(view==='history')renderHistory(force);else if(view==='compare')renderCompare(force);
  renderChrome();Perf.measure('render.'+view,started);
 }
@@ -358,7 +366,7 @@ function liveRowsVisible(){const rows=feedRows('live'),key=JSON.stringify([rowsC
 function renderLive(force){
  const el=viewEl('live'),s=snapshots.live,{all,rows}=liveRowsVisible();categoryOptions(all,null,'live');
  const books=viewBooks('live').filter(bookVisible);
- const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.liveSort,prefs.hideOdds,books,prefs.favorites.length,filters('live'),prefs.onlyFavorites,prefs.teamLogos]);
+ const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.liveSort,oddsHidden('live'),Ent.list().join(),books,prefs.favorites.length,filters('live'),prefs.onlyFavorites,prefs.teamLogos]);
  if(!force&&viewSignatures.get('live')===sig)return;viewSignatures.set('live',sig);
  el.style.setProperty('--books',books.length);
  if(!rows.length){if(!s)skeleton(el);else renderState(el,emptyFor('live',s));updateListHead('live',0);return;}
@@ -385,7 +393,7 @@ const plural=(n,[one,few,many])=>{const m=n%10,h=n%100;return `${n} ${m===1&&h!=
 function renderLine(force){
  const el=viewEl('prematch'),s=snapshots.prematch,all=visible(feedRows('prematch'),'prematch',{ignoreCategory:true});categoryOptions(all,null,'prematch');
  const cat=filters('prematch').category,rows=cat?all.filter(e=>norm(e.category)===cat):all,books=viewBooks('prematch').filter(bookVisible);
- const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.lineMode,prefs.hideOdds,books,prefs.favorites.length,filters('prematch'),prefs.onlyFavorites,[...lineClosed].join('|'),lineSchedulePages,prefs.teamLogos,Math.floor(Date.now()/60000)]);
+ const sig=JSON.stringify([s?.revision,s?.receivedAt,s?.persisted,s?.offline,rows.length,rules().revision,prefs.lineMode,oddsHidden('prematch'),Ent.list().join(),books,prefs.favorites.length,filters('prematch'),prefs.onlyFavorites,[...lineClosed].join('|'),lineSchedulePages,prefs.teamLogos,Math.floor(Date.now()/60000)]);
  if(!force&&viewSignatures.get('prematch')===sig)return;viewSignatures.set('prematch',sig);
  el.style.setProperty('--books',books.length);
  if(!rows.length){if(!s)skeleton(el);else renderState(el,emptyFor('prematch',s));updateListHead('prematch',0);return;}
@@ -517,10 +525,10 @@ function reconcileServerViews(){if(document.hidden)return;if(tab==='results')loa
 // ---------------------------------------------------------------------------------------------------- chrome ----
 function bookHealth(source){
  const s=source==='pinnacle'&&!snapshots.live?.providers?.pinnacle?snapshots.prematch:snapshots.live,r=s?.providers?.[source];
- if(OddsProvider.isOddsProvider(source)){if(source!==OddsProvider.selected(prefs))return null;const h=OddsProvider.health(snapshots.live,prefs);return snapshots.live?.transportError?null:h;}
+ if(OddsProvider.isOddsProvider(source)){if(source!==OddsProvider.selected(prefs))return null;const h=OddsProvider.health(snapshots.live,prefs);return snapshots.live?.transportError?null:{...h,reason:UserText.sourceReason(h.reason,{admin:Ent.isAdmin()})};}
  if(!s||s.transportError||!r)return null;
  const error=String(r.lastError||'').trim(),http=Number(r.lastHttpStatus||0);
- if(error||http>=400)return {ok:false,reason:error||`HTTP ${http}`};
+ if(error||http>=400)return {ok:false,reason:UserText.sourceReason(error||`HTTP ${http}`,{admin:Ent.isAdmin()})};
  if(r.stale&&!r.updating)return {ok:false,reason:'данные задерживаются'};
  return {ok:true,reason:''};
 }
@@ -551,12 +559,14 @@ function renderSources(){
 function connectionState(){const s=snapshots.live;if(!s)return port?{kind:'loading'}:{kind:'loading'};if(s.offline||s.transportError&&!s.events?.length)return {kind:'down',error:s.transportError};if(s.transportError)return {kind:'stale',error:s.transportError,at:s.receivedAt};return {kind:s.persisted?'cached':'ok',at:s.receivedAt};}
 function renderBanner(){
  const c=connectionState(),b=$('banner');let html='',cls='';
- if(c.kind==='down'){cls='bad';const why=/^сервер недоступен$/i.test(String(c.error||'').trim())?'':String(c.error||'');html=`<strong>Сервер недоступен.</strong><span>${why?esc(why)+' · ':''}Переподключаемся автоматически.</span><button class="btn" data-open-settings="server">Настройки сервера</button>`;}
+ if(Ent.needsKey()){cls='warn';html='<strong>Нужен ключ доступа.</strong><span>Укажите ключ, который выдал администратор.</span><button class="btn" data-open-settings="server">Подключение</button>';}
+ else if(c.kind==='down'){cls='bad';const why=Ent.isAdmin()&&!/^сервер недоступен$/i.test(String(c.error||'').trim())?UserText.sanitize(c.error||''):'';html=`<strong>Сервер недоступен.</strong><span>${why?esc(why)+' · ':''}Переподключаемся автоматически.</span><button class="btn" data-open-settings="server">Подключение</button>`;}
  else if(c.kind==='stale'){cls='warn';html=`<strong>Нет связи с сервером.</strong><span>Показаны данные от ${esc(stamp(c.at,false,true))}. Переподключаемся…</span>`;}
  b.hidden=!html;if(html&&b.dataset.html!==html){b.dataset.html=html;b.innerHTML=html;}b.className='banner '+cls;
  const pn=$('providerNotice');
  const health=tab==='live'&&!c.kind.match(/down|stale/)?OddsProvider.health(snapshots.live,prefs):null,show=health&&!health.ok&&prefs[OddsProvider.selected(prefs)]!==false;
- if(show){const other=OddsProvider.PROVIDERS.find(p=>p!==health.provider),h=`<strong>${esc(health.label)} временно недоступен</strong><span>${health.reason?esc(health.reason)+' · ':''}его коэффициенты не показываются; AstekBet, Fonbet и Pinnacle работают.</span><button class="btn" data-switch-provider="${esc(other)}">Переключиться на ${esc(OddsProvider.name(other))}</button>`;if(pn.dataset.html!==h){pn.dataset.html=h;pn.innerHTML=h;}}
+ // The technical reason stays with administrators; in "Auto" mode the other platform feed is chosen automatically.
+ if(show){const reason=UserText.sourceReason(health.reason,{admin:Ent.isAdmin()}),both=OddsProvider.PROVIDERS.every(p=>Ent.canProvider(p)),fixed=['ggbet','databet'].includes(prefs.liveOddsMode),h=`<strong>${esc(health.label)} временно недоступен</strong><span>${reason?esc(reason)+' · ':''}его коэффициенты не показываются, остальные конторы работают.</span>${both&&fixed?'<button class="btn" data-open-settings="sources">Выбрать источник</button>':''}`;if(pn.dataset.html!==h){pn.dataset.html=h;pn.innerHTML=h;}}
  pn.hidden=!show;
 }
 function updateListHead(view,count,meta=null){
@@ -572,18 +582,18 @@ function updateListHead(view,count,meta=null){
 }
 function resultsNote(current){if(!current)return '';if(current.refreshing||current.queued)return current.queued?'обновление в очереди':'проверяем финальные счета…';const next=current.nextRefreshAt||current.nextRetryAt;if(next&&resultsDate===dayKey()){const s=Math.max(0,Math.ceil((next-Date.now())/1000));return s?`следующая проверка через ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`:'';}return '';}
 function updateNavCounts(){const n=liveRowsVisible().rows.length;$('liveCount').textContent=snapshots.live?String(n):'';}
-function updateProviderButtons(){const sel=OddsProvider.selected(prefs);for(const p of OddsProvider.PROVIDERS){$(p).setAttribute('aria-pressed',String(p===sel&&prefs[p]!==false));const h=p===sel?OddsProvider.health(snapshots.live,prefs):null;$(p).title=`${OddsProvider.name(p)}${h&&!h.ok?' — недоступен: '+h.reason:''}`;}}
+function updateProviderButtons(){const sel=OddsProvider.selected(prefs);for(const p of OddsProvider.PROVIDERS){if(!$(p))continue;$(p).setAttribute('aria-pressed',String(p===sel&&prefs[p]!==false));const h=p===sel?OddsProvider.health(snapshots.live,prefs):null;$(p).title=`${OddsProvider.name(p)}${h&&!h.ok?' — недоступен: '+h.reason:''}`;}}
 function renderChrome(){
  for(const b of $('tabs').querySelectorAll('[data-tab]'))b.setAttribute('aria-current',b.dataset.tab===tab&&$('settingsView').hidden?'page':'false');
+ if(prefs.compareMode==='schedule'&&!Ent.can('compare.schedule'))prefs.compareMode='odds';
  const t=tab,f=filters(t),inSettings=!$('settingsView').hidden;
- $('toolbar').hidden=inSettings;
+ $('toolbar').hidden=inSettings||!Ent.views().length;
  const show=(id,on)=>{$(id).hidden=!on;};
  const cmpSchedule=t==='compare'&&prefs.compareMode==='schedule';
  show('search',!cmpSchedule);$('search').closest('.search').hidden=cmpSchedule;
  show('category',!cmpSchedule);show('availability',!['compare'].includes(t));show('startWindow',['prematch','results','history'].includes(t));
  show('historyPhase',t==='history');show('liveSort',t==='live');show('lineMode',t==='prematch');show('dateControl',t==='results');
- show('compareMode',t==='compare');show('compareScope',t==='compare'&&!cmpSchedule);show('compareSort',t==='compare'&&!cmpSchedule);$('compareSort').value=prefs.compareSort||'time';show('favorites',!cmpSchedule);
- show('oddsSource',(t==='live'||t==='compare'&&prefs.compareScope==='live'&&!cmpSchedule)&&!prefs.hideOdds);
+ show('compareMode',t==='compare'&&Ent.can('compare.schedule'));show('compareScope',t==='compare'&&!cmpSchedule);show('compareSort',t==='compare'&&!cmpSchedule&&Ent.can('compare.arbitrage'));$('compareSort').value=prefs.compareSort||'time';show('favorites',!cmpSchedule);
  if(document.activeElement!==$('search')&&$('search').value!==f.search)$('search').value=f.search;
  $('availability').value=f.availability;$('historyPhase').value=f.historyPhase;$('liveSort').value=prefs.liveSort;
  $('favorites').setAttribute('aria-pressed',String(!!prefs.onlyFavorites));
@@ -648,7 +658,7 @@ function onDetailClosed(){selectedIds.delete(tab);for(const n of viewEl(tab).que
 // ---------------------------------------------------------------------------------------------------- odds watch
 let oddsWatchIds=[],oddsWatchSig='',oddsWatchTimer=0;
 function scheduleOddsWatch(rows){const sel=selectedId('live'),ids=[...new Set([...(sel?[sel]:[]),...rows.slice(0,8).map(e=>String(e.id))])].slice(0,9),sig=ids.join('|');oddsWatchIds=ids;if(sig===oddsWatchSig)return;oddsWatchSig=sig;clearTimeout(oddsWatchTimer);oddsWatchTimer=setTimeout(pushOddsWatch,150);}
-async function pushOddsWatch(){const ids=tab==='live'&&!document.hidden&&!prefs.hideOdds?oddsWatchIds:[];try{await client.post('/api/ui/odds-watch',{ids});}catch{}}
+async function pushOddsWatch(){if(!Ent.canView('live'))return;const ids=tab==='live'&&!document.hidden&&!oddsHidden('live')?oddsWatchIds:[];try{await client.post('/api/ui/odds-watch',{ids});}catch{}}
 setInterval(()=>{if(tab==='live'&&!document.hidden&&oddsWatchIds.length)pushOddsWatch();},15000);
 
 // ---------------------------------------------------------------------------------------------------- keyboard --
@@ -741,8 +751,8 @@ $('compareSort').addEventListener('change',()=>{setPref('compareSort',$('compare
 $('favorites').addEventListener('click',()=>{prefs.onlyFavorites=!prefs.onlyFavorites;savePrefs();for(const v of VIEWS)viewSignatures.delete(v);filterChanged();});
 $('resetFilters').addEventListener('click',resetFilters);
 function resetFilters(){prefs.viewFilters={...prefs.viewFilters,[tab]:{...FILTER_DEFAULTS}};prefs.onlyFavorites=false;savePrefs();$('search').value='';filterChanged();}
-for(const p of OddsProvider.PROVIDERS)$(p).addEventListener('click',()=>{if(OddsProvider.selected(prefs)!==p||prefs[p]===false)selectLiveOddsProvider(p);});
-$('providerNotice').addEventListener('click',e=>{const b=e.target.closest('[data-switch-provider]');if(b)selectLiveOddsProvider(b.dataset.switchProvider);});
+for(const p of OddsProvider.PROVIDERS)$(p)?.addEventListener('click',()=>{if(OddsProvider.selected(prefs)!==p||prefs[p]===false)selectLiveOddsProvider(p);});
+$('providerNotice').addEventListener('click',e=>{const b=e.target.closest('[data-switch-provider]');if(b)selectLiveOddsProvider(b.dataset.switchProvider);const o=e.target.closest('[data-open-settings]');if(o)openSettings(o.dataset.openSettings);});
 $('banner').addEventListener('click',e=>{const b=e.target.closest('[data-open-settings]');if(b)openSettings(b.dataset.openSettings);});
 function shiftResults(date){resultsDate=date;resultsLimit=RESULTS_PAGE_SIZE;DetailPanel.hide();selectedIds.delete('results');viewSignatures.delete('results');renderView('results',true);renderChrome();}
 $('prevDate').addEventListener('click',()=>shiftResults(shiftDay(resultsDate,-1)));
@@ -769,12 +779,47 @@ async function openGenerator(e){if(!prefs.generatorEnabled)return;if(e&&(e.inLiv
 function openUrl(url){chrome.runtime.sendMessage({type:'openExternal',url}).then(r=>{if(r?.fallback)toast('Выбранный браузер недоступен — ссылка открыта в текущем');if(r?.error&&!r?.fallback)throw Error(r.error);}).catch(report);}
 
 DetailPanel.configure({esc,stamp,providerName,refsOf:refs,scoreOf,bookVisible,bookHealth,prefs:()=>prefs,setPref,errorText,base:()=>BASE,gameIcon,starIcon,leagueTitle,logo:teamLogo,eventUrl,isFavorite:matchFavorite,toggleFavorite:e=>{toggleFavorite(e);},copyMatch:e=>copy(copyText(e)).catch(report),openScoreHistory,openOddsTimeline,openGenerator,openUrl,
- generatorAvailable:(e,view)=>!!prefs.generatorEnabled&&!prefs.hideOdds&&['live','prematch'].includes(view)&&GameCategories.info(e.category).key==='cs'&&!isExtraEvent(e),
- statsAvailable:(e,view)=>['live','results'].includes(view)&&!isExtraEvent(e)&&((StatisticsClient.info(e)?.provider==='dota2'&&prefs.dotaStatsEnabled&&GameCategories.info(e.category).key==='dota')||(StatisticsClient.info(e)?.provider==='cs2'&&GameCategories.info(e.category).key==='cs')),
- detail:(e,view,opts)=>detailSwr(e,view,opts),leaseFull,releaseFull,invalidateDetail:(e,view)=>details.invalidate(detailKeyFor(e,view==='compare'?'live':view)),onClosed:onDetailClosed});
+ generatorAvailable:(e,view)=>Ent.can('tools.generator')&&!!prefs.generatorEnabled&&!oddsHidden(view)&&['live','prematch'].includes(view)&&GameCategories.info(e.category).key==='cs'&&!isExtraEvent(e),
+ statsAvailable:(e,view)=>Ent.can('statistics.view')&&['live','results'].includes(view)&&!isExtraEvent(e)&&((StatisticsClient.info(e)?.provider==='dota2'&&prefs.dotaStatsEnabled&&GameCategories.info(e.category).key==='dota')||(StatisticsClient.info(e)?.provider==='cs2'&&GameCategories.info(e.category).key==='cs')),
+ detail:(e,view,opts)=>detailSwr(e,view,opts),leaseFull,releaseFull,can:key=>Ent.can(key),isAdmin:()=>Ent.isAdmin(),oddsHidden,invalidateDetail:(e,view)=>details.invalidate(detailKeyFor(e,view==='compare'?'live':view)),onClosed:onDetailClosed});
 StatisticsClient.configure({base:BASE,request,view:()=>tab,active:()=>['live','results'].includes(tab),render:()=>{DetailPanel.render();}});
 Cs2Panel.configure({esc,request,logosEnabled:()=>prefs.teamLogos!==false,render:()=>DetailPanel.refreshStats()});
 DotaStatsPanel.configure({enabled:()=>prefs.dotaStatsEnabled===true,logosEnabled:()=>prefs.teamLogos!==false,esc,request,render:()=>DetailPanel.refreshStats()});
+
+// ---------------------------------------------------------------------------------------------------- capabilities
+let mePending=null;
+async function loadEntitlements(){
+ if(mePending)return mePending;
+ mePending=(async()=>{try{const me=await client.get('/api/me');me.at=Date.now();chrome.storage.local.set({entitlements9:me}).catch(()=>{});if(Ent.set(me))applyEntitlements();}
+  catch(error){if(error?.status===404&&Ent.legacy())applyEntitlements();}
+  finally{mePending=null;renderBanner();}})();
+ return mePending;
+}
+// A change of capabilities applies at once (no reinstall): sections, bookmakers, prices and tools appear or go.
+function applyEntitlements(){
+ document.documentElement.classList.toggle('no-favorites',!Ent.can('favorites'));
+ for(const b of $('tabs').querySelectorAll('[data-tab]'))b.hidden=!Ent.canView(b.dataset.tab);
+ if(!Ent.can('favorites')&&prefs.onlyFavorites)prefs.onlyFavorites=false;
+ details.remove(()=>true);for(const v of VIEWS)viewSignatures.delete(v);invalidateRows('live');invalidateRows('prematch');
+ if(!Ent.canView(tab)&&Ent.views().length)switchTab(Ent.views()[0]);
+ if(DetailPanel.isOpen()&&!Ent.canView(tab))DetailPanel.hide();
+ renderView(tab,true);renderChrome();updateNavCounts();if(!$('settingsView').hidden)renderSettings();DetailPanel.render();
+ chooseLiveOddsProvider();
+}
+// LIVE odds source: GGBET and DataBet are one platform, one is shown at a time. "Auto" (default) keeps the current one
+// while it works and moves to the other one when only that one is available; a fixed choice lives in Settings.
+async function chooseLiveOddsProvider(){
+ const allowed=OddsProvider.PROVIDERS.filter(p=>Ent.canProvider(p)&&prefs[p]!==false);if(!allowed.length)return;
+ const mode=['ggbet','databet'].includes(prefs.liveOddsMode)?prefs.liveOddsMode:'auto',current=OddsProvider.selected(prefs);
+ if(mode!=='auto'){if(allowed.includes(mode)&&current!==mode)selectLiveOddsProvider(mode);return;}
+ if(allowed.length===1){if(current!==allowed[0])selectLiveOddsProvider(allowed[0]);return;}
+ let answer={};try{answer=await client.get('/api/ui/odds-providers')||{};}catch{return;}
+ const status=answer.providers||{},up=p=>status[p]&&status[p].available!==false&&status[p].connectionState!=='disabled'&&!status[p].stale;
+ // Neither works: the server's default, so "Auto" always means the same provider while there is nothing better.
+ const next=allowed.some(up)?(up(current)&&allowed.includes(current)?current:allowed.find(up)):(allowed.includes(answer.defaultProvider)?answer.defaultProvider:allowed[0]);
+ if(next!==current)selectLiveOddsProvider(next);
+}
+setInterval(()=>{if(!document.hidden){loadEntitlements();chooseLiveOddsProvider();}},60000);
 
 // ---------------------------------------------------------------------------------------------------- boot ------
 document.addEventListener('visibilitychange',()=>{sendActivity();if(!document.hidden)reconcileServerViews();else persist.flush();});
@@ -788,19 +833,19 @@ async function init(){
  const started=performance.now();
  // One storage read: prefs + last-known feeds/results/history (instant first paint, refreshed right after).
  // Small keys first (prefs + LIVE, the default screen); the big Line/History copies load right after the first paint.
- const saved=await chrome.storage.local.get(['prefs','lastKnown9:live','lastKnown9:results']);
- prefs={...DEFAULT_PREFS,...saved.prefs};migratePrefs();savePrefs();lineClosed=new Set(Array.isArray(prefs.lineCollapsed)?prefs.lineCollapsed:[]);
+ const saved=await chrome.storage.local.get(['prefs','lastKnown9:live','lastKnown9:results','entitlements9']);
+ prefs={...DEFAULT_PREFS,...saved.prefs};migratePrefs();savePrefs();if(saved.entitlements9)Ent.set(saved.entitlements9);document.documentElement.classList.toggle('no-favorites',!Ent.can('favorites'));for(const b of $('tabs').querySelectorAll('[data-tab]'))b.hidden=!Ent.canView(b.dataset.tab);lineClosed=new Set(Array.isArray(prefs.lineCollapsed)?prefs.lineCollapsed:[]);
  document.documentElement.classList.toggle('team-logos-off',prefs.teamLogos===false);
  const live=saved['lastKnown9:live'];
  if(live?.events&&!snapshots.live)setSnapshot('live',live,{persisted:true});
  const lr=saved['lastKnown9:results'];if(lr?.key&&lr.value)resultsRes.set(lr.key,lr.value,Number(lr.value.receivedAt)||0);
  const restoreRest=async()=>{const more=await chrome.storage.local.get(['lastKnown9:prematch','lastKnown9:history']);const pre=more['lastKnown9:prematch'];if(pre?.events&&!snapshots.prematch){setSnapshot('prematch',pre,{persisted:true});scheduleRender('prematch');}const lh=more['lastKnown9:history'];if(lh?.key&&lh.value&&!historyRes.peek(lh.key)){historyRes.set(lh.key,lh.value,Number(lh.value.receivedAt)||0);if(tab==='history')renderView('history',true);}};
- tab=VIEWS.includes(prefs.lastTab)?prefs.lastTab:'live';
+ tab=VIEWS.includes(prefs.lastTab)&&Ent.canView(prefs.lastTab)?prefs.lastTab:(Ent.views()[0]||'live');
  for(const el of document.querySelectorAll('#content>.list'))el.hidden=el.dataset.view!==tab;
  if(['prematch','history'].includes(tab))await restoreRest();
  updateProviderButtons();renderView(tab,true);renderChrome();updateNavCounts();
  Perf.measure('boot.firstRender',started);
- connect();
+ connect();loadEntitlements().then(()=>chooseLiveOddsProvider());
  if(!['prematch','history'].includes(tab))requestAnimationFrame(()=>setTimeout(()=>restoreRest().catch(()=>{}),0));
 }
 init().catch(error=>report(error));
