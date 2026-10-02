@@ -6,6 +6,7 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import dns from 'node:dns';
+import { fileURLToPath } from 'node:url';
 
 export const ALLOWED = [/^(?:[a-z0-9-]+\.)*gg\.bet$/i, /^score-board\.databet\.cloud$/i, /^ipinfo\.io$/i];
 export function allowedTarget(target) {
@@ -40,7 +41,9 @@ export function createProxy({ connect = (opts) => net.connect(opts), resolve = a
     client.on('data', onData); client.on('error', () => {});
   });
 }
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Started as a program (also through the /opt/esports-monitor/current symlink, which import.meta.url resolves)?
+const isMain = (() => { try { return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
+if (isMain) {
   const i = process.argv.indexOf('--socket'), socket = i > 0 ? process.argv[i + 1] : '/run/ggbet-egress/connect.sock', j = process.argv.indexOf('--resolv');
   try { fs.unlinkSync(socket); } catch {}
   const server = createProxy({ ...(j > 0 ? { resolve: resolverFrom(process.argv[j + 1]) } : {}), log: (e) => process.stdout.write(JSON.stringify({ at: new Date().toISOString(), ...e }) + '\n') });

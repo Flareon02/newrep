@@ -178,3 +178,12 @@ test('collector hooks: observer errors never reach the collector; operator egres
   assert.equal(c.bootstrap, null); assert.equal(c.bootstrapAgent, null); assert.deepEqual(closed, [4000, 'egress A -> B']);
   c.stopped = true; c.handleClose({ code: 4000, reason: 'egress A -> B', target: c.ws }); assert.deepEqual(calls[0], ['wsClosed', 4000, 'egress A -> B']);
 });
+
+test('egress proxy starts as a program when launched through a symlinked release path (current -> releases/x)', async () => {
+  const dir = tmp('ggbet-px-link-'), rel = path.join(dir, 'releases', 'x', 'tools'), sock = path.join(dir, 'p.sock');
+  fs.mkdirSync(rel, { recursive: true }); fs.copyFileSync(new URL('../../tools/ggbet-egress-proxy.mjs', import.meta.url), path.join(rel, 'ggbet-egress-proxy.mjs'));
+  fs.symlinkSync(path.join(dir, 'releases', 'x'), path.join(dir, 'current'));
+  const { spawn } = await import('node:child_process'); const child = spawn(process.execPath, [path.join(dir, 'current', 'tools', 'ggbet-egress-proxy.mjs'), '--socket', sock], { stdio: 'ignore' });
+  try { for (let i = 0; i < 50 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 100)); assert.ok(fs.existsSync(sock), 'listening on the socket'); assert.equal(fs.statSync(sock).mode & 0o777, 0o600); }
+  finally { child.kill(); }
+});

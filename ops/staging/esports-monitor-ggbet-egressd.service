@@ -12,8 +12,8 @@ RestartSec=10
 KillSignal=SIGTERM
 SyslogIdentifier=ggbet-egressd
 NoNewPrivileges=true
-ProtectHome=read-only
-PrivateTmp=true
+# No mount isolation (ProtectHome/PrivateTmp/ProtectSystem): the controller creates /run/netns mounts that systemd
+# must see (the proxy unit joins the namespace via NetworkNamespacePath).
 
 [Install]
 WantedBy=multi-user.target

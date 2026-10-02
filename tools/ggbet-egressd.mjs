@@ -43,7 +43,7 @@ function writeStatus(obj) {
 // Bring a config up WITHOUT exposing it; returns the status object to publish after verification.
 async function prepare(configFile) {
   try { const { stdout } = await run(O.egress, ['select', configFile], { env: { ...process.env, GGBET_EGRESS_NO_STATUS: '1' }, timeout: 90000 }); return JSON.parse(stdout.trim().split('\n').pop()); }
-  catch (e) { return { error: `select failed (exit ${e.code ?? '?'})` }; }
+  catch (e) { return { error: `select failed (exit ${e.code ?? '?'})`, local: true, isolation: e.code === 3 }; }
 }
 function probe() {
   return new Promise((resolve) => {
@@ -78,7 +78,10 @@ async function activate(decision) {
       const same = d.action === 'reestablish' && readStatus()?.id === target && readStatus()?.exitIp === st.exitIp;
       if (!same) writeStatus(st); pool.activated(target, st); note('activated', { id: target, exitIp: st.exitIp, country: st.country, city: st.city, hostname: st.hostname, reason: d.reason }); save(); return true;
     }
-    note('verification-failed', { id: target, error: pr.error || 'exit mismatch' });
+    note('verification-failed', { id: target, error: pr.error || 'exit mismatch', local: !!st.local });
+    // A local setup error (script failed before any network check) is not the VPN's fault: no cooldown, no switch
+    // budget; run the last-resort proxy and retry on the fallback schedule. Exit 3 = host isolation broken: stop at once.
+    if (st.local) { if (d.action === 'switch') pool.switches.pop(); if (pool.mode !== 'fallback') pool.enterFallback(st.isolation ? 'egress setup stopped: host isolation check failed' : `egress setup error: ${st.error}`); await fallback(st.isolation ? 'egress setup stopped: host isolation check failed' : `egress setup error: ${st.error}`); return false; }
     if (d.action === 'restore') { pool.networkFailure(target, `verification: ${pr.error || 'exit mismatch'}`); pool.mode = 'fallback'; await run(O.egress, ['down'], { env: { ...process.env, GGBET_EGRESS_NO_STATUS: '1' } }).catch(() => {}); save(); return false; }
     d = pool.candidateFailed(target, pr.error || 'exit mismatch');
   }

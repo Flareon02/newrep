@@ -13,7 +13,8 @@ APP=/opt/esports-monitor/current SVC_USER=monitor
 PROXY_JS=${GGBET_EGRESS_PROXY:-$APP/tools/ggbet-egress-proxy.mjs}   # override only for smoke tests of an undeployed build
 route_sig(){ ip route show default; ip -6 route show default; }
 outside_ip(){ curl -s --max-time 10 https://api.ipify.org; }
-perms(){ chmod 700 "$DIR"; find "$DIR" -maxdepth 1 -type f -name '*.conf' ! -perm 600 -exec chmod 600 {} +; }
+# Best effort: under the controller unit (ProtectHome=read-only) /root is read-only; the modes are then only checked.
+perms(){ chmod 700 "$DIR" 2>/dev/null || true; find "$DIR" -maxdepth 1 -type f -name '*.conf' ! -perm 600 -exec chmod 600 {} + 2>/dev/null || true; }
 # GGBET_EGRESS_NO_STATUS=1 (used by the egress controller): prepare/verify without touching status.json - the service keeps
 # its current egress until the controller has verified the new one and writes the status itself.
 NO_STATUS=${GGBET_EGRESS_NO_STATUS:-0}
@@ -44,6 +45,7 @@ case "${1:-}" in
       --property=NoNewPrivileges=yes --property=ProtectSystem=strict --property=ReadWritePaths="$RUN/sock" --property=ProtectHome=yes \
       /usr/local/bin/node "$PROXY_JS" --socket "$RUN/sock/connect.sock" --resolv /etc/netns/"$NS"/resolv.conf
     for _ in $(seq 1 20); do [ -S "$RUN/sock/connect.sock" ] && break; sleep 0.25; done
+    [ -S "$RUN/sock/connect.sock" ] || { echo "egress proxy did not start (local error)" >&2; down; exit 4; }
     ln -sfn "$RUN/sock/connect.sock" "$RUN/connect.sock"
     STATUS=$(jq -cn --arg id "mullvad:${NAME%.conf}" --arg cf "$NAME" --arg ns "$NS" --arg at "$(date -u +%FT%T.%3NZ)" --argjson i "$INFO" \
       '{id:$id,configFile:$cf,namespace:$ns,activatedAt:$at,exitIp:$i.ip,country:$i.country,city:$i.city,hostname:$i.mullvad_exit_ip_hostname,mullvad:$i.mullvad_exit_ip}')
