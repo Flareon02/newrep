@@ -3,27 +3,55 @@ import {config,urls} from './config.js';
 import {parseLiveFeed,inferCategoryFromLeague} from './parsers.js';
 import {fetchJson,withAstekRequest,readJson,writeJson} from './utils.js';
 
+export const ASTEK_ROW_LIMIT=50,ASTEK_GROUP_LEAGUES=4;
+const invalid=(message)=>Object.assign(new Error(message),{invalid:true});
+// Leagues the aggregate window did not cover, packed into `champs=` requests: at most ASTEK_GROUP_LEAGUES ids and
+// fewer than ASTEK_ROW_LIMIT expected games, so a complete answer can never touch the row cap. Order (stalest first)
+// is kept; a league that alone reaches the cap gets its own request.
+export function packLeagueGroups(leagues,maxLeagues=ASTEK_GROUP_LEAGUES,rowLimit=ASTEK_ROW_LIMIT){
+  const groups=[];
+  for(const c of leagues){
+    if(c.gameCount>=rowLimit-1||maxLeagues<2){groups.push([c]);continue;}
+    const g=groups.find(x=>x.length<maxLeagues&&x.reduce((n,y)=>n+y.gameCount,0)+c.gameCount<rowLimit);
+    if(g)g.push(c);else groups.push([c]);
+  }
+  return groups;
+}
+
 export function parseChamps(payload){
   if(payload?.Success===false||!Array.isArray(payload?.Value))throw new Error('Некорректный каталог AstekBet');
   return [...new Map(payload.Value.filter(r=>r.LI&&Number(r.SI)===40).map(r=>[String(r.LI),{source:'astek',champId:String(r.LI),leagueId:String(r.LI),league:r.LE||r.L,category:inferCategoryFromLeague(r.LE||r.L),gameCount:Math.max(0,Number(r.GC)||0)}])).values()];
 }
 export class PrematchCollector {
   constructor(state,{request=fetchJson,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),persist=writeJson}={}){
-    Object.assign(this,{state,request,sleep,now,persist,running:false,originIndex:0,catalog:[],champCache:{},batchSupported:null,batchRetryAt:0,bulkAttempts:0,bulkSuccesses:0,bulkFallbackLeagues:0,lastAttemptAt:0,lastUrl:'',failures:[],lastCycleMs:0,requestsInCycle:0,cooldownUntil:0,transport:'astek-line'});
+    Object.assign(this,{state,request,sleep,now,persist,running:false,originIndex:0,catalog:[],champCache:{},batchSupported:null,batchRetryAt:0,bulkAttempts:0,bulkSuccesses:0,bulkFallbackLeagues:0,lastAttemptAt:0,lastUrl:'',failures:[],lastCycleMs:0,requestsInCycle:0,cooldownUntil:0,transport:'astek-line',groupRetryAt:0,groupedRequests:0,groupFallbacks:0,cappedLeagueReads:0});
   }
   async load(){this.champCache=await readJson('prematch-champs.json',{});}
   async get(url,origin){this.lastUrl=url;this.requestsInCycle++;const result=await withAstekRequest('prematch',(gateSignal)=>this.request(url,origin+'/line/esports',{timeoutMs:4500,signal:gateSignal}));this.state.progress?.(result);return result;}
   normalizeEvents(events){return events.filter(e=>e.team1&&e.team2).map(e=>({...e,url:e.url.replace('/live/','/line/'),scoreText:'',seriesScore:null,mapScores:[]}));}
   cacheLeague(c,events){this.champCache[c.champId]={champ:c,fetchedAt:this.now(),events:this.normalizeEvents(events.filter(e=>e.leagueId===c.champId))};}
+  // Astek's Get1x2 answers at most ASTEK_ROW_LIMIT rows whatever `count` says, accepts only a few `count` values
+  // (50 works; 51, 56... are HTTP 406) and up to ASTEK_GROUP_LEAGUES ids in `champs` (5+ is HTTP 406). Every line
+  // request therefore asks count=50; a league with more games than that is read once per cycle and its games
+  // beyond the window are kept from the previous cycle instead of failing (and rotating the origin) every minute.
   async games(group,origin){
-    const wanted=new Set(group.map(c=>c.champId)),count=Math.min(1000,Math.max(50,group.reduce((n,c)=>n+c.gameCount,0)+1));
+    const wanted=new Set(group.map(c=>c.champId)),count=ASTEK_ROW_LIMIT;
     const result=await this.get(urls.prematchGames(origin,[...wanted],count),origin);
-    if(!Array.isArray(result.payload?.Value))throw new Error('Некорректный список матчей');
-    if(result.payload.Value.length>=count)throw new Error('Ответ достиг лимита: предыдущая линия сохранена');
+    if(!Array.isArray(result.payload?.Value))throw invalid('Некорректный список матчей');
+    const capped=group.length===1&&group[0].gameCount>=count&&result.payload.Value.length>=count;
+    if(result.payload.Value.length>=count&&!capped)throw invalid('Ответ достиг лимита: предыдущая линия сохранена');
     let events=parseLiveFeed(result.payload,origin).filter(e=>e.team1&&e.team2);
-    if(events.some(e=>!wanted.has(e.leagueId)))throw new Error('Ответ содержит незапрошенную лигу');
-    for(const c of group){const rows=events.filter(e=>e.leagueId===c.champId);if(group.length>1&&rows.length<c.gameCount)throw new Error('Неполная лига '+c.champId+': '+rows.length+'/'+c.gameCount);this.cacheLeague(c,events);}
+    if(events.some(e=>!wanted.has(e.leagueId)))throw invalid('Ответ содержит незапрошенную лигу');
+    if(capped){this.cacheCappedLeague(group[0],events);return result;}
+    for(const c of group){const rows=events.filter(e=>e.leagueId===c.champId);if(group.length>1&&rows.length<c.gameCount)throw invalid('Неполная лига '+c.champId+': '+rows.length+'/'+c.gameCount);this.cacheLeague(c,events);}
     return result;
+  }
+  cacheCappedLeague(c,events){
+    const fresh=this.normalizeEvents(events.filter(e=>e.leagueId===c.champId)),ids=new Set(fresh.map(e=>e.id));
+    const edge=Math.max(...fresh.map(e=>Number(e.startAt)||0)),room=Math.max(0,c.gameCount-fresh.length);
+    const previous=this.champCache[c.champId]?.events||this.state.events.filter(e=>e.leagueId===c.champId);
+    const beyond=previous.filter(e=>!ids.has(e.id)&&(Number(e.startAt)||0)>=edge).sort((a,b)=>(Number(a.startAt)||0)-(Number(b.startAt)||0)).slice(0,room);
+    this.champCache[c.champId]={champ:c,fetchedAt:this.now(),capped:true,events:[...fresh,...beyond]};this.cappedLeagueReads++;
   }
   // Browser HAR shows the same Get1x2 endpoint without `champs`. A high-count
   // aggregate request can replace dozens of per-league requests. Completeness
@@ -68,13 +96,19 @@ export class PrematchCollector {
         try{const bulk=await this.bulkGames(active,origin);fallback=bulk.missing;}
         catch(error){this.batchSupported=false;this.batchRetryAt=this.now()+config.prematchBulkRetryMs;log.warn('[prematch] bulk fallback:',error.message);}
       }
-      const queue=fallback.map(c=>[c]);
+      // Grouped requests only after the aggregate answered in this cycle; otherwise the conservative one-league path.
+      const grouped=this.batchSupported===true&&this.now()>=this.groupRetryAt,queue=grouped?packLeagueGroups(fallback):fallback.map(c=>[c]);
       for(let i=0;i<queue.length;i++){
         const group=queue[i];if(this.now()>=deadline){this.failures.push(...queue.slice(i).flat().map(c=>({id:c.champId,error:'Не успели за цикл'})));break;}
         // When bulk worked, only a small number of gaps remains. Keep a little
         // spacing to stay friendly to the upstream without spending a minute.
         await this.sleep(this.batchSupported?120:250);
-        try{await this.games(group,origin);}catch(error){
+        try{if(group.length>1)this.groupedRequests++;await this.games(group,origin);}catch(error){
+          // An incomplete/rejected group is retried league by league in this cycle; a rejection (HTTP 4xx) also
+          // pauses grouping like the aggregate probe, so a changed upstream rule costs one extra request, not one per cycle.
+          if(group.length>1&&(error.invalid||(error.status&&![429,503,529].includes(error.status)))){
+            this.groupFallbacks++;const rest=error.status?queue.splice(i+1).flat():[];if(error.status)this.groupRetryAt=this.now()+config.prematchBulkRetryMs;queue.push(...[...group,...rest].map(c=>[c]));continue;
+          }
           this.failures.push(...group.map(c=>({id:c.champId,error:error.message})));
           if(!error.status||[429,503,529].includes(error.status)){this.cooldownUntil=this.now()+Math.max(60000,error.retryAfterMs||0);this.failures.push(...queue.slice(i+1).flat().map(c=>({id:c.champId,error:'Цикл приостановлен'})));break;}
         }
@@ -90,5 +124,5 @@ export class PrematchCollector {
   }
   start(){this.poll();this.timer=setInterval(()=>this.poll(),config.prematchCatalogIntervalMs);this.timer.unref?.();}
   async stop(){clearInterval(this.timer);while(this.running)await this.sleep(100);}
-  status(){return {transport:this.transport,catalogLeagues:this.catalog.length,cachedLeagues:Object.keys(this.champCache).length,lastPollStartedAt:this.lastAttemptAt,running:this.running,lastUrl:this.lastUrl,batchSupported:this.batchSupported,bulkAttempts:this.bulkAttempts,bulkSuccesses:this.bulkSuccesses,bulkFallbackLeagues:this.bulkFallbackLeagues,batchRetryAt:this.batchRetryAt||0,requestsInCycle:this.requestsInCycle,lastCycleMs:this.lastCycleMs,failedLeagues:this.failures,cooldownUntil:this.cooldownUntil};}
+  status(){return {transport:this.transport,catalogLeagues:this.catalog.length,cachedLeagues:Object.keys(this.champCache).length,lastPollStartedAt:this.lastAttemptAt,running:this.running,lastUrl:this.lastUrl,batchSupported:this.batchSupported,bulkAttempts:this.bulkAttempts,bulkSuccesses:this.bulkSuccesses,bulkFallbackLeagues:this.bulkFallbackLeagues,batchRetryAt:this.batchRetryAt||0,requestsInCycle:this.requestsInCycle,groupedRequests:this.groupedRequests,groupFallbacks:this.groupFallbacks,groupRetryAt:this.groupRetryAt||0,cappedLeagueReads:this.cappedLeagueReads,lastCycleMs:this.lastCycleMs,failedLeagues:this.failures,cooldownUntil:this.cooldownUntil};}
 }

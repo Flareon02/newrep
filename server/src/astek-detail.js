@@ -7,14 +7,32 @@ const expandedCache=new Map();
 const mapIds=new Map();
 const number=v=>Number.isSafeInteger(Number(v))&&Number(v)>0?String(v):'';
 const url=(origin,id)=>`${origin}/service-api/LiveFeed/GetGameZip?id=${id}&lng=en_GB&isSubGames=true&GroupEvents=true&allEventsGroupSubGames=true&countevents=250&partner=75&grMode=4&country=15&fcountry=15&marketType=1&gr=34&isNewBuilder=true`;
+// Mirror order for detail reads. Before, every read started with the -0021 mirror, so while it was unreachable each
+// detail cost a failed request (~0.8 s) before the working mirror answered. Now the mirror that answered last goes
+// first and a mirror whose request failed (unreachable, timeout, 5xx, 403/429 — not "match not in reply") waits ORIGIN_COOLDOWN_MS
+// behind the healthy ones; it stays in the list as the last fallback, so nothing is lost when the good one fails too.
+export const ORIGIN_COOLDOWN_MS=5*60_000;
+const originHealth={lastGood:'',failedUntil:new Map()};
+export function astekDetailOrigins(now=Date.now()){
+  const preferred=[...config.origins].sort((a,b)=>Number(b.includes('0021'))-Number(a.includes('0021')));
+  const rank=o=>((originHealth.failedUntil.get(o)||0)>now?2:0)+(o===originHealth.lastGood?0:1);
+  return preferred.map((o,i)=>[o,rank(o),i]).sort((a,b)=>a[1]-b[1]||a[2]-b[2]).map(x=>x[0]);
+}
+export function astekDetailOriginStatus(now=Date.now()){
+  return {lastGood:originHealth.lastGood||null,coolingDown:[...originHealth.failedUntil].filter(([,t])=>t>now).map(([origin,until])=>({origin,until}))};
+}
+// Unreachable/timed out, 5xx, or refused (403/429). A 200 with Success=false or a non-JSON body is about the request.
+const mirrorFault=e=>!e?.status||e.status>=500||e.status===403||e.status===429;
+export function resetAstekDetailOrigins(){originHealth.lastGood='';originHealth.failedUntil.clear();}
 async function read(id){
   let error;
-  for(const origin of [...config.origins].sort((a,b)=>Number(b.includes('0021'))-Number(a.includes('0021')))){
-    try{
-      const response=await withAstekRequest('detail',(gateSignal)=>fetchJson(url(origin,id),`${origin}/live/esports`,{timeoutMs:6000,metricGroup:'astekLiveDetail',signal:gateSignal}));
-      if(!response.payload?.Value?.I)throw Error('В подробном ответе нет матча');
-      return response.payload.Value;
-    }catch(e){error=e;}
+  for(const origin of astekDetailOrigins()){
+    let response;
+    try{response=await withAstekRequest('detail',(gateSignal)=>fetchJson(url(origin,id),`${origin}/live/esports`,{timeoutMs:6000,metricGroup:'astekLiveDetail',signal:gateSignal}));}
+    catch(e){error=e;if(mirrorFault(e))originHealth.failedUntil.set(origin,Date.now()+ORIGIN_COOLDOWN_MS);continue;}
+    originHealth.lastGood=origin;originHealth.failedUntil.delete(origin);
+    if(response.payload?.Value?.I)return response.payload.Value;
+    error=Error('В подробном ответе нет матча');
   }
   throw error;
 }
