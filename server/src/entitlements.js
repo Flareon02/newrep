@@ -47,7 +47,8 @@ export const newToken = () => 'emu_' + randomBytes(24).toString('hex');
 
 // ------------------------------------------------------------------------------------------------ users ----------
 export class UserStore {
-  constructor({ read = readJson, write = writeJson, file = 'users.json', now = () => Date.now() } = {}) {
+  // users.json holds key hashes: owner-only (0600) for the file and its .bak, whatever the service umask is.
+  constructor({ read = readJson, write = (file, data) => writeJson(file, data, { mode: 0o600 }), file = 'users.json', now = () => Date.now() } = {}) {
     Object.assign(this, { read, write, file, now, users: [] });
     this.ready = Promise.resolve(this.read(this.file, { users: [] })).then((d) => { this.users = Array.isArray(d?.users) ? d.users : []; }).catch(() => { this.users = []; });
     this.saving = Promise.resolve();

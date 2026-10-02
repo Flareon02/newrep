@@ -124,17 +124,19 @@ export async function readJson(filename, fallback) {
 }
 
 const pendingWrites = new Map();
-export function writeJson(filename, value) {
+// `mode` (e.g. 0o600) is for files that must never be readable by others: it applies to the new generation and the
+// kept .bak (the service umask 0022 would otherwise make both world-readable; a umask can only narrow it).
+export function writeJson(filename, value, { mode } = {}) {
   const target = path.join(config.dataDir, filename), backup = `${target}.bak`;
   const body = JSON.stringify(value);
   const run = (pendingWrites.get(target) || Promise.resolve()).catch(() => {}).then(async () => {
     await fs.mkdir(path.dirname(target), { recursive: true });
     const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temp, body, "utf8");
+    await fs.writeFile(temp, body, mode == null ? "utf8" : { encoding: "utf8", mode });
     // Keep the previous complete generation. rename() is metadata-only on the
     // same filesystem, so even a power loss between both renames leaves either
     // target or target.bak readable instead of silently resetting state.
-    try { await fs.rename(target, backup); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+    try { await fs.rename(target, backup); if (mode != null) await fs.chmod(backup, mode); } catch (error) { if (error?.code !== "ENOENT") throw error; }
     try { await fs.rename(temp, target); }
     catch (error) {
       try { await fs.rename(backup, target); } catch {}

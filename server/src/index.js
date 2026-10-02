@@ -13,6 +13,7 @@ import { ensureDataDir, flushJsonWrites, astekRequestStatus } from "./utils.js";
 import {checkpointSqliteStorage,closeSqliteStorage,storageMetrics} from "./sqlite-storage.js";
 
 import { loadMatcherAliases, flushMatcherAliases } from "./entity-resolver.js";
+import {teamLogos} from './team-logos.js';
 
 import {PinnacleCollector} from './pinnacle.js';
 import {HltvService} from './hltv-service.js';
@@ -88,7 +89,7 @@ async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   await retention?.stop();
   await Promise.allSettled([server.stopStatistics(),oddsService.stop()]);
   if(persist){
-    await Promise.allSettled([liveState.save(),prematchState.save(),fonbetLiveState.save(),fonbetPrematchState.save(),ggbetLiveState.save(),databetLiveState.save(),pinnaclePrematchState.save(),pinnacleLiveState.save(),flushMatcherAliases()]);
+    await Promise.allSettled([liveState.save(),prematchState.save(),fonbetLiveState.save(),fonbetPrematchState.save(),ggbetLiveState.save(),databetLiveState.save(),pinnaclePrematchState.save(),pinnacleLiveState.save(),flushMatcherAliases(),teamLogos.flush()]);
     await flushJsonWrites();
     checkpointSqliteStorage();
   }
