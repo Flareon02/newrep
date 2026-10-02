@@ -47,3 +47,22 @@ over-reported already-painted rows; both versions were re-measured the same way)
   `E22` cold start with the server down renders the saved LIVE list; unit tests `test/store.test.mjs`
   (SWR, dedup, cancellation, LRU, persistence) and `test/match-format.test.mjs`.
 - In the app: `localStorage.devPerf = '1'` prints interaction timings; Settings → Диагностика lists the latest ones.
+
+## Server: first History page (after 9.0)
+
+Measured with `tools/bench/history-bench.mjs` on a copy of the staging data directory (1 280 History rows; no
+collectors, no upstream traffic), 7 runs each, old and new code on the same copy:
+
+| Phase | before | after |
+|---|---|---|
+| SQLite history reads (7 feeds, newest 800 each; index `snapshot_history(name, first_seen_at)`) | 28 ms | 31 ms |
+| Matcher worker `ui-history-page` (median) | 3 283 ms | **1 490 ms** |
+| HTTP first page, distinct query (median) | 3 035 ms | **1 563 ms** |
+| Very first request after a server start (cold worker) | 4 460 ms | 3 929 ms |
+
+The time was never SQLite (the query uses the index; `EXPLAIN QUERY PLAN` shows only a small temp B-tree for the
+`event_id` tie-break) but the fixture resolver in the worker: the History page resolves the newest History rows and the
+current LIVE/line fixtures on every request, and the resolver re-normalized the same team/league names for every pair
+(`englishize`, `aliasNorm`, `LeagueModel.norm` were not memoized). They are now memoized (bounded); the first page is
+byte-identical before and after (checked on the same copy with a fixed clock). On staging the request also waits for a
+quiet slot in the realtime queue (`LOW_PRIORITY_IDLE_WAIT_MS`), by design.

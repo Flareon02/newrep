@@ -52,7 +52,11 @@ export function transliterate(value='') {
   }).join('');
 }
 
-export function englishize(value='') {
+// Pure string -> string normalizers are memoized (bounded, like norm): the resolver compares every fixture pair and
+// re-normalized the same team/league names thousands of times per pass (History: ~1.5 s per resolve before).
+function memoString(fn,max=20000){const cache=new Map();return (value='')=>{const key=String(value??'');const hit=cache.get(key);if(hit!==undefined)return hit;const out=fn(key);if(cache.size>=max)cache.clear();cache.set(key,out);return out;};}
+export const englishize=memoString(englishizeRaw);
+function englishizeRaw(value='') {
   let text=clean(value);
   for (const [re,to] of RU_REPL) text=text.replace(re,to);
   if (/[А-Яа-яЁё]/.test(text)) text=transliterate(text);
@@ -92,7 +96,8 @@ function dice(a,b){
 }
 function tokenJaccard(a,b){const A=new Set(tokens(a)),B=new Set(tokens(b));if(!A.size||!B.size)return 0;let inter=0;for(const x of A)if(B.has(x))inter++;return inter/(A.size+B.size-inter);}
 function prefixScore(a,b){a=norm(a).replace(/ /g,'');b=norm(b).replace(/ /g,'');if(!a||!b)return 0;const min=Math.min(a.length,b.length);let i=0;while(i<min&&a[i]===b[i])i++;return i/Math.max(a.length,b.length);}
-function aliasNorm(value='') {
+const aliasNorm=memoString(aliasNormRaw);
+function aliasNormRaw(value='') {
   // Provider suffixes such as "(zh)" describe a feed/localization variant, not
   // a different roster. Canonicalize common roster-class synonyms before fuzzy
   // comparison so MIBR (Women) and MIBR Female (zh) share one identity.

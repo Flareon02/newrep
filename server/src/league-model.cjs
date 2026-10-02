@@ -1,6 +1,8 @@
 /* Shared with both extensions. Source IDs, not display names, own membership. */
 (function(root,factory){const api=factory();if(typeof module==='object'&&module.exports)module.exports=api;else root.LeagueModel=api;})(globalThis,()=>{
-  const norm=value=>String(value??'').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+  // Pure and hot (every league lookup of the resolver): memoized, bounded.
+  const normCache=new Map();
+  const norm=value=>{const key=String(value??'');let out=normCache.get(key);if(out===undefined){out=key.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();if(normCache.size>=20000)normCache.clear();normCache.set(key,out);}return out;};
   const unique=values=>[...new Set(values.filter(Boolean).map(String))].sort();
   const indexes=new WeakMap(),keyCache=new WeakMap(),exclusionCache=new WeakMap();
   const id=ref=>ref?.catalogId||`${ref?.source||'astek'}:${ref?.leagueId?`id:${ref.leagueId}`:`name:${norm(ref?.category)}:${norm(ref?.league)}`}`;
