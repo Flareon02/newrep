@@ -195,3 +195,53 @@ test('API: POST /api/ui/full-markets acquires/renews/releases for the panel; eve
     assert.deepEqual(calls,[['lease','panel-lease-1',sid(raw)],['detail',sid(raw),true]]);
   }finally{await new Promise(r=>server.close(r));await stopMatcher();}
 });
+
+// ---- Observation: score kept moving while odds stayed frozen until a reload (2026-10-02, browser, network change) ----
+test('score and odds travel in the same OnUpdateSportEvent stream (one subscription per event, one WebSocket)', async()=>{
+  const {c,state,ws}=await line(3);const A=LineSocket.line[0];
+  try{
+    const sub=[...ws().running.entries()].find(([,s])=>s.op==='OnUpdateSportEvent'&&s.variables.sportEventId===A.id);
+    const push={id:A.id,version:'v2',fixture:{score:'1:0',status:'LIVE',competitors:[{id:'h',score:[{type:'total',points:'1',number:0}]},{id:'a',score:[{type:'total',points:'0',number:0}]}]},markets:[{...A.markets[0],odds:[{...A.markets[0].odds[0],value:'1.71'},{...A.markets[0].odds[1],value:'2.00'}]}]};
+    ws().message({id:sub[0],type:'data',payload:{data:{onUpdateSportEvent:push}}});await wait(10);
+    const row=state.rows.find(r=>r.sourceEventId===sid(A));
+    assert.deepEqual(row.seriesScore,[1,0]);assert.deepEqual(row.odds.markets.find(m=>m.type==='moneyline').prices.map(p=>p.decimal),[1.71,2]);
+    assert.equal(LineSocket.all.length,1);
+  }finally{await c.stop();}
+});
+
+test('a leased full stream that stops pushing while the snapshots move is restarted inside the same session', async()=>{
+  let t=Date.now();const {c,state,ws,pages}=await line(3,{now:()=>t});const A=LineSocket.line[0],socket=ws();
+  try{
+    c.lease('panel-lease-A',sid(A));await wait(20);
+    const first=[...ws().running.entries()].find(([,s])=>s.op==='OnUpdateSportEvent'&&s.variables.marketIds.length>3)[0];
+    // The event moves on (prices change), the full stream says nothing; the 30 s snapshots see the new prices.
+    A.markets[0]={...A.markets[0],odds:[{...A.markets[0].odds[0],value:'1.71'},{...A.markets[0].odds[1],value:'2.00'}]};
+    c.requestSnapshot();await wait(20);assert.ok(ws().running.has(first),'one disagreeing snapshot is not enough');
+    t+=30000;c.requestSnapshot();await wait(20);
+    assert.ok(!ws().running.has(first),'the quiet stream was stopped');
+    assert.deepEqual(ws().count(),{full:1,light:2,tabs:1});
+    assert.equal(c.status().ggbetFullStreamResyncs,1);
+    assert.deepEqual(state.rows.find(r=>r.sourceEventId===sid(A)).odds.markets.find(m=>m.type==='moneyline').prices.map(p=>p.decimal),[1.71,2]);
+    assert.equal(ws(),socket);assert.equal(c.status().ggbetWsConnectionsCreated,1);assert.equal(pages(),1);assert.equal(c.status().scheduledRefreshes,0);
+  }finally{await c.stop();}
+});
+
+test('a full stream that keeps pushing is never restarted, even when a snapshot disagrees for a moment', async()=>{
+  let t=Date.now();const {c,ws}=await line(3,{now:()=>t});const A=LineSocket.line[0];
+  try{
+    c.lease('panel-lease-A',sid(A));await wait(20);
+    const id=[...ws().running.entries()].find(([,s])=>s.op==='OnUpdateSportEvent'&&s.variables.marketIds.length>3)[0];
+    A.markets[0]={...A.markets[0],odds:[{...A.markets[0].odds[0],value:'1.60'},{...A.markets[0].odds[1],value:'2.20'}]};
+    c.requestSnapshot();await wait(20);
+    ws().message({id,type:'data',payload:{data:{onUpdateSportEvent:{id:A.id,version:'v3',markets:[A.markets[1]]}}}});await wait(10);
+    t+=30000;c.requestSnapshot();await wait(20);
+    assert.ok(ws().running.has(id));assert.equal(c.status().ggbetFullStreamResyncs,0);
+  }finally{await c.stop();}
+});
+
+test('a guest token is reused only through the egress (proxy agent) it was issued through', async()=>{
+  let pages=0;const c=new GgbetLiveCollector({async success(){},async failure(){}},{fetchImpl:async()=>{pages++;return {ok:true,status:200,text:async()=>html()};}});
+  const agentA={name:'gateway A'},agentB={name:'gateway B'};
+  await c.fetchBootstrap(false,agentA);await c.fetchBootstrap(false,agentA);assert.equal(pages,1,'same egress within the cache window: same token');
+  await c.fetchBootstrap(false,agentB);assert.equal(pages,2,'another egress: a new token from that egress');
+});
