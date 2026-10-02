@@ -352,6 +352,17 @@ html.team-logos-off .team .team-logo,html.team-logos-off .team .logo-ph{display:
 .settings-body{overflow:auto;padding:var(--s5) var(--s5) 48px}
 .settings-body h2{margin:0 0 4px;font-size:var(--fs-xl);font-weight:650}
 .settings-body>p.lead{margin:0 0 var(--s5);color:var(--text-2);font-size:var(--fs-m)}
+/* narrow window: the section list becomes a scrollable strip above the section (the back button first) */
+@media (max-width:760px){
+ .settings{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
+ .settings-nav{display:flex;gap:4px;align-items:center;overflow-x:auto;overflow-y:hidden;padding:6px 8px;border-right:0;border-bottom:1px solid var(--line);scrollbar-width:none}
+ .settings-nav h2{display:none}
+ .settings-nav button{width:auto;flex:none;white-space:nowrap}
+ .settings-nav button[aria-current=true]{box-shadow:inset 0 -2px 0 var(--accent)}
+ .settings-nav>div{order:-1;flex:none;padding:0 4px 0 0!important}
+ .settings-body{padding:var(--s4) var(--s3) 40px}
+ .admin-caps{grid-template-columns:minmax(0,1fr)}
+}
 .setting-card{max-width:820px;margin-bottom:var(--s4);padding:var(--s4);border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
 .setting-card h3{margin:0 0 4px;font-size:var(--fs-l);font-weight:600}
 .setting-card>p{margin:0 0 var(--s3);color:var(--text-2);font-size:var(--fs-s)}
