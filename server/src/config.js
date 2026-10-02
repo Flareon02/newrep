@@ -55,6 +55,9 @@ export const config = {
   ggbetDegradedSnapshotMs: intEnv("GGBET_DEGRADED_SNAPSHOT_MS", 7000, 3000),
   // 0 = no timer: a healthy session stays open; it is renewed on a real reason (close, auth rejection, watchdog) or
   // shortly before an expiry the token itself declares. A value >= 60000 restores a periodic refresh (escape hatch).
+  // Per-user capabilities (entitlements.js): "auto" enforces them whenever API_TOKEN is set (its holder is the
+  // administrator, other clients need a user token); "open" keeps the legacy open reads.
+  accessControl: /^open$/i.test(String(process.env.ACCESS_CONTROL || "auto").trim()) ? "open" : "auto",
   ggbetSessionRefreshMs: intEnv("GGBET_SESSION_REFRESH_MS", 0, 60 * 1000),
   // Full market trees only for events a client has open (detail panel lease): at most this many events at once,
   // a lease lives this long without a renewal, the last full tree stays in RAM this long after the release.

@@ -39,5 +39,5 @@ test('SSE hello frame is a complete event, not a raw hello token',()=>{
   assert.equal(blocks.length,1);
   const api=read('src/api.js');
   assert.doesNotMatch(api,/writeSse\(res\s*,\s*['"]hello['"]\s*,/);
-  assert.match(api,/writeSse\(res\s*,\s*sseEventWire\(['"]hello['"]\s*,\s*hello\)\)/);
+  assert.match(api,/writeSse\(res\s*,\s*sseEventWire\(['"]hello['"]\s*,\s*(?:filterSsePayload\(req\.principal,\s*hello\)|hello)\)\)/);
 });

@@ -6,7 +6,7 @@ import { setLogSink } from '../src/logger.js';
 
 setLogSink(() => {});
 
-test('with API_TOKEN set, write/compute endpoints need the token; reads and health stay open', async () => {
+test('with API_TOKEN set, every data endpoint needs an entitled token; anonymous clients get only the bare health', async () => {
   const token = 'unit-test-token-0123456789';
   const api = await startApi({ api: { authToken: token } });
   try {
@@ -29,10 +29,16 @@ test('with API_TOKEN set, write/compute endpoints need the token; reads and heal
     assert.equal((await fetch(api.base + '/api/hltv/search?q=navi')).status, 401);
     assert.equal((await postJson(api.base, '/api/league-links/publish', { nonce: 'x' })).status, 401);
 
-    assert.equal((await fetch(api.base + '/health')).status, 200);
-    assert.equal((await fetch(api.base + '/api/hltv/data')).status, 200);
-    assert.equal((await fetch(api.base + '/api/status')).status, 200);
-    const health = await (await fetch(api.base + '/health')).json();
+    // Reads are no longer open: per-user capabilities (entitlements.js), the API_TOKEN holder is the administrator.
+    assert.equal((await fetch(api.base + '/api/hltv/data')).status, 401);
+    assert.equal((await fetch(api.base + '/api/status')).status, 401);
+    assert.equal((await fetch(api.base + '/api/ui/live')).status, 401);
+    const bare = await (await fetch(api.base + '/health')).json();
+    assert.equal(bare.ok, true); assert.equal(bare.security, undefined, 'no internals for anonymous clients');
+    const auth = { headers: { Authorization: 'Bearer ' + token } };
+    assert.equal((await fetch(api.base + '/api/hltv/data', auth)).status, 200);
+    assert.equal((await fetch(api.base + '/api/status', auth)).status, 200);
+    const health = await (await fetch(api.base + '/health', auth)).json();
     assert.equal(health.security.writeAuth, 'token');
     assert.ok(!JSON.stringify(health).includes(token));
 

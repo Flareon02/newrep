@@ -38,8 +38,9 @@ test('feed SSE serializes normal and thin wire payloads once per change, not onc
   const api=fs.readFileSync(new URL('../src/api.js',import.meta.url),'utf8');
   // One wire per (LIVE odds provider, thin|full) and change; clients only pick the cached wire.
   const feed=api.match(/const broadcastFeed=[\s\S]*?\n {2}\};/)?.[0]||'';
-  assert.match(feed,/const key=selected\+\(client\.thin\?':thin':':full'\);/);
-  assert.match(feed,/if\(!wires\.has\(key\)\)\{const meta=feedMeta\(mode,selected\),payload=client\.thin\?thinFeedPushPayload\(mode,provider,change,meta\):feedPushPayload\(mode,provider,change,meta\);wires\.set\(key,sseEventWire\(payload\.event,payload\.payload\)\);\}/);
+  // key: provider + thin|full (+ the capability signature of a restricted user: one filtered wire per kind of user)
+  assert.match(feed,/key=selected\+\(client\.thin\?':thin':':full'\)/);
+  assert.match(feed,/if\(!wires\.has\(key\)\)\{const meta=feedMeta\(mode,selected\),payload=client\.thin\?thinFeedPushPayload\(mode,provider,change,meta\):feedPushPayload\(mode,provider,change,meta\);[^}]*wires\.set\(key,sseEventWire\(payload\.event,payload\.payload\)\);\}/);
   assert.match(feed,/writeSse\(client\.res,wires\.get\(key\)\)/);
   assert.doesNotMatch(feed,/for\(const client of feedClients\)[^\n]*sseEventWire\(payload\.event,payload\.payload\)\);try/);
 });

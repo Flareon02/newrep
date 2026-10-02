@@ -28,9 +28,11 @@ const call = async (method, path, headers = {}, body) => {
 };
 const WRONG = { Authorization: 'Bearer ' + 'wrong'.repeat(6) }, RIGHT = { Authorization: 'Bearer ' + token };
 
-// Public reads need no token.
-for (const p of ['/health', '/api/ui/live?meta=1&thin=1', '/api/ui/prematch?meta=1&thin=1', '/api/leagues', '/api/hltv/data']) {
-  const r = await call('GET', p); check(`read ${p} without a token`, r.status === 200, `HTTP ${r.status}`);
+// Server 4.8+: only the bare health is public; every data read needs a token with that capability (entitlements).
+{ const r = await call('GET', '/health'); check('read /health without a token (bare: no internals)', r.status === 200 && r.json?.ok === true && !r.json?.security, `HTTP ${r.status}`); }
+for (const p of ['/api/ui/live?meta=1&thin=1', '/api/ui/prematch?meta=1&thin=1', '/api/leagues', '/api/hltv/data']) {
+  const none = await call('GET', p), right = await call('GET', p, RIGHT);
+  check(`read ${p.split('?')[0]} needs a token`, none.status === 401 && right.status === 200, `HTTP ${none.status}/${right.status}`);
 }
 // Protected endpoints: none / wrong / right.
 const cases = [
@@ -48,7 +50,7 @@ for (const [method, path, body] of [['POST', '/api/odds/manual', {}], ['POST', '
   const none = await call(method, path, {}, body), wrong = await call(method, path, WRONG, body);
   check(`${method} ${path.split('?')[0]} is refused without / with a wrong token`, none.status === 401 && wrong.status === 401, `HTTP ${none.status}/${wrong.status}`);
 }
-const h = (await call('GET', '/health')).json;
+const h = (await call('GET', '/health', RIGHT)).json;
 check('/health reports writeAuth=token and never contains the token', h?.security?.writeAuth === 'token' && !JSON.stringify(h).includes(token), `writeAuth=${h?.security?.writeAuth}`);
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

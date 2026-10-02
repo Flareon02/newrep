@@ -22,7 +22,8 @@ import {normalizeErrorBody,publicMessage} from './http-errors.js';
 import {safeWrite} from './sse.js';
 import {historyCapacity,warnHistoryCapacity} from './capacity.js';
 import {createAuthorizer,MIN_TOKEN_LENGTH} from './auth.js';
-import {randomUUID} from 'node:crypto';
+import {UserStore,createAccess,routeRequirement,routeProvider,can,canAny,filterForPrincipal,filterSsePayload,CAPABILITIES,CAPABILITY_GROUPS} from './entitlements.js';
+import {randomUUID,createHash} from 'node:crypto';
 import {writeCounters} from './sqlite-storage.js';
 import {proxyDiagnostics} from './egress.js';
 
@@ -48,6 +49,7 @@ function sendJson(req, res, status, data, etag = "") {
     data=normalized.body;
     if(normalized.internal)log[status>=500?'error':'warn'](`[api] ${req?.method||''} ${String(req?.url||'').split('?')[0]} -> ${status} (${req?.requestId||'-'}): ${normalized.original}`);
   }
+  if(status<400&&req?.principal)data=filterForPrincipal(req.principal,data,{mode:req.dataMode||'live'});
   const body=Buffer.from(JSON.stringify(data));
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -132,7 +134,7 @@ function snapshotResponse(req, res, snapshot) {
   else if(compact)snapshot={...snapshot,providers:Object.fromEntries(Object.entries(snapshot.providers||{}).map(([key,value])=>{const {events,logicalEvents,...status}=value;return [key,status];}))};
   // ETag describes logical feed data, not timestamps. Clients obtain freshness
   // through the tiny meta response, so unchanged feeds can be a true 304.
-  const etag = `W/"feed-${snapshot.revision}"`;
+  const etag = `W/"feed-${snapshot.revision}${req.principal&&req.principal.role!=='admin'?'-'+createHash('sha1').update(req.principal.sig).digest('hex').slice(0,8):''}"`;
   if (!meta&&req.headers["if-none-match"] === etag) {
     res.statusCode = 304;res.setHeader("ETag", etag);res.setHeader("Cache-Control", "no-cache");applyCommonHeaders(req,res);return res.end();
   }
@@ -189,8 +191,10 @@ export function sseEventWire(event,payload){
   return `event: ${String(event||'message')}\ndata: ${JSON.stringify(payload??{})}\n\n`;
 }
 
-export function createApi({ authToken=config.apiToken, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState=null,databetCollector=null,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
+export function createApi({ authToken=config.apiToken, userStore=null, accessMode=config.accessControl, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState=null,databetCollector=null,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
   const authorizer=createAuthorizer(authToken);
+  const users=userStore||new UserStore(),access=createAccess({masterToken:authorizer.misconfigured?'':authToken,users,mode:accessMode});
+  if(access.enforce)log.info('[api] access control: per-user capabilities enforced (API_TOKEN holder = administrator)');
   if(!authorizer.enabled)log.warn('[api] API_TOKEN is not set: write and compute endpoints are open to any client that can reach this port');
   if(authorizer.misconfigured)log.error(`[api] API_TOKEN is shorter than ${MIN_TOKEN_LENGTH} characters: protected endpoints are refused until it is fixed`);
   const lag=monitorEventLoopDelay({resolution:20});lag.enable();
@@ -296,8 +300,9 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
     for(const client of feedClients){
       if(!client.modes.has(mode))continue;
       const provider=mode==='live'?clientLiveProvider(client):'ggbet';
-      if(!wires.has(provider))wires.set(provider,sseEventWire('invalidate',{mode,provider:'server',meta:feedMeta(mode,provider),at:Date.now(),error:'',patches:[],reason}));
-      try{writeSse(client.res,wires.get(provider));}catch{}
+      const restricted=client.principal&&client.principal.role!=='admin',wkey=provider+(restricted?':'+client.principal.sig:'');
+      if(!wires.has(wkey))wires.set(wkey,sseEventWire('invalidate',filterSsePayload(restricted?client.principal:null,{mode,provider:'server',meta:feedMeta(mode,provider),at:Date.now(),error:'',patches:[],reason},mode)));
+      try{writeSse(client.res,wires.get(wkey));}catch{}
     }
   };
   const broadcastFeed=(mode,provider,change)=>{
@@ -320,8 +325,10 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
       const selected=mode==='live'?clientLiveProvider(client):'ggbet';
       // A client receives the LIVE patches of exactly one odds provider: never GGBET and DataBet together.
       if(oddsProvider&&provider!==selected)continue;
-      const key=selected+(client.thin?':thin':':full');
-      if(!wires.has(key)){const meta=feedMeta(mode,selected),payload=client.thin?thinFeedPushPayload(mode,provider,change,meta):feedPushPayload(mode,provider,change,meta);wires.set(key,sseEventWire(payload.event,payload.payload));}
+      // A bookmaker the user may not see sends nothing; without odds rights the prices are dropped from the patches.
+      if(client.principal&&!can(client.principal,'provider.'+provider))continue;
+      const restricted=client.principal&&client.principal.role!=='admin'&&!client.principal.unrestricted,key=selected+(client.thin?':thin':':full')+(restricted?':'+client.principal.sig:'');
+      if(!wires.has(key)){const meta=feedMeta(mode,selected),payload=client.thin?thinFeedPushPayload(mode,provider,change,meta):feedPushPayload(mode,provider,change,meta);if(restricted)payload.payload=filterSsePayload(client.principal,payload.payload,mode);wires.set(key,sseEventWire(payload.event,payload.payload));}
       try{writeSse(client.res,wires.get(key));}catch{}
     }
   };
@@ -404,7 +411,30 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
       res.setHeader("Access-Control-Max-Age", "86400");
       return res.end();
     }
-    if(!authorizer.allows(req,url.pathname)){if(authorizer.misconfigured)return sendJson(req,res,503,{error:`API_TOKEN на сервере короче ${MIN_TOKEN_LENGTH} символов: запись отключена, пока токен не исправлен.`});res.setHeader('WWW-Authenticate','Bearer realm="esports-monitor"');return sendJson(req,res,401,{error:'Требуется токен доступа. Укажите токен сервера в настройках расширения.'});}
+    // Who is asking, and may they? (entitlements.js) Data they may not see is also filtered in sendJson.
+    req.principal=await access.resolve(req,url);req.dataMode=/prematch/.test(url.pathname)||url.searchParams.get('view')==='prematch'||(url.pathname==='/api/ui/full-markets'?false:url.searchParams.get('scope')==='prematch')?'prematch':'live';
+    if(authorizer.misconfigured&&!authorizer.allows(req,url.pathname))return sendJson(req,res,503,{error:`API_TOKEN на сервере короче ${MIN_TOKEN_LENGTH} символов: запись отключена, пока токен не исправлен.`,code:'auth_misconfigured'});
+    if(!access.enforce){    if(!authorizer.allows(req,url.pathname)){if(authorizer.misconfigured)return sendJson(req,res,503,{error:`API_TOKEN на сервере короче ${MIN_TOKEN_LENGTH} символов: запись отключена, пока токен не исправлен.`});res.setHeader('WWW-Authenticate','Bearer realm="esports-monitor"');return sendJson(req,res,401,{error:'Требуется токен доступа. Укажите токен сервера в настройках расширения.'});}}
+    else if(req.principal.anonymous&&routeRequirement(req.method,url.pathname,url.searchParams)){res.setHeader('WWW-Authenticate','Bearer realm="esports-monitor"');return sendJson(req,res,401,{ok:false,error:'Нужен ключ доступа. Укажите его в настройках подключения.',code:'unauthorized'});}
+    {const need=routeRequirement(req.method,url.pathname,url.searchParams),provider=routeProvider(url.pathname);
+     if((need&&!canAny(req.principal,need))||(provider&&!can(req.principal,'provider.'+provider)))return sendJson(req,res,403,{ok:false,error:'Нет доступа к этому разделу.',code:'forbidden'});}
+    if(url.pathname==='/api/me')return sendJson(req,res,200,{ok:true,serverVersion:config.version,access:access.mode,principal:{id:req.principal.id,name:req.principal.name,role:req.principal.role,anonymous:req.principal.anonymous},capabilities:[...req.principal.caps].sort()});
+    if(url.pathname==='/api/admin/capabilities')return sendJson(req,res,200,{capabilities:CAPABILITIES,groups:CAPABILITY_GROUPS});
+    if(url.pathname==='/api/admin/users'||url.pathname.startsWith('/api/admin/users/')){
+      // Administrators manage users; nobody can lock themselves out (no self-disable, self-demote or self-delete).
+      try{
+        const parts=url.pathname.split('/').filter(Boolean),id=parts[3]||'',action=parts[4]||'';
+        if(req.method==='GET'&&!id){await users.ready;return sendJson(req,res,200,{users:users.list()});}
+        if(req.method!=='POST')return sendJson(req,res,405,{error:'Метод не поддерживается'});
+        const body=await readBody(req,65536)||{};
+        if(!id){const created=await users.create({name:body.name,role:body.role==='admin'?'admin':'user'});if(Array.isArray(body.capabilities))created.user=await users.update(created.user.id,{capabilities:body.capabilities});return sendJson(req,res,200,{ok:true,...created});}
+        const self=req.principal.id===id;
+        if(action==='token')return sendJson(req,res,200,{ok:true,...await users.rotateToken(id)});
+        if(action==='delete'){if(self)return sendJson(req,res,409,{error:'Нельзя удалить свою учётную запись'});await users.remove(id);return sendJson(req,res,200,{ok:true});}
+        if(self&&(body.disabled===true||body.role==='user'||(Array.isArray(body.capabilities)&&!['admin.panel','admin.users'].every(k=>body.capabilities.includes(k))&&users.get(id)?.role!=='admin')))return sendJson(req,res,409,{error:'Нельзя отключить себе доступ к управлению пользователями'});
+        return sendJson(req,res,200,{ok:true,user:await users.update(id,{name:body.name,capabilities:body.capabilities,disabled:body.disabled,role:body.role})});
+      }catch(error){return sendJson(req,res,error.status||400,{error:error.message});}
+    }
     if(req.method==='POST'&&url.pathname==='/api/league-links')return sendJson(req,res,410,{error:'Прямое редактирование отключено. Обновите расширение и используйте защищённую публикацию.'});
     if(req.method==='POST'&&url.pathname==='/api/league-links/publish'){
       try{
@@ -497,6 +527,7 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
       }catch(error){return sendJson(req,res,400,{error:error.message});}
     }
 
+    if ((url.pathname === "/" || url.pathname === "/health") && !can(req.principal,'admin.diagnostics')) return sendJson(req,res,200,{ok:true,service:"astek-fonbet-monitor-server",version:config.version});
     if (url.pathname === "/" || url.pathname === "/health") {
       return sendJson(req, res, 200, {
         ok: true, features:{bookOdds:1,statistics:4,liveGenerator:3,feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,realtimePriority:1,pagedHistoryWorker:1}, service: "astek-fonbet-monitor-server", version: config.version,
@@ -530,11 +561,12 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
       touchVariant(streamProvider);
       const releaseSse=acquireSse(req);if(!releaseSse)return sendJson(req,res,429,{error:'Слишком много потоковых соединений'});
       const allowed=new Set(['live','prematch','results','history','leagues']);
-      const requested=new Set(String(url.searchParams.get('modes')||'live,prematch,results,history,leagues').split(',').filter(x=>allowed.has(x)));if(!requested.size){releaseSse();return sendJson(req,res,400,{error:'Неверный режим потока'});}
+      const modeCap={live:['live.view'],prematch:['prematch.view'],results:['results.view'],history:['history.view'],leagues:['live.view','prematch.view','results.view','compare.view','history.view']};
+      const requested=new Set(String(url.searchParams.get('modes')||'live,prematch,results,history,leagues').split(',').filter(x=>allowed.has(x)&&canAny(req.principal,modeCap[x])));if(!requested.size){releaseSse();return sendJson(req,res,403,{error:'Нет доступа к этому разделу.',code:'forbidden'});}
       res.statusCode=200;res.setHeader('Content-Type','text/event-stream; charset=utf-8');res.setHeader('Cache-Control','no-cache, no-transform');res.setHeader('Connection','keep-alive');res.setHeader('X-Accel-Buffering','no');applyCommonHeaders(req,res);res.flushHeaders?.();
-      const client={res,modes:requested,thin:url.searchParams.get('thin')==='1',provider:streamProvider},hello={serverVersion:config.version,features:{feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,liveOddsProviders:1,realtimePriority:1,pagedHistoryWorker:1},feeds:{},ui:{},thin:client.thin,liveOddsProvider:streamProvider};
+      const client={res,modes:requested,thin:url.searchParams.get('thin')==='1',provider:streamProvider,principal:req.principal},hello={serverVersion:config.version,features:{feedPush:1,uiPush:1,thinClient:2,marketSemantics:1,ggbetNativeTabs:1,liveOddsProviders:1,realtimePriority:1,pagedHistoryWorker:1},feeds:{},ui:{},thin:client.thin,liveOddsProvider:streamProvider};
       for(const mode of requested){if(mode==='live'||mode==='prematch')hello.feeds[mode]=feedMeta(mode,mode==='live'?streamProvider:'ggbet');else hello.ui[mode]={revision:uiRevisions[mode]||0};}
-      feedClients.add(client);writeSse(res,sseEventWire('hello',hello));
+      feedClients.add(client);writeSse(res,sseEventWire('hello',filterSsePayload(req.principal,hello)));
       const heartbeat=setInterval(()=>{safeWrite(res,`: ping ${Date.now()}\n\n`);},15000);heartbeat.unref?.();let closed=false;const close=()=>{if(closed)return;closed=true;clearInterval(heartbeat);feedClients.delete(client);releaseSse();};req.on('close',close);res.on('close',close);return;
     }
 
