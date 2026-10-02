@@ -53,13 +53,15 @@ const mock = http.createServer((req, res) => {
 });
 
 // ---------------------------------------------------------------- fault-injecting proxy ---------------------------
-const proxyState = { mode: 'pass', hits: new Map(), sseConnects: 0, sse: new Set(), liveProviders: [], streamProviders: [] };
+const proxyState = { mode: 'pass', hits: new Map(), sseConnects: 0, sse: new Set(), liveProviders: [], streamProviders: [], fullMarkets: [], details: [] };
 const hit = (p) => proxyState.hits.set(p, (proxyState.hits.get(p) || 0) + 1);
 let serverPort = 0;
 const proxy = http.createServer((req, res) => {
   const p = req.url.split('?')[0]; hit(p);
   if (p === '/api/ui/live') proxyState.liveProviders.push(new URL(req.url, 'http://x').searchParams.get('provider') || '');
   if (p === '/api/feed-stream') proxyState.streamProviders.push(new URL(req.url, 'http://x').searchParams.get('provider') || '');
+  if (p === '/api/ui/event-detail') proxyState.details.push(Object.fromEntries(new URL(req.url, 'http://x').searchParams));
+  if (p === '/api/ui/full-markets' && req.method === 'POST') { const chunks = []; req.on('data', (c) => chunks.push(c)); req.on('end', () => { try { proxyState.fullMarkets.push({ at: Date.now(), ...JSON.parse(Buffer.concat(chunks).toString('utf8')) }); } catch {} }); }
   const apiUi = p.startsWith('/api/ui/') || p === '/api/leagues';
   if (p === '/api/feed-stream' && req.method === 'GET') { proxyState.sseConnects++; proxyState.sse.add(res); res.on('close', () => proxyState.sse.delete(res)); }
   const m = proxyState.mode;
@@ -439,6 +441,37 @@ scenario('E20', 'P2 X4', 'cached detail: reopening a match renders from cache in
   const ms = await timed(page, click(first), `DetailPanel.currentId()===${JSON.stringify(first)} && ${ready}`);
   results.note = `cached reopen ${ms} ms`;
   if (ms < 0 || ms > 100) throw new Error(`cached detail took ${ms} ms`);
+  await page.close();
+});
+
+scenario('E23', 'X4', 'GGBET full-market lease follows the detail panel: acquire on open, moved on switch, renewed, released on close; a hover prefetch never carries the lease', async () => {
+  const page = await openApp();
+  await until(async () => (await cards(page)) >= 2, { what: 'two rows' });
+  proxyState.fullMarkets.length = 0; proxyState.details.length = 0;
+  const rows = page.locator('#content .list[data-view="live"] article.match');
+  const [a, b] = [await rows.nth(0).getAttribute('data-id'), await rows.nth(1).getAttribute('data-id')];
+  // Hover prefetch of a row that is not open: its detail request has no lease and no lease call is made.
+  await rows.nth(1).hover(); await sleep(900);
+  if (proxyState.fullMarkets.length) throw new Error('a hover made a lease call');
+  if (proxyState.details.some((d) => d.lease)) throw new Error('a hover prefetch carried the lease');
+  await rows.nth(0).click();
+  await until(async () => proxyState.fullMarkets.some((x) => x.action === 'acquire' && x.id === a), { what: 'acquire for the opened match' });
+  const lease = proxyState.fullMarkets.find((x) => x.action === 'acquire').lease;
+  if (!/^[\w-]{8,64}$/.test(lease || '')) throw new Error('bad lease id');
+  const acquire = proxyState.fullMarkets.find((x) => x.action === 'acquire');
+  if (acquire.provider !== 'ggbet' || acquire.view !== 'live') throw new Error(`acquire for ${acquire.provider}/${acquire.view}`);
+  await rows.nth(1).click();
+  await until(async () => proxyState.fullMarkets.some((x) => x.action === 'acquire' && x.id === b && x.lease === lease), { what: 'the same lease moved to the second match' });
+  if (!proxyState.details.some((d) => d.id === a && d.lease === lease)) throw new Error('the panel detail request did not carry the lease');
+  // Renewal by the panel's 10 s refresh.
+  const before = proxyState.fullMarkets.filter((x) => x.action === 'acquire' && x.id === b).length;
+  await until(async () => proxyState.fullMarkets.filter((x) => x.action === 'acquire' && x.id === b).length > before, { timeout: 15000, what: 'a renewal within ~10 s' });
+  await page.locator('#detailPane [data-dp="close"]').first().click();
+  await until(async () => proxyState.fullMarkets.some((x) => x.action === 'release' && x.lease === lease), { what: 'release on close' });
+  const released = proxyState.fullMarkets.find((x) => x.action === 'release').at;
+  await sleep(11000);
+  if (proxyState.fullMarkets.some((x) => x.action === 'acquire' && x.at > released)) throw new Error('renewed after the panel was closed');
+  results.note = `lease calls: ${proxyState.fullMarkets.map((x) => x.action).join(', ')}`;
   await page.close();
 });
 

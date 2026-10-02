@@ -1,8 +1,8 @@
-# Esports Monitor Extension 9.0.0 — product redesign
+# Esports Monitor Extension 9.1.0 — product redesign
 
 Dark, dense monitoring interface: LIVE · Линия · Результаты · Сравнение · История, a right-side match detail with
 bookmaker odds, and Settings (sources, notifications, server, league links, diagnostics). See `CHANGELOG-9.0.0.md`
-and `docs/UI-PERFORMANCE-9.0.md`. Prices in lists and the odds comparison need server ≥ 4.7.0.
+and `docs/UI-PERFORMANCE-9.0.md`. Prices in lists and the odds comparison need server ≥ 4.7.0; GGBET full markets in the detail panel need server ≥ 4.8.0 (`CHANGELOG-9.1.0.md`).
 
 Code map:
 - `app.html`, `ui.css` (design system + layout), `panels.css` (styles of the reused statistics/score/timeline modules)

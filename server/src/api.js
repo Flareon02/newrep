@@ -456,6 +456,20 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
       const body=await readBody(req,512000);if(!Array.isArray(body.events)||body.events.length>500)return sendJson(req,res,400,{error:'Слишком много матчей'});
       return sendJson(req,res,200,await statistics.availability(body.events));
     }
+    if(req.method==='POST'&&url.pathname==='/api/ui/full-markets'){
+      // Lease of the GGBET full market tree for the match open in a detail panel (extension 9.1+): acquire/renew while
+      // the panel is open (every renewal extends the TTL), release on close. Never touches the GGBET session.
+      const body=await readBody(req,4096),lease=String(body?.lease||''),action=String(body?.action||'acquire'),id=String(body?.id||'');
+      if(!/^[\w-]{8,64}$/.test(lease)||!['acquire','release'].includes(action)||id.length>300)return sendJson(req,res,400,{error:'Неверный запрос'});
+      if(!ggbetCollector?.lease)return sendJson(req,res,200,{ok:false,enabled:false});
+      if(action==='release'||!id)return sendJson(req,res,200,{ok:true,released:ggbetCollector.releaseLease(lease),ttlMs:config.ggbetFullLeaseTtlMs});
+      const provider=['ggbet','databet'].includes(String(body?.provider||''))?String(body.provider):'ggbet';
+      const event=provider==='ggbet'?((await liveSnapshot('ggbet')).events||[]).find(e=>String(e.id)===id):null;
+      const ref=(event?.sourceRefs?.length?event.sourceRefs:event?[event]:[]).find(r=>r?.source==='ggbet');
+      if(!ref){ggbetCollector.releaseLease(lease);return sendJson(req,res,200,{ok:true,active:false,ttlMs:config.ggbetFullLeaseTtlMs});}
+      const result=ggbetCollector.lease(lease,ref.sourceEventId||ref.id);
+      return sendJson(req,res,200,{ok:true,active:!!result.ok,capped:!!result.capped,ttlMs:config.ggbetFullLeaseTtlMs});
+    }
     if(req.method==='POST'&&url.pathname==='/api/ui/odds-watch'){
       // Extension 8.1.x reports up to 8 visible LIVE fixtures here. Server 4.3.3+
       // deliberately no longer keeps their full odds "warm" (that path caused the
@@ -626,7 +640,9 @@ export function createApi({ authToken=config.apiToken, liveCollector,crossbetSer
             }
             if(ref?.source==='ggbet'&&ggbetCollector?.detail){
               try{
-                const fresh=await ggbetCollector.detail(ref.sourceEventId||ref.id,{timeoutMs:6500});
+                // Full markets only under a detail-panel lease; a prefetch without one gets the light event.
+                const lease=String(url.searchParams.get('lease')||''),leased=/^[\w-]{8,64}$/.test(lease)&&ggbetCollector.lease?ggbetCollector.lease(lease,ref.sourceEventId||ref.id).ok:false;
+                const fresh=await ggbetCollector.detail(ref.sourceEventId||ref.id,{timeoutMs:6500,...(leased?{full:true}:{})});
                 if(fresh)return {...ref,...fresh,scoreReversed:ref.scoreReversed||false,aliases:ref.aliases||fresh.aliases,lifecycle:ref.lifecycle||fresh.lifecycle,firstSeenAt:ref.firstSeenAt||fresh.firstSeenAt,enteredLiveAt:ref.enteredLiveAt||fresh.enteredLiveAt};
               }catch(error){marketDetailErrors.ggbet=error?.message||String(error);log.warn('[ggbet-detail]',marketDetailErrors.ggbet);}
             }

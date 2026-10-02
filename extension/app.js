@@ -68,9 +68,21 @@ const persist=Store.createPersist({storage:chrome.storage.local,prefix:'lastKnow
 // Event details: LIVE ones belong to the selected odds provider (never reuse GGBET detail for DataBet).
 const detailMeta=new Map();
 function hydrateDetail(data){return data?.marketDetailErrors&&Object.keys(data.marketDetailErrors).length?{...data.event,marketDetailErrors:data.marketDetailErrors}:data.event;}
-const details=Store.createResource({max:40,usable:10*60000,fresh:key=>key.startsWith('live:')?10000:60000,fetcher:(key,{signal})=>{const m=detailMeta.get(key);return client.get('/api/ui/event-detail?view='+m.view+'&id='+encodeURIComponent(m.id)+(m.view==='live'?'&provider='+m.provider:''),{signal}).then(hydrateDetail);}});
+// GGBET full markets (server 4.8+) are leased for the match open in the detail panel only: acquired on open, switch
+// and provider change, renewed by the panel's 10 s refresh, released on close; the server also drops a lease that is
+// not renewed within its TTL. A hover prefetch never carries the lease, so it never subscribes full markets.
+const FULL_LEASE='p'+(globalThis.crypto?.randomUUID?.()||(Math.random().toString(36).slice(2)+Date.now().toString(36))).replace(/-/g,'').slice(0,40);
+let fullLeaseId='',panelDetailKey='';
+function leaseFull(event,view){
+ const live=view==='live'||(view==='compare'&&!!event?.inLive),provider=OddsProvider.selected(prefs),id=live&&provider==='ggbet'&&event?String(event.id):'';
+ if(!id){releaseFull();return;}
+ fullLeaseId=id;client.post('/api/ui/full-markets',{lease:FULL_LEASE,action:'acquire',view:'live',id,provider}).catch(()=>{});
+}
+function releaseFull(){panelDetailKey='';if(!fullLeaseId)return;fullLeaseId='';client.post('/api/ui/full-markets',{lease:FULL_LEASE,action:'release'}).catch(()=>{});}
+window.addEventListener('pagehide',()=>{if(!fullLeaseId)return;try{fetch(BASE+'/api/ui/full-markets',{method:'POST',keepalive:true,headers:{...ServerConfig.headers(),'Content-Type':'application/json'},body:JSON.stringify({lease:FULL_LEASE,action:'release'})}).catch(()=>{});}catch{}});
+const details=Store.createResource({max:40,usable:10*60000,fresh:key=>key.startsWith('live:')?10000:60000,fetcher:(key,{signal})=>{const m=detailMeta.get(key);return client.get('/api/ui/event-detail?view='+m.view+'&id='+encodeURIComponent(m.id)+(m.view==='live'?'&provider='+m.provider:'')+(m.view==='live'&&key===panelDetailKey&&fullLeaseId===m.id?'&lease='+FULL_LEASE:''),{signal}).then(hydrateDetail);}});
 function detailKeyFor(event,view){const key=OddsProvider.detailKey(view,event.id,prefs);detailMeta.set(key,{view,id:String(event.id),provider:OddsProvider.selected(prefs)});if(detailMeta.size>400)detailMeta.delete(detailMeta.keys().next().value);return key;}
-function detailSwr(event,view,{force=false,onValue,onError,signal}={}){const started=performance.now(),key=detailKeyFor(event,view);const res=details.swr(key,{force,signal,onValue:(v)=>{Perf.measure('detail.network',started);onValue?.(v);},onError});return res;}
+function detailSwr(event,view,{force=false,onValue,onError,signal}={}){const started=performance.now(),key=detailKeyFor(event,view);panelDetailKey=key;const res=details.swr(key,{force,signal,onValue:(v)=>{Perf.measure('detail.network',started);onValue?.(v);},onError});return res;}
 let prefetchController=null,prefetchTimer=0;
 function prefetchDetail(event,view){
  if(!event||!['live','prematch'].includes(view)||prefs.hideOdds)return;
@@ -661,7 +673,7 @@ function openUrl(url){chrome.runtime.sendMessage({type:'openExternal',url}).then
 DetailPanel.configure({esc,stamp,providerName,refsOf:refs,scoreOf,bookVisible,bookHealth,prefs:()=>prefs,setPref,errorText,base:()=>BASE,gameIcon,starIcon,leagueTitle,logo:teamLogo,eventUrl,isFavorite:matchFavorite,toggleFavorite:e=>{toggleFavorite(e);},copyMatch:e=>copy(copyText(e)).catch(report),openScoreHistory,openOddsTimeline,openGenerator,openUrl,
  generatorAvailable:(e,view)=>!!prefs.generatorEnabled&&!prefs.hideOdds&&['live','prematch'].includes(view)&&GameCategories.info(e.category).key==='cs'&&!isExtraEvent(e),
  statsAvailable:(e,view)=>['live','results'].includes(view)&&!isExtraEvent(e)&&((StatisticsClient.info(e)?.provider==='dota2'&&prefs.dotaStatsEnabled&&GameCategories.info(e.category).key==='dota')||(StatisticsClient.info(e)?.provider==='cs2'&&GameCategories.info(e.category).key==='cs')),
- detail:(e,view,opts)=>detailSwr(e,view,opts),invalidateDetail:(e,view)=>details.invalidate(detailKeyFor(e,view==='compare'?'live':view)),onClosed:onDetailClosed});
+ detail:(e,view,opts)=>detailSwr(e,view,opts),leaseFull,releaseFull,invalidateDetail:(e,view)=>details.invalidate(detailKeyFor(e,view==='compare'?'live':view)),onClosed:onDetailClosed});
 StatisticsClient.configure({base:BASE,request,view:()=>tab,active:()=>['live','results'].includes(tab),render:()=>{DetailPanel.render();}});
 Cs2Panel.configure({esc,request,logosEnabled:()=>prefs.teamLogos!==false,render:()=>DetailPanel.refreshStats()});
 DotaStatsPanel.configure({enabled:()=>prefs.dotaStatsEnabled===true,logosEnabled:()=>prefs.teamLogos!==false,esc,request,render:()=>DetailPanel.refreshStats()});

@@ -144,12 +144,19 @@ test('collector follows GGBET All market tab and keeps the complete market set a
   const state={rows:[],async success(rows){this.rows=rows;},async failure(){}};
   const collector=new GgbetLiveCollector(state,{fetchImpl:async()=>({ok:true,status:200,text:async()=>html}),WebSocketImpl:CatalogSocket});collector.stopped=false;
   await collector.connect();await wait(30);
+  // Not opened: only the light subscription (the snapshot's top markets), no tab catalog.
+  assert.equal(CatalogSocket.last.sent.filter(x=>x.payload?.operationName==='GetMarketsTab').length,0);
+  const light=CatalogSocket.last.sent.find(x=>x.payload?.operationName==='OnUpdateSportEvent');
+  assert.ok(light);assert.deepEqual(light.payload.variables.marketIds,top.markets.map(m=>m.id));
+  // Opened in a detail panel: the full tree is leased inside the same WebSocket.
+  const socket=CatalogSocket.last;assert.equal(collector.lease('panel-lease-1',full.id).ok,true);await wait(20);assert.equal(CatalogSocket.last,socket);
   const catalog=CatalogSocket.last.sent.find(x=>x.payload?.operationName==='GetMarketsTab');
   assert.ok(catalog);assert.equal(catalog.payload.variables.marketTabID,'all');
   const tabSub=CatalogSocket.last.sent.find(x=>x.payload?.operationName==='OnUpdateTab');
   assert.ok(tabSub);assert.equal(tabSub.payload.variables.marketTabId,'all');
-  const eventSub=CatalogSocket.last.sent.find(x=>x.payload?.operationName==='OnUpdateSportEvent');
+  const eventSub=CatalogSocket.last.sent.filter(x=>x.payload?.operationName==='OnUpdateSportEvent').at(-1);
   assert.ok(eventSub);assert.equal(eventSub.payload.variables.isTopMarkets,false);assert.equal(eventSub.payload.variables.marketIds.length,15);
+  assert.ok(CatalogSocket.last.sent.some(x=>x.type==='stop'&&x.id===light.id),'the light stream is replaced, not doubled');
   assert.equal(state.rows[0].odds.markets.length,15);
   collector.requestSnapshot();await wait(20);
   assert.equal(state.rows[0].odds.markets.length,15,'top-3 snapshot must not overwrite complete markets');

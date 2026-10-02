@@ -14,7 +14,9 @@ const DetailPanel=(()=>{
  let stream=null,streamKey='',streamToken=0,refreshTimer=0,searchTimer=0;
  const tracker=MatchFormat.createPriceTracker({windowMs:20000});
 
- function configure(context){ctx=context;root=$('detailPane');root.addEventListener('click',onClick);root.addEventListener('input',onInput);}
+ function configure(context){ctx=context;root=$('detailPane');root.addEventListener('click',onClick);root.addEventListener('input',onInput);
+  // Back from a hidden tab: the GGBET full-market lease may have expired meanwhile; take it again at once.
+  document.addEventListener('visibilitychange',()=>{if(st&&!document.hidden){ctx.leaseFull?.(st.event,st.view);loadDetail(false);}});}
  const esc=s=>ctx.esc(s),refs=e=>ctx.refsOf(e);
  const sourceId=r=>String(r?.sourceEventId||r?.id||'');
  const isOpen=()=>!!st;
@@ -48,12 +50,14 @@ const DetailPanel=(()=>{
    renderShell();
   }else{st.event=event;if(source&&source!==st.source){st.source=source;resetMarketFilters();}}
   render();
+  // Full GGBET markets for this match only while the panel shows it (the lease moves on a switch, renews every 10 s).
+  ctx.leaseFull?.(st.event,st.view);
   loadDetail(false);
   syncStream();
-  clearInterval(refreshTimer);refreshTimer=setInterval(()=>{if(!st||document.hidden)return;loadDetail(false);syncStream();},10000);
+  clearInterval(refreshTimer);refreshTimer=setInterval(()=>{if(!st||document.hidden)return;ctx.leaseFull?.(st.event,st.view);loadDetail(false);syncStream();},10000);
   if(st.tab==='stats')openStats();
  }
- function hide(){if(!st)return;closeStats();st=null;clearInterval(refreshTimer);closeStream();root.hidden=true;root.replaceChildren();ctx.onClosed?.();}
+ function hide(){if(!st)return;closeStats();st=null;clearInterval(refreshTimer);closeStream();ctx.releaseFull?.();root.hidden=true;root.replaceChildren();ctx.onClosed?.();}
  // The list got a newer snapshot (score, sources, quotes): re-render the header and the quotes in place.
  function update(event){if(!st||!event||String(event.id)!==st.id)return;st.event=event;render();}
  function onFeedPatches(patches){

@@ -26,7 +26,7 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.7.0",
+  version: "4.8.0",
   port: intEnv("PORT", 8080),
   // Listen address. Unset: 0.0.0.0 (Docker). 127.0.0.1 / localhost when only a local reverse proxy or tunnel may reach
   // the API. Any other value that is not an IP literal binds 127.0.0.1 (fails closed, never public) and is logged.
@@ -56,6 +56,11 @@ export const config = {
   ggbetSnapshotIntervalMs: intEnv("GGBET_SNAPSHOT_INTERVAL_MS", 30000, 5000),
   ggbetDegradedSnapshotMs: intEnv("GGBET_DEGRADED_SNAPSHOT_MS", 7000, 3000),
   ggbetSessionRefreshMs: intEnv("GGBET_SESSION_REFRESH_MS", 8 * 60 * 1000, 60 * 1000),
+  // Full market trees only for events a client has open (detail panel lease): at most this many events at once,
+  // a lease lives this long without a renewal, the last full tree stays in RAM this long after the release.
+  ggbetMaxFullEvents: intEnv("GGBET_MAX_FULL_EVENTS", 6, 1),
+  ggbetFullLeaseTtlMs: intEnv("GGBET_FULL_LEASE_TTL_MS", 45000, 15000),
+  ggbetFullCacheTtlMs: intEnv("GGBET_FULL_CACHE_TTL_MS", 60000, 0),
   ggbetBootstrapCacheMs: intEnv("GGBET_BOOTSTRAP_CACHE_MS", 4 * 60 * 1000, 30 * 1000),
   ggbetWatchdogMs: intEnv("GGBET_WATCHDOG_MS", 90000, 30000),
   ggbetMaxBackoffMs: intEnv("GGBET_MAX_BACKOFF_MS", 60000, 5000),
