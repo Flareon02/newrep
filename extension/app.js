@@ -217,22 +217,23 @@ function priceCell(e,source,ref,q,bestOf){
  return `<div class="price-col" data-short="${esc(providerShort(source))}" data-source-ref="${esc(key)}" data-book="${esc(source)}" title="${providerName(source)}${q.at?' · обновлено '+stamp(q.at,false,true):''}">${cell('h')}${cell('a')}</div>`;
 }
 function bestFor(quotes){const best=MatchFormat.bestPrices(quotes),countSide={h:0,a:0,d:0};for(const q of Object.values(quotes))if(q&&!q.s&&!q.stale)for(const side of ['h','a','d'])if(MatchFormat.openPrice(q[side])!=null)countSide[side]++;return {...best,countSide};}
-// Live score of a fixture: SSE patches update the bookmaker refs, so take the most recently changed visible ref
-// (AstekBet first when none changed yet); the logical event only carries the score of its last full snapshot.
-const SCORE_ORDER={astek:0,fonbet:1,pinnacle:2,ggbet:3,databet:3};
+// Score of a fixture from several bookmakers: MatchFormat.canonicalScore (plausible series only, furthest state, then
+// the most recent change, then a fixed order). The event keeps its own fields when no bookmaker has a usable score.
 function scoreOf(e){
- const list=refs(e).filter(r=>r&&bookVisible(r.source)&&(r.scoreText||r.seriesScore));if(!list.length)return e;
- const changedAt=r=>scoreChanged.get(`${r.source}:${r.sourceEventId||r.id}`)||0;
- const r=[...list].sort((a,b)=>changedAt(b)-changedAt(a)||(SCORE_ORDER[a.source]??9)-(SCORE_ORDER[b.source]??9))[0];
- return {...e,scoreText:r.scoreText||e.scoreText,seriesScore:r.seriesScore||e.seriesScore,mapScores:r.mapScores||e.mapScores,activeMap:r.activeMap||e.activeMap,bestOf:Number(r.bestOf)||Number(e.bestOf)||0};
+ const list=refs(e).filter(r=>r&&bookVisible(r.source));
+ const model=MatchFormat.canonicalScore(list,{changedAt:r=>scoreChanged.get(`${r.source}:${r.sourceEventId||r.id}`)||0});
+ const r=model.best?.ref;
+ if(!r)return {...e,display:MatchFormat.displayScore(e,e),scoreModel:model};
+ return {...e,scoreText:r.scoreText||e.scoreText,seriesScore:r.seriesScore||e.seriesScore,mapScores:r.mapScores||e.mapScores,activeMap:r.activeMap||e.activeMap,bestOf:Number(r.bestOf)||Number(e.bestOf)||0,display:model.best,scoreModel:model};
 }
+const mapsLine=(d,live)=>d.maps.length?`<span class="maps-line num">(${d.maps.map((m,i)=>i===d.current&&live?`<b>${m.join(':')}</b>`:m.join(':')).join(', ')})</span>`:'';
 function scoreCell(e,view){
- const live=view==='live',parts=MatchFormat.scoreParts(scoreOf(e),e),changed=refs(e).some(r=>Date.now()-(scoreChanged.get(`${r.source}:${r.sourceEventId||r.id}`)||0)<3000);
+ const live=view==='live',changed=refs(e).some(r=>Date.now()-(scoreChanged.get(`${r.source}:${r.sourceEventId||r.id}`)||0)<3000);
  if(view==='prematch')return `<div class="start-col"><b>${esc(timeFmt.format(Number(e.startAt)||Date.now()))}</b>${dateFmt.format(Number(e.startAt)||Date.now())===dateFmt.format(Date.now())?'сегодня':esc(dateFmt.format(Number(e.startAt)||Date.now()))}</div>`;
- if(!parts.series)return `<div class="score-col"><span class="score-text${changed?' changed':''}">${esc(parts.text||'—')}</span></div>`;
- const status=live?[parts.mapNumber&&parts.maps.length>1?`Карта ${parts.mapNumber}`:'',parts.bestOf?`Bo${parts.bestOf}`:''].filter(Boolean).join(' · '):(parts.bestOf?`Bo${parts.bestOf}`:'');
- const maps=parts.map&&parts.maps.length>0&&live?`<span class="maps num" aria-label="счёт на карте ${parts.mapNumber}"><span>${parts.map[0]}</span><span>${parts.map[1]}</span></span>`:'<span class="maps"></span>';
- return `<div class="score-col${changed?' changed':''}" title="${esc(parts.text)}" aria-label="счёт ${esc(parts.text)}">${maps}<span class="series num${changed?' changed':''}"><span>${parts.series[0]}</span><span>${parts.series[1]}</span></span>${status?`<span class="status">${esc(status)}</span>`:''}</div>`;
+ const d=scoreOf(e).display;
+ if(!d.series)return `<div class="score-col"><span class="score-text${changed?' changed':''}">${esc(d.text||'—')}</span></div>`;
+ const status=[live&&d.current>=0&&d.maps.length>1?`Карта ${d.current+1}`:'',d.bestOf?`Bo${d.bestOf}`:''].filter(Boolean).join(' · ');
+ return `<div class="score-col${changed?' changed':''}" title="${esc(d.text)}" aria-label="счёт ${esc(d.text)}"><span class="series num${changed?' changed':''}">${d.series[0]}:${d.series[1]}</span>${mapsLine(d,live)}${status?`<span class="status">${esc(status)}</span>`:''}</div>`;
 }
 function teamsCell(e,{meta=true}={}){
  const l1=teamLogo(e,1),l2=teamLogo(e,2),logo=url=>url?`<img class="team-logo" src="${esc(url)}" alt="" aria-hidden="true" width="18" height="18" loading="lazy" decoding="async">`:'<span class="logo-ph"></span>';
@@ -249,7 +250,8 @@ function matchRow(e,view,{meta=true,books=[]}={}){
  let tail='';
  if(odds){const quotes=quotesOf(e,books),best=bestFor(quotes),byBook=new Map(refs(e).map(r=>[r.source,r]));tail=`<div class="prices">${books.map(b=>priceCell(e,b,byBook.get(b),quotes[b],best)).join('')}</div>`;}
  else tail=sourcesCell(e,view);
- return `<article class="match cols${odds?'':' no-odds'}" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}"><div class="fav"><button class="icon-btn" data-fav aria-pressed="${fav}" aria-label="${fav?'Убрать из избранного':'В избранное'}">${starIcon(fav)}</button></div>${teamsCell(e,{meta})}${scoreCell(e,view)}${tail}<span class="go" aria-hidden="true">›</span></article>`;
+ const seen=MatchFormat.firstSeen(refs(e)),seenTitle=seen.length?'Появился: '+seen.map(x=>`${providerName(x.source)} ${stamp(x.at,true)}`).join(', '):'';
+ return `<article class="match cols${odds?'':' no-odds'}" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}"${seenTitle?` title="${esc(seenTitle)}"`:''}><div class="fav"><button class="icon-btn" data-fav aria-pressed="${fav}" aria-label="${fav?'Убрать из избранного':'В избранное'}">${starIcon(fav)}</button></div>${teamsCell(e,{meta})}${scoreCell(e,view)}${tail}<span class="go" aria-hidden="true">›</span></article>`;
 }
 function listHeader(view,books){
  const odds=!prefs.hideOdds&&books.length&&['live','prematch'].includes(view);
@@ -399,7 +401,13 @@ function renderLine(force){
  }else{
   const games=new Map();for(const e of sorted){const g=norm(e.category);if(!games.has(g))games.set(g,{name:e.category||'Esports',leagues:new Map(),count:0});const game=games.get(g),lk=g+'|'+norm(leagueTitle(e));game.count++;if(!game.leagues.has(lk))game.leagues.set(lk,[]);game.leagues.get(lk).push(e);}
   const filtered=!!(filters('prematch').search||prefs.onlyFavorites);
-  html+=[...games].sort((a,b)=>a[1].name.localeCompare(b[1].name)).map(([gk,g])=>`<section data-group="game:${esc(gk)}"><div class="group-head">${gameIcon(g.name)}<span>${esc(g.name)}</span><span class="n">${plural(g.count,['матч','матча','матчей'])}</span></div>${[...g.leagues].sort((a,b)=>Number(a[1][0].startAt||0)-Number(b[1][0].startAt||0)||alphabet.compare(leagueTitle(a[1][0]),leagueTitle(b[1][0]))).map(([lk,list])=>{const open=filtered||!lineClosed.has(lk)||list.some(e=>String(e.id)===selectedId('prematch')),e=list[0],key=e.leagueKey||LeagueModel.id(refs(e)[0]),lf=prefs.favorites.includes(key);return `<details class="group" data-group="l:${esc(lk)}" ${open?'open':''}><summary class="group-head" style="top:31px;background:var(--surface);font-weight:500"><span class="caret" aria-hidden="true">›</span><span class="league" style="color:var(--text)">${esc(leagueTitle(e))}</span><span class="n">${list.length} · с ${esc(stamp(e.startAt,true))}</span><button class="icon-btn" data-league-fav="${esc(key)}" aria-pressed="${lf}" aria-label="${lf?'Убрать лигу из избранного':'Лига в избранное'}">${starIcon(lf)}</button></summary>${open?take(list).map(x=>matchRow(x,'prematch',{meta:false,books})).join(''):''}</details>`;}).join('')}</section>`).join('');
+  // Game > league hierarchy: both levels collapse; a closed game renders only its header (with its count), a closed
+  // league only its summary. The state lives in prefs.lineCollapsed and survives every feed refresh.
+  const gameList=[...games].sort((a,b)=>alphabet.compare(a[1].name,b[1].name));
+  html+=`<div class="line-tools" data-group="line-tools"><span>${plural(gameList.length,['игра','игры','игр'])}</span><button type="button" class="btn ghost" data-line-games="open">Развернуть игры</button><button type="button" class="btn ghost" data-line-games="close">Свернуть игры</button></div>`;
+  html+=gameList.map(([gk,g])=>{const gameKey='game:'+gk,gameOpen=filtered||!lineClosed.has(gameKey)||[...g.leagues.values()].some(list=>list.some(e=>String(e.id)===selectedId('prematch')));
+   const leagues=gameOpen?[...g.leagues].sort((a,b)=>Number(a[1][0].startAt||0)-Number(b[1][0].startAt||0)||alphabet.compare(leagueTitle(a[1][0]),leagueTitle(b[1][0]))).map(([lk,list])=>{const open=filtered||!lineClosed.has(lk)||list.some(e=>String(e.id)===selectedId('prematch')),e=list[0],key=e.leagueKey||LeagueModel.id(refs(e)[0]),lf=prefs.favorites.includes(key);return `<details class="group league-group" data-group="l:${esc(lk)}" ${open?'open':''}><summary class="group-head league-head"><span class="caret" aria-hidden="true">›</span><span class="league">${esc(leagueTitle(e))}</span><span class="n">${list.length} · с ${esc(stamp(e.startAt,true))}</span><button class="icon-btn" data-league-fav="${esc(key)}" aria-pressed="${lf}" aria-label="${lf?'Убрать лигу из избранного':'Лига в избранное'}">${starIcon(lf)}</button></summary>${open?take(list).map(x=>matchRow(x,'prematch',{meta:false,books})).join(''):''}</details>`;}).join(''):'';
+   return `<details class="group game-group" data-group="${esc(gameKey)}" ${gameOpen?'open':''}><summary class="group-head game-head"><span class="caret" aria-hidden="true">›</span>${gameIcon(g.name)}<span>${esc(g.name)}</span><span class="n">${g.leagues.size>1?plural(g.leagues.size,['лига','лиги','лиг'])+' · ':''}${plural(g.count,['матч','матча','матчей'])}</span></summary>${leagues}</details>`;}).join('');
  }
  morphInto(el,html);
  updateListHead('prematch',rows.length);
@@ -458,9 +466,9 @@ function renderResults(force){
 }
 function lastRemoval(r){const t=(r.timeline||[]).filter(c=>c.type==='removed'&&c.phase==='live').map(c=>Number(c.at)||0),l=t.length?[]:(r.lifecycle||[]).filter(c=>c.type==='removed').map(c=>Number(c.at)||0);return Math.max(0,...t,...l,Number(r.removedAt||0))||Number(r.endedAt||0);}
 function resultRow(e){
- const sel=selectedId('results')===String(e.id),fav=matchFavorite(e),parts=MatchFormat.scoreParts(refs(e)[0]||e,e),verified=refs(e).some(r=>r.resultVerified),ended=Math.max(0,...refs(e).map(lastRemoval));
- const score=parts.series?`<span class="fs num">${parts.series[0]} : ${parts.series[1]}</span>`:`<span class="fs num">${esc(parts.text||'—')}</span>`;
- const maps=parts.maps.length>1?`<span class="maps-line num">${esc(parts.maps.filter(m=>m[0]||m[1]).map(m=>m.join(':')).join(', '))}</span>`:'';
+ const sel=selectedId('results')===String(e.id),fav=matchFavorite(e),d=MatchFormat.canonicalScore(refs(e)).best||MatchFormat.displayScore(refs(e)[0]||e,e),verified=refs(e).some(r=>r.resultVerified),ended=Math.max(0,...refs(e).map(lastRemoval));
+ const score=d.series?`<span class="fs num">${d.series[0]} : ${d.series[1]}</span>`:`<span class="fs num">${esc(d.text||'—')}</span>`;
+ const maps=d.series?mapsLine(d,false):'';
  return `<article class="match cols results" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}"><div class="fav"><button class="icon-btn" data-fav aria-pressed="${fav}" aria-label="${fav?'Убрать из избранного':'В избранное'}">${starIcon(fav)}</button></div>${teamsCell(e)}<div class="final">${score}${maps}<span class="${verified?'verified':'unverified'}">${verified?'✓ подтверждён':'не подтверждён'}</span></div><div class="when"><b>${esc(stamp(ended,false))}</b>${esc(stamp(e.startAt,true))} начало</div>${sourcesCell(e,'results')}<span class="go" aria-hidden="true">›</span></article>`;
 }
 
@@ -649,7 +657,7 @@ setInterval(()=>{if(tab==='live'&&!document.hidden&&oddsWatchIds.length)pushOdds
 const nav={step:0,frame:0,rows:null,detailTimer:0,detailId:''};
 function navRows(){
  if(nav.rows&&nav.rows.view===tab&&nav.rows.el===viewEl(tab))return nav.rows.list;
- const el=viewEl(tab),list=[...el.querySelectorAll('article.match,tr[data-id]')].filter(n=>!n.closest('details:not([open])'));
+ const el=viewEl(tab),list=[...el.querySelectorAll('article.match,tr[data-id],details.group>summary')].filter(n=>!(n.localName==='summary'?n.parentElement.parentElement:n).closest('details:not([open])'));
  nav.rows={view:tab,el,list};return list;
 }
 function invalidateNav(){nav.rows=null;}
@@ -667,11 +675,11 @@ function queueNav(step,repeat){
  nav.step+=step;if(nav.frame)return;
  nav.frame=requestAnimationFrame(()=>{
   nav.frame=0;const rows=navRows();if(!rows.length){nav.step=0;return;}
-  let index=rows.indexOf(document.activeElement?.closest?.('[data-id]'));
-  if(index<0||!rows[index].isConnected){invalidateNav();const fresh=navRows();index=fresh.indexOf(document.activeElement?.closest?.('[data-id]'));if(index<0)index=nav.step>0?-1:fresh.length;}
+  const at=()=>document.activeElement?.closest?.('[data-id],summary');let index=rows.indexOf(at());
+  if(index<0||!rows[index].isConnected){invalidateNav();const fresh=navRows();index=fresh.indexOf(at());if(index<0)index=nav.step>0?-1:fresh.length;}
   const list=navRows(),next=list[Math.max(0,Math.min(list.length-1,index+nav.step))];nav.step=0;if(!next)return;
   next.focus({preventScroll:true});revealRow(next);
-  if(DetailPanel.isOpen()){markSelected(next.dataset.id);selectedIds.set(tab,next.dataset.id);nav.detailId=next.dataset.id;clearTimeout(nav.detailTimer);nav.detailTimer=setTimeout(flushNavDetail,repeat?220:60);}
+  if(DetailPanel.isOpen()&&next.dataset.id){markSelected(next.dataset.id);selectedIds.set(tab,next.dataset.id);nav.detailId=next.dataset.id;clearTimeout(nav.detailTimer);nav.detailTimer=setTimeout(flushNavDetail,repeat?220:60);}
  });
 }
 function flushNavDetail(){clearTimeout(nav.detailTimer);nav.detailTimer=0;const id=nav.detailId;nav.detailId='';if(id&&DetailPanel.isOpen()&&DetailPanel.currentId()!==id)selectMatch(id);}
@@ -686,6 +694,7 @@ document.addEventListener('keydown',event=>{
  if(event.target.closest('#tabs')&&['ArrowLeft','ArrowRight'].includes(event.key)){const pos=VIEWS.indexOf(tab),next=VIEWS[(pos+(event.key==='ArrowRight'?1:-1)+VIEWS.length)%VIEWS.length];event.preventDefault();switchTab(next,{focus:true});return;}
  if(!['ArrowDown','ArrowUp','Enter'].includes(event.key)||!event.target.closest('#content'))return;
  const current=event.target.closest('[data-id]');
+ if(event.key==='Enter'&&event.target.closest('summary'))return;   // native: toggles the game/league
  if(event.key==='Enter'){if(current&&!event.target.closest('button')){event.preventDefault();flushNavDetail();selectMatch(current.dataset.id,{focusPanel:true});}return;}
  event.preventDefault();queueNav(event.key==='ArrowDown'?1:-1,event.repeat);
 });
@@ -699,6 +708,9 @@ $('content').addEventListener('click',event=>{
  if(t.closest('[data-more-results]')){resultsLimit+=RESULTS_PAGE_SIZE;loadResults(true);return;}
  if(t.closest('[data-more-history]')){showMoreHistory();return;}
  if(t.closest('[data-line-more]')){lineSchedulePages++;renderView('prematch',true);return;}
+ const games=t.closest('[data-line-games]');if(games){const open=games.dataset.lineGames==='open',keys=[...viewEl('prematch').querySelectorAll('details.game-group')].map(d=>d.dataset.group);
+  for(const k of keys){if(open)lineClosed.delete(k);else lineClosed.add(k);}prefs.lineCollapsed=[...lineClosed].slice(-400);savePrefs();
+  for(const d of viewEl('prematch').querySelectorAll('details.game-group')){delete d.dataset.userToggled;d.open=open;}viewSignatures.delete('prematch');renderView('prematch',true);return;}
  const settingsLink=t.closest('[data-open-settings]');if(settingsLink){openSettings(settingsLink.dataset.openSettings);return;}
  const lf=t.closest('[data-league-fav]');if(lf){event.preventDefault();event.stopPropagation();const k=lf.dataset.leagueFav;prefs.favorites=prefs.favorites.includes(k)?prefs.favorites.filter(x=>x!==k):[...prefs.favorites,k];savePrefs();markDirty();return;}
  const row=t.closest('[data-id]');if(!row)return;
@@ -706,7 +718,7 @@ $('content').addEventListener('click',event=>{
  const cell=t.closest('[data-book]');selectMatch(row.dataset.id);
  if(cell&&DetailPanel.isOpen()){const e=projected(tab,findRow(tab,row.dataset.id));if(e)DetailPanel.show(e,detailView(tab,e),{source:cell.dataset.book});}
 });
-$('content').addEventListener('toggle',event=>{const d=event.target;if(!d.matches?.('details[data-group]'))return;invalidateNav();const key=d.dataset.group.slice(2);if(d.open)lineClosed.delete(key);else lineClosed.add(key);prefs.lineCollapsed=[...lineClosed].slice(-400);savePrefs();d.dataset.userToggled='1';viewSignatures.delete('prematch');if(d.open&&!d.querySelector('article'))renderView('prematch',true);},true);
+$('content').addEventListener('toggle',event=>{const d=event.target;if(!d.matches?.('details[data-group]'))return;invalidateNav();const g=d.dataset.group,key=g.startsWith('l:')?g.slice(2):g;if(d.open)lineClosed.delete(key);else lineClosed.add(key);prefs.lineCollapsed=[...lineClosed].slice(-400);savePrefs();d.dataset.userToggled='1';viewSignatures.delete('prematch');if(d.open&&!d.querySelector('article,details'))renderView('prematch',true);},true);
 for(const type of ['pointerover','focusin'])$('content').addEventListener(type,event=>{const row=event.target.closest?.('[data-id]');if(!row||!['live','prematch','compare'].includes(tab))return;clearTimeout(prefetchTimer);prefetchTimer=setTimeout(()=>{const e=findRow(tab,row.dataset.id);if(e)prefetchDetail(e,tab==='compare'?(e.inLive?'live':'prematch'):tab);},140);});
 $('content').addEventListener('pointerout',event=>{if(!event.relatedTarget?.closest?.('[data-id]'))clearTimeout(prefetchTimer);});
 $('drawerBackdrop').addEventListener('click',()=>DetailPanel.hide());

@@ -541,6 +541,40 @@ scenario('E24', 'P1', 'keyboard: holding ArrowDown over 200 LIVE matches stays r
 
 // A feed update (one price/score) re-renders the LIVE list: measure the full render of 200 rows and check that rows
 // keep their DOM nodes (focus/hover/scroll survive) and the shell is not rebuilt.
+scenario('E27', 'X1', 'Line: game > league hierarchy with counts; a collapsed game stays collapsed across refreshes and a reload; expand/collapse all; arrows walk the headers', async () => {
+  let page = await openApp();
+  try {
+    await clickTab(page, 'prematch');
+    await until(async () => (await page.locator('#content .list[data-view="prematch"] details.game-group').count()) >= 1, { what: 'game groups' });
+    if ((await page.locator('#content .list[data-view="prematch"] [data-line-mode], #lineMode button[aria-pressed="true"]').first().getAttribute('data-line-mode')) === 'schedule') await page.click('#lineMode [data-line-mode="leagues"]');
+    const game = page.locator('#content .list[data-view="prematch"] details.game-group').first(), key = await game.getAttribute('data-group');
+    const count = await game.locator(':scope > summary .n').textContent();
+    if (!/\d+ матч/.test(count || '')) throw new Error(`no match count on the game header: ${count}`);
+    await game.locator(':scope > summary').click(); await sleep(300);
+    const isOpen = () => page.evaluate((k) => document.querySelector(`#content .list[data-view="prematch"] details[data-group="${CSS.escape(k)}"]`)?.open, key);
+    if (await isOpen()) throw new Error('the game did not collapse');
+    await page.evaluate(() => { viewSignatures.delete('prematch'); renderView('prematch', true); });   // eslint-disable-line no-undef
+    await sleep(300);
+    if (await isOpen()) throw new Error('a refresh reopened the collapsed game');
+    await page.reload(); await page.waitForSelector('#tabs [data-tab="prematch"]'); await clickTab(page, 'prematch'); await sleep(800);
+    if (await isOpen()) throw new Error('the collapsed game reopened after a reload');
+    await page.click('[data-line-games="open"]'); await sleep(400);
+    const states = () => page.evaluate(() => [...document.querySelectorAll('#content .list[data-view="prematch"] details.game-group')].map((d) => d.open));
+    if ((await states()).some((o) => !o)) throw new Error('expand all left a game closed');
+    await page.click('[data-line-games="close"]'); await sleep(400);
+    if ((await states()).some((o) => o)) throw new Error('collapse all left a game open');
+    // keyboard over the headers: focus the first game header, ArrowDown moves to the next header, Enter toggles
+    await page.locator('#content .list[data-view="prematch"] details.game-group > summary').first().focus();
+    await page.keyboard.press('ArrowDown'); await sleep(150);
+    const focused = await page.evaluate(() => document.activeElement?.closest('details')?.dataset.group || document.activeElement?.className);
+    await page.keyboard.press('Enter'); await sleep(300);
+    const toggled = await page.evaluate(() => document.activeElement?.closest('details')?.open);
+    if (!toggled) throw new Error(`Enter on the focused header (${focused}) did not open it`);
+    await page.click('[data-line-games="open"]'); await sleep(300);
+    results.note = `game count "${count.trim()}", header nav ok`;
+  } finally { await page.close(); }
+});
+
 /* eslint-disable no-undef -- the page.evaluate bodies below run inside app.html and call its own globals */
 scenario('E25', 'P1', 'render: a LIVE feed update over 200 matches is cheap and keeps row and shell nodes', async () => {
   mockState.extraEvents = 200;

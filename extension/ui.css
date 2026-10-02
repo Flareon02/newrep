@@ -159,8 +159,8 @@ button,input,select,textarea{font:inherit;color:inherit}
 }
 
 /* columns shared by the header row and match rows */
-.cols{display:grid;align-items:center;column-gap:10px;grid-template-columns:28px minmax(200px,1fr) 104px repeat(var(--books,0),minmax(68px,96px)) 16px}
-.cols.no-odds{grid-template-columns:28px minmax(200px,1fr) 104px minmax(120px,auto) 16px}
+.cols{display:grid;align-items:center;column-gap:10px;grid-template-columns:28px minmax(200px,1fr) 124px repeat(var(--books,0),minmax(68px,96px)) 16px}
+.cols.no-odds{grid-template-columns:28px minmax(200px,1fr) 124px minmax(120px,auto) 16px}
 /* price cells are grouped for the narrow layout; in the column layout the group is transparent */
 .prices{display:contents}
 /* narrow list: teams + score on the first line, the bookmakers' prices on the second (each labelled) */
@@ -189,6 +189,14 @@ details.group>summary::-webkit-details-marker{display:none}
 details.group>summary .caret{transition:transform .15s;color:var(--muted)}
 details.group[open]>summary .caret{transform:rotate(90deg)}
 details.group{content-visibility:auto;contain-intrinsic-size:auto 400px}
+/* Line hierarchy: game > league > matches. Game headers stick under the column header, league headers under them. */
+.line-tools{display:flex;align-items:center;gap:6px;padding:6px var(--s4);border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--fs-xs)}
+.line-tools span{margin-right:auto}
+.line-tools .btn{min-height:26px;padding:0 10px;font-size:var(--fs-xs)}
+.game-head{top:31px;z-index:4}
+.league-head{top:65px;z-index:3;padding-left:calc(var(--s4) + 14px);background:var(--surface);font-weight:500}
+.league-head .league{color:var(--text)}
+details.game-group>summary:focus-visible,details.league-group>summary:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
 
 .match{position:relative;padding:8px var(--s4);border-bottom:1px solid var(--line);background:var(--surface);cursor:pointer;min-height:56px;outline:none}
 .match:hover{background:var(--surface-hover)}
@@ -205,10 +213,12 @@ details.group{content-visibility:auto;contain-intrinsic-size:auto 400px}
 .team .team-logo{width:18px;height:18px;flex:none;object-fit:contain;border-radius:3px}
 .team .logo-ph{width:18px;height:18px;flex:none}
 html.team-logos-off .team .team-logo,html.team-logos-off .team .logo-ph{display:none}
-.score-col{display:grid;grid-template-columns:auto 1fr;column-gap:10px;align-items:center;justify-content:end;text-align:right}
-.score-col .series{display:grid;gap:2px;font-weight:700;font-size:var(--fs-l);line-height:20px;color:var(--text)}
+.score-col{display:grid;justify-items:end;align-content:center;text-align:right;min-width:0}
+.score-col .maps-line{font-size:var(--fs-xs);line-height:15px;color:var(--text-2);white-space:normal;overflow-wrap:anywhere}
+.score-col .maps-line b,.detail-score .sub b{color:var(--text);font-weight:700}
+.score-col .series{font-weight:700;font-size:var(--fs-l);line-height:20px;color:var(--text);white-space:nowrap}
 .score-col .maps{display:grid;gap:2px;font-size:var(--fs-s);line-height:20px;color:var(--text-2)}
-.score-col .status{grid-column:1/3;font-size:var(--fs-xs);color:var(--muted);line-height:16px}
+.score-col .status{font-size:var(--fs-xs);color:var(--muted);line-height:16px}
 .score-col .changed{color:var(--accent-strong)}
 .score-text{font-weight:600;font-size:var(--fs-s);color:var(--text)}
 .start-col{text-align:right;font-size:var(--fs-s);color:var(--text-2)}

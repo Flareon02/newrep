@@ -81,18 +81,20 @@ const DetailPanel=(()=>{
  }
  function teamLine(name,logo){return `<div class="team">${logo?`<img class="team-logo" src="${esc(logo)}" alt="" aria-hidden="true" width="22" height="22" decoding="async">`:''}<span class="name">${esc(name)}</span></div>`;}
  function renderHead(){
-  const e=st.event,score=MatchFormat.scoreParts(ctx.scoreOf?ctx.scoreOf(e):e,e),live=st.view==='live'||e.inLive,ended=st.view==='results',fav=ctx.isFavorite(e);
+  const e=st.event,scored=ctx.scoreOf?ctx.scoreOf(e):e,d=scored.display||MatchFormat.displayScore(scored,e),live=st.view==='live'||e.inLive,ended=st.view==='results',fav=ctx.isFavorite(e);
+  const seen=MatchFormat.firstSeen(refs(e).filter(r=>ctx.bookVisible(r.source)));
   const status=[];
   if(live)status.push('<span class="chip live"><span class="dot bad" aria-hidden="true"></span>LIVE</span>');
   if(ended)status.push(`<span class="chip">${e.resultVerified||refs(e).some(r=>r.resultVerified)?'Результат подтверждён':'Завершён'}</span>`);
-  if(score.bestOf)status.push(`<span class="chip">Bo${score.bestOf}</span>`);
-  if(live&&score.mapNumber)status.push(`<span class="chip">Карта ${score.mapNumber}</span>`);
+  if(d.bestOf)status.push(`<span class="chip">Bo${d.bestOf}</span>`);
+  if(live&&d.current>=0&&d.maps.length>1)status.push(`<span class="chip">Карта ${d.current+1}</span>`);
   if(!live&&!ended&&e.startAt)status.push(`<span class="chip">Начало ${esc(ctx.stamp(e.startAt,true))}</span>`);
   if(live&&e.enteredLiveAt)status.push(`<span class="chip">В LIVE с ${esc(ctx.stamp(e.enteredLiveAt))}</span>`);
-  const big=score.series?`${score.series[0]} : ${score.series[1]}`:(score.text||'');
-  const sub=score.map&&score.maps.length>1?`Карта ${score.mapNumber}: ${score.map[0]}:${score.map[1]}`:'';
+  if(seen.length)status.push(`<span class="chip" title="${esc(seen.map(x=>ctx.providerName(x.source)+' '+ctx.stamp(x.at,true)).join(', '))}">Появился ${esc(ctx.stamp(seen[0].at,true))}</span>`);
+  const big=d.series?`${d.series[0]} : ${d.series[1]}`:(d.text||'');
+  const sub=d.series&&d.maps.length?'('+d.maps.map((m,i)=>i===d.current&&live?`<b>${m.join(':')}</b>`:m.join(':')).join(', ')+')':'';
   const html=`<div class="detail-top"><span class="crumbs">${ctx.gameIcon(e.category)}<span>${esc(e.category||'')}</span><span aria-hidden="true">·</span><span>${esc(ctx.leagueTitle(e))}</span></span><span class="actions"><button class="icon-btn" data-dp="fav" aria-pressed="${fav}" aria-label="${fav?'Убрать из избранного':'В избранное'}" title="${fav?'Убрать из избранного':'В избранное'}">${ctx.starIcon(fav)}</button><button class="icon-btn" data-dp="copy" aria-label="Копировать матч" title="Копировать матч"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/></svg></button><button class="icon-btn" data-dp="close" aria-label="Закрыть (Esc)" title="Закрыть (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span></div>
-  <div class="detail-match">${teamLine(e.team1,ctx.logo(e,1))}${big?`<div class="detail-score"><div class="big num">${esc(big)}</div>${sub?`<div class="sub num">${esc(sub)}</div>`:''}</div>`:''}${teamLine(e.team2,ctx.logo(e,2))}</div>
+  <div class="detail-match">${teamLine(e.team1,ctx.logo(e,1))}${big?`<div class="detail-score"><div class="big num">${esc(big)}</div>${sub?`<div class="sub num">${sub}</div>`:''}</div>`:''}${teamLine(e.team2,ctx.logo(e,2))}</div>
   <div class="detail-status">${status.join('')}</div>`;
   StableDOM.patch($('dpHead'),html);
  }
@@ -191,10 +193,13 @@ const DetailPanel=(()=>{
   const live=st.view==='live';
   const html=`<div class="detail-section" data-market-key="sources"><h3>Конторы</h3><table class="src-table"><thead><tr><th>Контора</th><th>Начало</th><th>${live?'В LIVE':st.view==='results'?'Окончание':'В линии'}</th><th class="num">Счёт</th></tr></thead><tbody>${rows.map(r=>{const url=ctx.eventUrl(r);return `<tr data-market-key="src:${esc(r.source)}"><td><span class="book-mark ${esc(r.source)}" aria-hidden="true"></span> <button class="link-btn" data-open-url="${esc(url)}" ${url?'':'disabled'} title="${url?'Открыть у букмекера':''}">${esc(ctx.providerName(r.source))}</button></td><td>${esc(ctx.stamp(r.startAt,true))}</td><td>${esc(ctx.stamp(live?r.enteredLiveAt:st.view==='results'?(r.endedAt||r.removedAt):r.firstPrematchAt,true,live))}</td><td class="num">${esc(r.scoreText||'—')}${st.view==='results'&&r.resultVerified?' <span class="verified">✓</span>':''}</td></tr>`;}).join('')}</tbody></table></div>
   <div class="detail-section" data-market-key="actions"><h3>Действия</h3><div class="row-actions">${['live','results','prematch'].includes(st.view)?'<button class="btn" data-dp="scores">История счёта</button>':''}${['live','prematch','results'].includes(st.view)&&!ctx.prefs().hideOdds?'<button class="btn" data-dp="timeline">История коэффициентов</button>':''}${ctx.generatorAvailable(e,st.view)?'<button class="btn" data-dp="generator">Генератор CS2</button>':''}<button class="btn" data-dp="copy">Копировать матч</button></div></div>
-  ${timeline(e)}`;
+  ${firstSeenSection(e)}${ctx.isAdmin?.()?scoreDiagnostics(e):''}${timeline(e)}`;
   if(body.dataset.kind!=='info'){body.dataset.kind='info';body.innerHTML='';}
   StableDOM.patch(body,html);
  }
+ function firstSeenSection(e){const seen=MatchFormat.firstSeen(refs(e).filter(r=>ctx.bookVisible(r.source)));if(!seen.length)return '';return `<div class="detail-section" data-market-key="first-seen"><h3>Появился у контор</h3><table class="src-table"><tbody>${seen.map(x=>`<tr><td><span class="book-mark ${esc(x.source)}" aria-hidden="true"></span> ${esc(ctx.providerName(x.source))}</td><td class="num">${esc(ctx.stamp(x.at,true))}</td></tr>`).join('')}</tbody></table></div>`;}
+ // Administrators only: the score each bookmaker reports and whether they differ.
+ function scoreDiagnostics(e){const m=ctx.scoreOf?ctx.scoreOf(e).scoreModel:null;if(!m?.providers?.length)return '';return `<div class="detail-section" data-market-key="score-diag"><h3>Счёт по конторам${m.disagree?' <span class="status-text warn">расходится</span>':''}</h3><table class="src-table"><tbody>${m.providers.map(p=>`<tr><td>${esc(ctx.providerName(p.source))}${p===m.best?' ✓':''}</td><td class="num">${esc(p.text)}</td></tr>`).join('')}</tbody></table></div>`;}
  function timeline(e){const items=refs(e).filter(r=>ctx.bookVisible(r.source)).flatMap(r=>(r.timeline||r.lifecycle||[]).map(c=>({...c,source:r.source}))).sort((a,b)=>b.at-a.at).slice(0,30);if(!items.length)return '';return `<div class="detail-section" data-market-key="timeline"><h3>Появление у контор</h3><table class="src-table"><tbody>${items.map(c=>`<tr><td>${esc(ctx.stamp(c.at,true,true))}</td><td>${esc(ctx.providerName(c.source))}</td><td>${c.phase==='results'?'финальный счёт подтверждён':c.type==='entered'?(c.phase==='prematch'?'появился в линии':'появился в LIVE'):(c.phase==='prematch'?'снят с линии':'снят с LIVE')}</td></tr>`).join('')}</tbody></table></div>`;}
 
  function statsModule(e){const info=StatisticsClient.info(e);return info?.provider==='dota2'?DotaStatsPanel:info?.provider==='cs2'?Cs2Panel:null;}
