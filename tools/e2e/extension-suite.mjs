@@ -98,7 +98,7 @@ function startServer() {
   child.stdout.on('data', (d) => { serverLog += d; }); child.stderr.on('data', (d) => { serverLog += d; });
 }
 const stopServer = async (signal = 'SIGTERM') => { if (!child) return; const c = child; child = null; c.kill(signal); await new Promise((r) => c.once('exit', r)); };
-const serverHealth = async (base = `http://127.0.0.1:${serverPort}`) => { try { return await (await fetch(base + '/health', { signal: AbortSignal.timeout(4000) })).json(); } catch { return null; } };
+const serverHealth = async (base = `http://127.0.0.1:${serverPort}`) => { try { return await (await fetch(base + '/health', { headers: { authorization: 'Bearer ' + TOKEN }, signal: AbortSignal.timeout(4000) })).json(); } catch { return null; } };
 
 // ---------------------------------------------------------------- browser helpers ---------------------------------------
 let context, extensionId, directBase, proxyBase;
@@ -121,7 +121,7 @@ async function openApp() {
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|net::ERR/.test(m.text())) errors.push('console: ' + m.text()); });
   await page.goto(`chrome-extension://${extensionId}/app.html`);
   page.errors = errors;
-  await page.waitForSelector('#tabs [data-tab="live"]');
+  await page.waitForSelector('#tabs [data-tab="live"]', { state: 'attached' });
   if (await page.locator('#tabs [data-tab="live"]').isVisible()) await page.click('#tabs [data-tab="live"]');
   return page;
 }
@@ -327,7 +327,7 @@ scenario('E14', 'X9', '401 from the server: the server message reaches the user 
   await until(async () => (await cards(page)) >= 12, { what: 'LIVE cards' });
   await setServer('');
   const msg = await page.evaluate(async () => { try { await request('/api/ui/odds-watch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"ids":[]}' }); return 'no error'; } catch (e) { return e.message; } });
-  if (!/токен/i.test(msg)) throw new Error('unexpected message: ' + msg);
+  if (!/ключ доступа/i.test(msg) || /https?:|Bearer|API_TOKEN/i.test(msg)) throw new Error('unexpected message: ' + msg);
   await setServer(TOKEN);
   const ok = await page.evaluate(async () => { try { await request('/api/ui/odds-watch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"ids":[]}' }); return 'ok'; } catch (e) { return e.message; } });
   if (ok !== 'ok') throw new Error('token not accepted after being restored: ' + ok);
@@ -376,41 +376,42 @@ scenario('E17', 'X2', 'SSE stream goes silent (half-dead connection): the worker
   await page.close();
 });
 
-scenario('E18', 'X1 X2 X4', 'LIVE odds provider GGBET <-> DataBet: requests follow the choice, providers never mix, the choice survives a reopen, an unavailable provider is explicit', async () => {
+scenario('E18', 'X1 X2 X4', 'LIVE odds provider GGBET <-> DataBet lives in Settings (Авто/GGBET/DataBet): requests follow the choice, providers never mix, the choice survives a reopen, an unavailable provider is explicit and non-technical', async () => {
   const shots = process.env.E2E_SCREENSHOTS || '';
   const shot = async (page, name) => { if (shots) await page.screenshot({ path: path.join(shots, name) }); };
   const rowSources = (page) => page.$$eval('#content .list[data-view="live"] article.match [data-source-ref]', (rows) => [...new Set(rows.map((r) => r.dataset.sourceRef.split(':')[0]))]);
-  const pressed = (page) => page.evaluate(() => ({ ggbet: document.getElementById('ggbet').getAttribute('aria-pressed'), databet: document.getElementById('databet').getAttribute('aria-pressed') }));
+  const selected = (page) => page.evaluate('OddsProvider.selected(prefs)');
   const notice = (page) => page.evaluate(() => { const n = document.getElementById('providerNotice'); return n && !n.hidden ? n.textContent : ''; });
+  const setMode = async (page, mode) => { await page.click('#settingsButton'); await sleep(400); await page.click('[data-settings-section="sources"]'); await sleep(400); await page.click(`[data-odds-mode="${mode}"]`); await sleep(800); await page.click('#settingsDone'); await sleep(600); };
   let page = await openApp();
   await until(async () => (await cards(page)) >= 1, { what: 'LIVE cards' });
-  if ((await pressed(page)).databet === 'true') { await page.click('#ggbet'); await sleep(1500); }
-  await until(async () => (await pressed(page)).ggbet === 'true', { what: 'GGBET selected' });
+  if (await page.locator('#oddsSource, #ggbet, #databet').count()) throw new Error('the GGBET/DataBet switch is still on the main screen');
+  await until(async () => (await selected(page)) === 'ggbet', { what: 'Auto picks GGBET (DataBet is disabled on the local server)' });
   await until(async () => !(await rowSources(page)).includes('databet'), { what: 'no DataBet rows while GGBET is selected' });
   await shot(page, 'provider-ggbet-selected.png');
-  // Switch to DataBet.
+  // Fixed choice in Settings: DataBet.
   proxyState.liveProviders.length = 0; proxyState.streamProviders.length = 0;
-  await page.click('#databet');
-  await until(async () => (await pressed(page)).databet === 'true' && (await pressed(page)).ggbet === 'false', { what: 'DataBet selected' });
+  await setMode(page, 'databet');
+  await until(async () => (await selected(page)) === 'databet', { what: 'DataBet selected' });
   await until(async () => remote || (proxyState.liveProviders.includes('databet') && proxyState.streamProviders.includes('databet')), { what: 'LIVE feed and stream requested for DataBet' });
   if (!remote && proxyState.liveProviders.some((p) => p !== 'databet')) throw new Error('a LIVE request after the switch did not name DataBet: ' + proxyState.liveProviders.join(','));
   await until(async () => (await cards(page)) >= 1, { what: 'LIVE cards after the switch' });
   await until(async () => !(await rowSources(page)).includes('ggbet'), { what: 'no GGBET rows while DataBet is selected' });
-  // Staging: DataBet rows from the real feed, or (when its upstream is down) the explicit "unavailable" notice.
   if (remote) await until(async () => (await rowSources(page)).includes('databet') || /DataBet временно недоступен/.test(await notice(page)), { timeout: 30000, what: 'DataBet rows or the explicit DataBet-unavailable notice' });
   else await until(async () => /DataBet временно недоступен/.test(await notice(page)), { what: 'explicit "DataBet unavailable" notice (DataBet is disabled on the local server)' });
-  // A provider outage is not a server outage: the server banner stays hidden and the other bookmakers keep their rows.
+  const text = await notice(page);
+  if (/proxy|прокси|CZECH|HTTP|ECONN|token|https?:/i.test(text)) throw new Error('technical reason shown to the user: ' + text);
   if (await page.evaluate(() => !document.getElementById('banner').hidden)) throw new Error('provider outage shown as a server outage');
   if ((await cards(page)) < 1) throw new Error('rows vanished while the provider is unavailable');
   await shot(page, remote ? 'provider-databet-selected.png' : 'provider-databet-unavailable.png');
   // The choice survives closing and reopening the extension page.
   await page.close(); page = await openApp();
-  await until(async () => (await pressed(page)).databet === 'true', { what: 'DataBet still selected after reopen' });
-  const stored = await swEval(async () => (await chrome.storage.local.get('prefs')).prefs?.liveOddsProvider);
-  if (stored !== 'databet') throw new Error('stored provider is ' + stored);
-  // Switch back to GGBET from the notice / selector.
-  if (!remote && await notice(page)) await page.click('#providerNotice [data-switch-provider="ggbet"]'); else await page.click('#ggbet');
-  await until(async () => (await pressed(page)).ggbet === 'true' && (await pressed(page)).databet === 'false', { what: 'GGBET selected again' });
+  await until(async () => (await selected(page)) === 'databet', { what: 'DataBet still selected after reopen' });
+  const stored = await swEval(async () => (await chrome.storage.local.get('prefs')).prefs);
+  if (stored?.liveOddsProvider !== 'databet' || stored?.liveOddsMode !== 'databet') throw new Error('stored provider is ' + stored?.liveOddsProvider + '/' + stored?.liveOddsMode);
+  // Back to Auto: the working feed (GGBET here) is chosen again.
+  await setMode(page, 'auto');
+  await until(async () => (await selected(page)) === 'ggbet', { what: 'Auto returns to GGBET' });
   await until(async () => !(await rowSources(page)).includes('databet') && !/DataBet временно недоступен/.test(await notice(page)), { what: 'GGBET view without DataBet rows or the DataBet notice' });
   if (remote) await until(async () => (await rowSources(page)).includes('ggbet') || /GGBET временно недоступен/.test(await notice(page)), { timeout: 30000, what: 'GGBET rows or the explicit GGBET-unavailable notice' });
   if (page.errors.length) throw new Error(page.errors.join(' | '));
@@ -608,6 +609,160 @@ scenario('E28', 'X1', 'Comparison: forks sort by arbitrage % numerically, both d
   } finally { await page.close(); }
 });
 
+// Users and capabilities (local server only: it creates and deletes users through the admin API).
+const adminApi = async (route, body, token = TOKEN) => {
+  const res = await fetch(`http://127.0.0.1:${serverPort}${route}`, { method: body ? 'POST' : 'GET', headers: { authorization: 'Bearer ' + token, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(`${route} -> ${res.status}`);
+  return json;
+};
+const useToken = async (token) => { await setServer(token); await swEval(async () => { await chrome.storage.local.remove('entitlements9'); }); };
+const visibleTabs = (page) => page.$$eval('#tabs [data-tab]', (bs) => bs.filter((b) => !b.hidden && b.offsetParent).map((b) => b.dataset.tab));
+const settingsSectionsShown = (page) => page.$$eval('[data-settings-section]', (bs) => bs.map((b) => b.dataset.settingsSection));
+
+scenario('E29', 'X1 S1', 'capabilities: a new user sees nothing; granted sections/bookmakers appear without reinstall; normal settings have no admin parts; the admin edits rights in Settings → Пользователи', async () => {
+  if (remote) { results.skip = 'creates users: local server only'; return; }
+  const shots = process.env.E2E_SCREENSHOTS || '';
+  const created = await adminApi('/api/admin/users', { name: 'E2E Viewer' });
+  const id = created.user.id;
+  let page;
+  try {
+    if (created.user.capabilities.length) throw new Error('a new user starts with rights: ' + created.user.capabilities.join(','));
+    await useToken(created.token);
+    page = await openApp();
+    await until(async () => /Нет доступных разделов/.test(await page.textContent('#content')), { what: 'the "no sections" state for a user without rights' });
+    if ((await visibleTabs(page)).length) throw new Error('tabs shown without rights: ' + (await visibleTabs(page)).join(','));
+    // Granted on the server: LIVE with Astek only. Applied on the next check, no reinstall.
+    await adminApi('/api/admin/users/' + id, { capabilities: ['live.view', 'provider.astek', 'odds.live'] });
+    await page.evaluate(() => loadEntitlements());
+    await until(async () => (await visibleTabs(page)).join() === 'live', { what: 'only the LIVE tab' });
+    await until(async () => (await cards(page)) >= 1, { what: 'LIVE rows for the user' });
+    const sources = await page.$$eval('#content .list[data-view="live"] [data-source-ref]', (rows) => [...new Set(rows.map((r) => r.dataset.sourceRef.split(':')[0]))]);
+    if (sources.some((s) => s !== 'astek')) throw new Error('bookmakers without rights shown: ' + sources.join(','));
+    await page.click('#settingsButton'); await sleep(500);
+    const sections = await settingsSectionsShown(page);
+    if (sections.some((s) => ['diagnostics', 'users'].includes(s))) throw new Error('admin settings shown to a user: ' + sections.join(','));
+    await page.click('[data-settings-section="sources"]'); await sleep(400);
+    if (await page.locator('[data-odds-mode]').count()) throw new Error('GGBET/DataBet choice shown without those bookmakers');
+    if (shots) await page.screenshot({ path: path.join(shots, 'caps-settings-user.png') });
+    await page.click('#settingsDone'); await sleep(300);
+    // Revoked: gone at once.
+    await adminApi('/api/admin/users/' + id, { capabilities: [] });
+    await page.evaluate(() => loadEntitlements());
+    await until(async () => !(await visibleTabs(page)).length && /Нет доступных разделов/.test(await page.textContent('#content')), { what: 'sections gone after the rights are revoked' });
+    if (page.errors.length) throw new Error(page.errors.join(' | '));
+    await page.close(); page = null;
+    // The administrator grants a right in the editor.
+    await useToken(TOKEN);
+    page = await openApp();
+    await page.click('#settingsButton'); await sleep(500);
+    if (!(await settingsSectionsShown(page)).includes('users')) throw new Error('no Users section for the administrator');
+    await page.click('[data-settings-section="users"]');
+    await page.waitForSelector(`[data-admin-user="${id}"]`, { timeout: 15000 });
+    await page.click(`[data-admin-user="${id}"]`);
+    await page.waitForSelector('[data-admin-pick="prematch.view"]');
+    await page.check('[data-admin-pick="prematch.view"]'); await page.check('[data-admin-pick="provider.fonbet"]');
+    await page.click('[data-admin="enable"]');
+    if (shots) await page.screenshot({ path: path.join(shots, 'caps-admin-editor.png') });
+    await page.click('[data-admin="save"]');
+    await until(async () => { const u = (await adminApi('/api/admin/users')).users.find((x) => x.id === id); return u && u.capabilities.slice().sort().join() === 'prematch.view,provider.fonbet'; }, { what: 'rights saved on the server' });
+    await page.click('[data-admin="disable-all"]'); await page.click('[data-admin="save"]');
+    await until(async () => !(await adminApi('/api/admin/users')).users.find((x) => x.id === id)?.capabilities.length, { what: '"Disable all" saved' });
+    if (page.errors.length) throw new Error(page.errors.join(' | '));
+  } finally {
+    await page?.close().catch(() => {});
+    await useToken(TOKEN).catch(() => {});
+    await adminApi('/api/admin/users/' + id + '/delete', {}).catch(() => {});
+  }
+});
+
+scenario('E30', 'X1', 'match detail: a click inside keeps it, another row switches it, Escape / an outside click / the drawer backdrop close it', async () => {
+  const page = await openApp();
+  const isOpen = () => page.evaluate(() => DetailPanel.isOpen());
+  const rows = () => page.locator('#content .list[data-view="live"] article.match');
+  const openFirst = async () => { await rows().first().click(); await until(isOpen, { what: 'detail open' }); await sleep(400); };
+  try {
+    await until(async () => (await cards(page)) >= 2, { what: 'rows' });
+    await openFirst();
+    const first = await page.evaluate(() => String(DetailPanel.currentId()));
+    await page.click('#dpTabs [data-dp-tab]'); await page.click('#detailPane', { position: { x: 30, y: 200 } }); await sleep(300);
+    if (!(await isOpen())) throw new Error('a click inside the detail closed it');
+    await rows().nth(1).click(); await sleep(500);
+    if (!(await isOpen()) || (await page.evaluate(() => String(DetailPanel.currentId()))) === first) throw new Error('another row did not switch the detail');
+    await page.keyboard.press('Escape');
+    await until(async () => !(await isOpen()), { what: 'Escape closes' });
+    // A short list leaves empty space under the rows; a click there (not a row, control or header) closes the detail.
+    const name = (await rows().first().locator('.team .name').first().textContent()).trim();
+    await page.fill('#search', name); await sleep(600);
+    await openFirst();
+    const spot = await page.evaluate(() => { const list = document.querySelector('#content .list[data-view="live"]'), box = list.getBoundingClientRect(), right = box.left + list.clientWidth - 4; for (let y = box.bottom - 6; y > box.top + 40; y -= 12) for (const x of [box.left + 8, (box.left + right) / 2, right]) { const el = document.elementFromPoint(x, y); if (el && el.closest('#listPane') && !el.closest('[data-id],button,a,input,select,label,summary,.group-head,.col-head,.list-head,[role="button"]')) return { x, y }; } return null; });
+    if (!spot) throw new Error('no empty list area to click');
+    const target = await page.evaluate(({ x, y }) => { const el = document.elementFromPoint(x, y); return el.tagName + '.' + el.className; }, spot);
+    await page.mouse.click(spot.x, spot.y);
+    await until(async () => !(await isOpen()), { timeout: 5000, what: `an outside click closes (clicked ${target} at ${Math.round(spot.x)},${Math.round(spot.y)})` });
+    await page.fill('#search', ''); await sleep(400);
+    await page.setViewportSize({ width: 900, height: 800 }); await sleep(300);
+    await openFirst();
+    if (await page.locator('#drawerBackdrop').isHidden()) throw new Error('no backdrop under the drawer');
+    await page.mouse.click(20, 500);
+    await until(async () => !(await isOpen()), { what: 'the backdrop closes' });
+    if (page.errors.length) throw new Error(page.errors.join(' | '));
+  } finally { await page.setViewportSize({ width: 1360, height: 860 }).catch(() => {}); await page.close(); }
+});
+
+scenario('E31', 'X1', 'screenshot matrix (narrow/medium/wide): LIVE, Prematch collapsed/expanded, Comparison, match detail, detail + statistics, Settings of a user, the admin user editor', async () => {
+  const shots = process.env.E2E_SCREENSHOTS || '';
+  if (!shots) { results.skip = 'set E2E_SCREENSHOTS=<dir>'; return; }
+  const widths = [['narrow', 390, 800], ['medium', 900, 820], ['wide', 1440, 900]];
+  const notes = [];
+  const user = remote ? null : await adminApi('/api/admin/users', { name: 'E2E Screens', capabilities: ['live.view', 'prematch.view', 'compare.view', 'results.view', 'provider.astek', 'provider.fonbet', 'odds.live', 'odds.prematch', 'statistics.view', 'favorites'] });
+  let page = await openApp();
+  try {
+    await until(async () => (await cards(page)) >= LIVE_MIN, { what: 'LIVE rows' });
+    for (const [label, width, height] of widths) {
+      const shot = (name) => page.screenshot({ path: path.join(shots, `${label}-${name}.png`) });
+      await page.setViewportSize({ width, height }); await sleep(400);
+      await clickTab(page, 'live'); await sleep(500); await shot('live');
+      await clickTab(page, 'prematch'); await page.waitForSelector('[data-line-games="close"]', { timeout: 30000 });
+      await page.click('[data-line-games="close"]'); await sleep(400); await shot('prematch-collapsed');
+      await page.click('[data-line-games="open"]'); await sleep(400); await shot('prematch-expanded');
+      await clickTab(page, 'compare'); await sleep(1200); await shot('comparison');
+      await clickTab(page, 'live'); await sleep(300);
+      const rows = page.locator('#content .list[data-view="live"] article.match');
+      await rows.first().click(); await sleep(1200); await shot('detail');
+      let stats = false;
+      for (let i = 0, n = Math.min(await rows.count(), 15); i < n && !stats; i++) {
+        if (await page.evaluate(() => DetailPanel.isOpen())) { await page.keyboard.press('Escape'); await sleep(300); }
+        await rows.nth(i).click(); await sleep(500);
+        if (await page.locator('#dpTabs [data-dp-tab="stats"]').count()) { await page.click('#dpTabs [data-dp-tab="stats"]'); await sleep(1500); await shot('detail-statistics'); stats = true; }
+      }
+      if (!stats) notes.push(`${label}: no match with statistics in this feed`);
+      await page.keyboard.press('Escape'); await sleep(300);
+      if (user) {
+        await page.click('#settingsButton'); await sleep(400); await page.click('[data-settings-section="users"]');
+        await page.waitForSelector(`[data-admin-user="${user.user.id}"]`, { timeout: 15000 }); await page.click(`[data-admin-user="${user.user.id}"]`); await sleep(400);
+        await shot('admin-user-editor'); await page.click('#settingsDone'); await sleep(300);
+      }
+    }
+    if (user) {
+      await page.close(); await useToken(user.token); page = await openApp();
+      await until(async () => (await visibleTabs(page)).includes('live'), { what: 'user sections' });
+      for (const [label, width, height] of widths) {
+        await page.setViewportSize({ width, height }); await page.click('#settingsButton'); await sleep(500);
+        await page.screenshot({ path: path.join(shots, `${label}-settings-user.png`) });
+        await page.click('[data-settings-section="sources"]'); await sleep(300);
+        await page.screenshot({ path: path.join(shots, `${label}-settings-user-sources.png`) });
+        await page.click('#settingsDone'); await sleep(300);
+      }
+    }
+    results.note = 'saved to ' + shots + (notes.length ? '; ' + notes.join('; ') : '');
+    if (page.errors.length) throw new Error(page.errors.join(' | '));
+  } finally {
+    await page.setViewportSize({ width: 1360, height: 860 }).catch(() => {}); await page.close().catch(() => {});
+    if (user) { await useToken(TOKEN).catch(() => {}); await adminApi('/api/admin/users/' + user.user.id + '/delete', {}).catch(() => {}); }
+  }
+});
+
 scenario('E25', 'P1', 'render: a LIVE feed update over 200 matches is cheap and keeps row and shell nodes', async () => {
   mockState.extraEvents = 200;
   const page = await openApp();
@@ -664,6 +819,9 @@ async function layoutProblems(page) {
     if (shown < 3) out.push(`only ${shown} tabs visible`);
     const list = document.querySelector('#content .list:not([hidden])');
     if (list) { const lr = list.getBoundingClientRect(); const row = list.querySelector('article.match'); if (row && row.scrollWidth > row.clientWidth + 2) out.push(`row overflow ${row.scrollWidth}>${row.clientWidth}`); if (row && row.getBoundingClientRect().right > lr.right + 1) out.push('row wider than list'); }
+    // settings: the section body must fit its width (no sideways scrolling) and stay readable
+    const sb = document.getElementById('settingsBody');
+    if (vis(sb)) { if (sb.scrollWidth > sb.clientWidth + 2) out.push(`settings overflow ${sb.scrollWidth}>${sb.clientWidth}`); if (sb.clientWidth < 300) out.push(`settings body only ${sb.clientWidth}px wide`); }
     const pane = document.getElementById('detailPane');
     if (pane && !pane.hidden) { const pr = pane.getBoundingClientRect(); if (pr.right > doc.clientWidth + 1 || pr.width < 260) out.push(`detail pane ${Math.round(pr.left)}..${Math.round(pr.right)}`); }
     return out;
