@@ -55,7 +55,9 @@ export const config = {
   ggbetRequestTimeoutMs: intEnv("GGBET_REQUEST_TIMEOUT_MS", 12000, 3000),
   ggbetSnapshotIntervalMs: intEnv("GGBET_SNAPSHOT_INTERVAL_MS", 30000, 5000),
   ggbetDegradedSnapshotMs: intEnv("GGBET_DEGRADED_SNAPSHOT_MS", 7000, 3000),
-  ggbetSessionRefreshMs: intEnv("GGBET_SESSION_REFRESH_MS", 8 * 60 * 1000, 60 * 1000),
+  // 0 = no timer: a healthy session stays open; it is renewed on a real reason (close, auth rejection, watchdog) or
+  // shortly before an expiry the token itself declares. A value >= 60000 restores a periodic refresh (escape hatch).
+  ggbetSessionRefreshMs: intEnv("GGBET_SESSION_REFRESH_MS", 0, 60 * 1000),
   // Full market trees only for events a client has open (detail panel lease): at most this many events at once,
   // a lease lives this long without a renewal, the last full tree stays in RAM this long after the release.
   ggbetMaxFullEvents: intEnv("GGBET_MAX_FULL_EVENTS", 6, 1),

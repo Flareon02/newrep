@@ -1,4 +1,4 @@
-# Server 4.8.0 — GGBET full markets only for opened matches
+# Server 4.8.0 — GGBET full markets only for opened matches, long-lived session
 
 API addition for extension 9.1; nothing is removed, SQLite schema unchanged, odds history stays off.
 
@@ -20,9 +20,19 @@ API addition for extension 9.1; nothing is removed, SQLite schema unchanged, odd
   (`capped`), the main WebSocket is never closed for it.
 - A match that leaves LIVE drops its leases and streams; a reconnect restores leased full streams in the new socket.
 
+## Session lifecycle
+- No timed session refresh by default (`GGBET_SESSION_REFRESH_MS` = 0; a value ≥ 60000 restores the old behaviour).
+  The 8-minute refresh came with the original import with no upstream evidence: no expiry in the code or logs, and the
+  saved diagnostics of the last proxied session ended by our own timer (`scheduledRefreshes 1, authRefreshes 0`).
+- A healthy WebSocket stays open. Renewal only for a real reason: close, auth/connection_init rejection (4401/4403/1008),
+  network error, the watchdog (no message for `GGBET_WATCHDOG_MS`), or an expiry the token itself declares (`exp` in
+  its public header, renewed a minute before; exposed as `tokenExpiresAt`, the token never is).
+- The bootstrap stays one GET of the public LIVE page per new session (token from `bettingClientOptions`), through the
+  same proxy agent as the WebSocket; no root page fetch, no cookies (not needed by the evidence).
+
 ## Diagnostics (`/health` → `ggbetCollector`)
 `ggbetCatalogEvents, ggbetLightSubscriptions, ggbetActiveFullMarketEvents, ggbetActiveFullMarketSubscriptions,
 ggbetActiveFullMarketLeases, ggbetFullMarketSubscribes, ggbetFullMarketUnsubscribes, ggbetFullMarketLeaseExpirations,
 ggbetFullMarketCapRejects, ggbetMaxFullEvents, ggbetFullLeaseTtlMs, ggbetFullCacheTtlMs, ggbetFullCacheEvents,
 ggbetRootBootstrapFetches (0), ggbetRootBootstrapFailures (0), ggbetWsConnectionsCreated, ggbetReconnects,
-ggbetBootstrapFetches, ggbetAuthRefreshes` — no token, cookie or proxy credential.
+ggbetBootstrapFetches, ggbetAuthRefreshes, expiryRefreshes, tokenExpiresAt` — no token, cookie or proxy credential.

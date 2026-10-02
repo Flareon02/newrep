@@ -65,7 +65,8 @@ services:
       GGBET_ORIGINS: "https://gg.bet,https://gg397.bet,https://gg253.bet,https://gg284.bet,https://ggbets.co,https://ggbet242.com,https://ggbet24.com"
       GGBET_SNAPSHOT_INTERVAL_MS: "30000"
       GGBET_DEGRADED_SNAPSHOT_MS: "7000"
-      GGBET_SESSION_REFRESH_MS: "480000"
+      # 0 = no timed session refresh (a healthy GGBET session stays open; renewal on close/auth/watchdog/token expiry).
+      GGBET_SESSION_REFRESH_MS: "0"
       GGBET_MAX_FULL_EVENTS: "6"
       GGBET_FULL_LEASE_TTL_MS: "45000"
       GGBET_FULL_CACHE_TTL_MS: "60000"

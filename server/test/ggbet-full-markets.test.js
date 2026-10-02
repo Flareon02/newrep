@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {GgbetLiveCollector,parseGgbetLiveEvent} from '../src/ggbet.js';
+import {GgbetLiveCollector,ggbetTokenExpiry,parseGgbetLiveEvent} from '../src/ggbet.js';
 import {config} from '../src/config.js';
 import {SnapshotState} from '../src/state.js';
 import {createApi} from '../src/api.js';
@@ -147,6 +147,30 @@ test('a reconnect (real close) restores leased full streams in the new WebSocket
     c.lease('client-one-A',sid(A));await wait(20);
     c.handleClose({code:1006,target:c.ws});c.lastConnectAt=0;await c.connect();await wait(30);
     assert.equal(LineSocket.all.length,2);assert.deepEqual(ws().count(),{full:1,light:29,tabs:1});
+  }finally{await c.stop();}
+});
+
+test('no timed session refresh by default: a healthy session lives for hours; the watchdog still reconnects a silent one', async()=>{
+  assert.equal(config.ggbetSessionRefreshMs,0);
+  let t=Date.now();const {c,ws}=await line(3,{now:()=>t});
+  try{
+    for(let i=0;i<3*3600;i+=30){t+=30000;c.lastMessageAt=t;c.maintenance();}
+    assert.equal(ws().readyState,1);assert.equal(c.status().scheduledRefreshes,0);assert.equal(LineSocket.all.length,1);
+    t+=config.ggbetWatchdogMs+1;c.maintenance();await wait(5);
+    assert.match(c.lastClose,/4001 watchdog/);
+  }finally{await c.stop();}
+});
+
+test('a token that declares its expiry is renewed a minute before it, not on a fixed timer', async()=>{
+  const b64=o=>Buffer.from(JSON.stringify(o)).toString('base64url');
+  let t=Date.now();const exp=Math.floor((t+30*60000)/1000),token=`${b64({alg:'dir',enc:'A256GCM',exp})}.${'x'.repeat(80)}.${'y'.repeat(40)}.${'z'.repeat(200)}.${'w'.repeat(30)}`;
+  assert.equal(ggbetTokenExpiry(token),exp*1000);assert.equal(ggbetTokenExpiry('t'.repeat(389)),0);
+  const {c,ws}=await line(3,{now:()=>t,token});
+  try{
+    assert.ok(c.status().tokenExpiresAt);assert.equal('token' in c.status(),false);
+    t+=20*60000;c.lastMessageAt=t;c.maintenance();assert.equal(ws().readyState,1);
+    t+=10*60000-59000;c.lastMessageAt=t;c.maintenance();await wait(5);
+    assert.match(c.lastClose,/token-expiry/);assert.equal(c.status().expiryRefreshes,1);assert.equal(c.bootstrap,null);
   }finally{await c.stop();}
 });
 
