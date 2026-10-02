@@ -122,9 +122,25 @@ function compactTimeline(ref){
   }
   return out;
 }
+// Main match-winner prices of one bookmaker for list rows and odds comparison, in the bookmaker's own team order
+// (home = its team1; the client flips it with `scoreReversed`, exactly like scores). ~40 bytes instead of a market tree.
+//   {h, a, d?, s?: 's' suspended | 'c' closed, at?, stale?}
+export function uiQuote(odds){
+  const markets=Array.isArray(odds?.markets)?odds.markets:[];
+  const m=markets.find(x=>['moneyline','winner'].includes(x?.type)&&!(Number(x?.period)>0)&&!x?.isAlternate&&Array.isArray(x?.prices));
+  if(!m)return null;
+  const price=side=>{const v=Number(m.prices.find(p=>p?.designation===side)?.decimal);return Number.isFinite(v)&&v>1?Math.round(v*1000)/1000:null;};
+  const open=!m.status||m.status==='open',out={h:open?price('home'):null,a:open?price('away'):null};
+  const draw=open?price('draw'):null;if(draw)out.d=draw;
+  if(!open)out.s=m.status==='closed'?'c':'s';
+  const at=Number(odds.updatedAt||odds.checkedAt||0);if(at>0)out.at=at;
+  if(odds.stale)out.stale=1;
+  return out.h||out.a||out.s?out:null;
+}
 export function compactUiRef(ref){
   if(!ref||typeof ref!=='object')return ref;
-  const out=pickKeys(ref,THIN_REF_KEYS),timeline=compactTimeline(ref);
+  const out=pickKeys(ref,THIN_REF_KEYS),timeline=compactTimeline(ref),quote=uiQuote(ref.odds);
+  if(quote)out.quote=quote;
   const canonical=`${ref.source||''}:${ref.sourceEventId||ref.id||''}`;
   if(Array.isArray(out.aliases)){
     const aliases=[...new Set(out.aliases.map(String).filter(Boolean))].filter(x=>x!==canonical);

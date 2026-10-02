@@ -1,7 +1,7 @@
 services:
   astek-monitor:
     build: .
-    image: astek-monitor-server:4.6.0
+    image: astek-monitor-server:4.7.0
     container_name: astek-monitor
     restart: unless-stopped
     init: true

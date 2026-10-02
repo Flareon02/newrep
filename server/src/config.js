@@ -26,7 +26,7 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.6.0",
+  version: "4.7.0",
   port: intEnv("PORT", 8080),
   // Listen address. Unset: 0.0.0.0 (Docker). 127.0.0.1 / localhost when only a local reverse proxy or tunnel may reach
   // the API. Any other value that is not an IP literal binds 127.0.0.1 (fails closed, never public) and is logged.

@@ -101,11 +101,11 @@ else
   fi
 fi
 
-log "[2/7] Building Server 4.6.0 while the current server remains online..."
-docker build -t astek-monitor-server:4.6.0 .
+log "[2/7] Building Server 4.7.0 while the current server remains online..."
+docker build -t astek-monitor-server:4.7.0 .
 
 log "[3/7] Verifying existing SQLite schema without modifying data..."
-docker run --rm --network none -e DB=/data/monitor-v2.sqlite3 -v "$SOURCE:/data:ro" astek-monitor-server:4.6.0 node --input-type=module -e '
+docker run --rm --network none -e DB=/data/monitor-v2.sqlite3 -v "$SOURCE:/data:ro" astek-monitor-server:4.7.0 node --input-type=module -e '
   import {DatabaseSync} from "node:sqlite";
   const db=new DatabaseSync(process.env.DB,{readOnly:true});
   const row=db.prepare("SELECT value FROM meta WHERE key = ?").get("schema_version");
@@ -139,7 +139,7 @@ PORT_OWNER="$(port_8080_container || true)"
 { grep -v '^HOST_DATA_DIR=\|^COMPOSE_PROJECT_NAME=' "$HERE/.env" 2>/dev/null || true; printf 'HOST_DATA_DIR=%s\n' "$SOURCE"; printf 'COMPOSE_PROJECT_NAME=%s\n' "$PROJECT_NAME"; } > "$HERE/.env.next"
 mv "$HERE/.env.next" "$HERE/.env"; chmod 600 "$HERE/.env"
 
-log "[5/7] Starting Server 4.6.0 on the same SQLite database..."
+log "[5/7] Starting Server 4.7.0 on the same SQLite database..."
 HOST_DATA_DIR="$SOURCE" COMPOSE_PROJECT_NAME="$PROJECT_NAME" docker compose up -d --no-build --force-recreate
 NEW_STARTED=1
 container_exists astek-monitor || { echo "Compose did not create canonical container astek-monitor." >&2; docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' >&2; exit 1; }
@@ -149,14 +149,14 @@ attempt=0
 until curl -fsS --max-time 5 http://127.0.0.1:8080/health > /tmp/astek-health-440.json 2>/dev/null; do
   attempt=$((attempt+1))
   running="$(docker inspect -f '{{.State.Running}}' astek-monitor 2>/dev/null || echo false)"
-  [ "$running" = true ] || { echo "4.6.0 exited during startup." >&2; diag; exit 1; }
-  [ "$attempt" -lt 40 ] || { echo "4.6.0 did not become healthy within 120 seconds." >&2; diag; exit 1; }
+  [ "$running" = true ] || { echo "4.7.0 exited during startup." >&2; diag; exit 1; }
+  [ "$attempt" -lt 40 ] || { echo "4.7.0 did not become healthy within 120 seconds." >&2; diag; exit 1; }
   sleep 3
 done
 
 docker exec astek-monitor node --input-type=module -e '
  const r=await fetch("http://127.0.0.1:8080/health",{signal:AbortSignal.timeout(5000)}),d=await r.json();
- if(!d.ok||d.version!=="4.6.0"||d.runtime?.storage?.engine!=="sqlite"||d.runtime?.storage?.schemaVersion!==3||d.runtime?.storage?.integrity!=="ok"||d.features?.uiPush!==1||d.features?.thinClient!==2||d.features?.marketSemantics!==1||d.features?.ggbetNativeTabs!==1){console.error(d);process.exit(1)}
+ if(!d.ok||d.version!=="4.7.0"||d.runtime?.storage?.engine!=="sqlite"||d.runtime?.storage?.schemaVersion!==3||d.runtime?.storage?.integrity!=="ok"||d.features?.uiPush!==1||d.features?.thinClient!==2||d.features?.marketSemantics!==1||d.features?.ggbetNativeTabs!==1){console.error(d);process.exit(1)}
  console.log(`health OK: v${d.version}, SQLite ${d.runtime.storage.sizeMiB} MiB, integrity=${d.runtime.storage.integrity}`);'
 
 docker exec astek-monitor node --input-type=module -e '
@@ -231,4 +231,4 @@ mount_source="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"
 [ "$(CDPATH= cd -- "$mount_source" && pwd -P)" = "$SOURCE" ] || { echo "Unexpected /data mount: $mount_source" >&2; exit 1; }
 SUCCESS=1
 rm -f "$ENV_BEFORE"
-printf '\nServer 4.6.0 is healthy.\nPersistent SQLite: %s\nRollback container: %s\nCompose project: %s\nNo data migration was performed.\n' "$SOURCE" "$OLD_CONTAINER" "$PROJECT_NAME"
+printf '\nServer 4.7.0 is healthy.\nPersistent SQLite: %s\nRollback container: %s\nCompose project: %s\nNo data migration was performed.\n' "$SOURCE" "$OLD_CONTAINER" "$PROJECT_NAME"

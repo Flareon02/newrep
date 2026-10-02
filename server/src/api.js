@@ -16,7 +16,7 @@ import {gzip} from "node:zlib";
 import { config } from "./config.js";
 import { matcherRevision, canonicalCategory,leagueFamily,orientEvent } from "./entity-resolver.js";
 import { leagueStore } from './league-store.js';
-import {queryUiEvents,queryLeagueCatalog,enrichResultsWithPrematch,decorateUiEvent,buildUiPrematchEvents,compactUiPayload} from './ui-service.js';
+import {queryUiEvents,queryLeagueCatalog,enrichResultsWithPrematch,decorateUiEvent,buildUiPrematchEvents,compactUiPayload,uiQuote} from './ui-service.js';
 import {enrichEventMarketSemantics} from './market-semantics.js';
 import {normalizeErrorBody,publicMessage} from './http-errors.js';
 import {safeWrite} from './sse.js';
@@ -179,7 +179,8 @@ export function thinFeedPushPayload(mode,provider,change,meta){
     const fields=(patch.fields||[]).filter(field=>visibleFields.has(field));
     const out={source:patch.source,id:patch.id,fields};
     for(const field of fields)out[field]=patch[field];
-    if((patch.fields||[]).includes('odds'))out.detailChanged=true;
+    // Odds trees stay out of thin pushes; the main-market quote (or null when it is gone) keeps list prices live.
+    if((patch.fields||[]).includes('odds')){out.detailChanged=true;out.fields.push('quote');out.quote=uiQuote(patch.odds);}
     return out;
   }).filter(p=>p.fields.length||p.detailChanged);
   return {event:'patch',payload:{...base.payload,meta:thinMeta,patches,thin:true}};
