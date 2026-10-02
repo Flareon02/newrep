@@ -28,7 +28,7 @@ const call = async (method, path, headers = {}, body) => {
 };
 const WRONG = { Authorization: 'Bearer ' + 'wrong'.repeat(6) }, RIGHT = { Authorization: 'Bearer ' + token };
 
-// Server 4.8+: only the bare health is public; every data read needs a token with that capability (entitlements).
+// Server 4.9+: only the bare health is public; every data read needs a token with that capability (entitlements).
 { const r = await call('GET', '/health'); check('read /health without a token (bare: no internals)', r.status === 200 && r.json?.ok === true && !r.json?.security, `HTTP ${r.status}`); }
 for (const p of ['/api/ui/live?meta=1&thin=1', '/api/ui/prematch?meta=1&thin=1', '/api/leagues', '/api/hltv/data']) {
   const none = await call('GET', p), right = await call('GET', p, RIGHT);
