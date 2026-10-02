@@ -70,16 +70,22 @@ const MarketCanonical=(()=>{
   if(/\b(?:tak|nie|yes|no|да|нет)\b/.test(ls))return'yes-no';
   return'special';
  }
+ // A line is a handicap/total value. It comes from the server canonical, specifiers, outcome points or the visible
+ // title/labels - never from `m.key`: provider keys are internal identifiers (Astek keys start with the event id, e.g.
+ // "757782506:0:..."), and odd/even markets have no line at all.
+ const parityMarket=m=>(m?.prices||[]).some(p=>/^(?:odd|even)$/i.test(String(p?.designation||'')))||/(?:^|[^\p{L}])(?:чёт|чет|нечёт|нечет|odd|even)(?:[^\p{L}]|$)/iu.test([nativeTitle(m),...(m?.prices||[]).map(p=>p?.label)].join(' '));
+ const plausibleLine=v=>v!=null&&Number.isFinite(v)&&Math.abs(v)<1000?v:null;
  function line(m,fam=family(m)){
   const exact=serverCanonical(m);if(exact&&exact.line!=null&&Number.isFinite(Number(exact.line)))return Number(exact.line);
   const prices=m?.prices||[];
+  if(parityMarket(m)&&n(spec(m,'total'))==null&&n(spec(m,'hcp'))==null)return null;
   if(['total','map-total','team-total','asian-round-total','round-total-3way','winner-total-over','winner-total-under'].includes(fam)){
    const fromSpec=n(spec(m,'total'));if(fromSpec!=null)return fromSpec;
-   const p=prices.find(x=>['over','under'].includes(String(x.designation||'').toLowerCase()));return n(p?.points)??textNumber(p?.label,nativeTitle(m),m?.key);
+   const p=prices.find(x=>['over','under'].includes(String(x.designation||'').toLowerCase()));return n(p?.points)??plausibleLine(textNumber(p?.label,nativeTitle(m)));
   }
   if(['handicap','map-handicap','round-handicap','asian-round-handicap','half-round-handicap'].includes(fam)){
    const fromSpec=n(spec(m,'hcp'));if(fromSpec!=null)return fromSpec;
-   const home=prices.find(x=>String(x.designation||'').toLowerCase()==='home'),away=prices.find(x=>String(x.designation||'').toLowerCase()==='away');const hp=n(home?.points),ap=n(away?.points);return hp??(ap==null?textNumber(home?.label,away?.label,nativeTitle(m),m?.key):-ap);
+   const home=prices.find(x=>String(x.designation||'').toLowerCase()==='home'),away=prices.find(x=>String(x.designation||'').toLowerCase()==='away');const hp=n(home?.points),ap=n(away?.points);return hp??(ap==null?plausibleLine(textNumber(home?.label,away?.label,nativeTitle(m))):-ap);
   }
   return null;
  }
