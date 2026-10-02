@@ -40,12 +40,34 @@ Test `server/test/astek-requests-perf.test.js` (mock enforcing the limits above,
 market count). Leagues of up to 49 games: identical output. The league with 54 games now gets 50 fresh games plus the
 known later ones instead of an HTTP 406.
 
+### After the staging deploy of 4c10e67
+
+The real API also rejects (HTTP 406) any `champs=` group that contains certain leagues (on staging: 2745824, "CS 2. CCT
+Europe Series 10", 1 game; the same league alone works, groups of 2–3 other leagues work). 4c10e67 then paused all
+grouping for 10 minutes, so staging stayed at 47 requests per cycle (data complete, no partial cycles).
+
+Now:
+- a rejected group sends only its own leagues one by one; the other groups of the cycle keep batching;
+- its leagues become *suspects* (30 min); next cycle every suspect gets its own group, and a rejected group holding one
+  suspect marks that league *group-incompatible* for an hour: asked alone, never grouped. After the hour it comes
+  back as a suspect, so the re-test costs one group per hour. Both maps are pruned to the catalog every cycle;
+- the line collector uses the same mirror rule as LIVE detail (`server/src/astek-origins.js`, shared): the last good
+  mirror first, a mirror fault (unreachable, timeout, 5xx, 403/429; any failure of the catalog request) cools it down
+  for 5 minutes and the next mirror is tried in the same cycle. HTTP 406 or an invalid answer for a league/group
+  request never moves the collector (before, any partial cycle rotated it to the unreachable -0021 mirror and the
+  next cycle failed);
+- a league over the cap drops a cached game when the fresh answer has the same teams and start time under a new id
+  (Astek re-issues ids; on staging this left one stale duplicate).
+
+Staging-shaped mock (catalog above + one group-incompatible league): **47 → 18, 18, then 15 requests per cycle**
+(the first two cycles find the league), same events as the one-league path.
+
 ## AstekBet LIVE detail
 
 `astekbet-0021.pro` does not answer from the staging host ("fetch failed" after ~0.8 s); `astekbet.com` answers in ~0.1 s.
 Every detail read started with -0021, so every read cost a failed request plus ~0.8 s → the 50 % failure rate.
 
-After (`server/src/astek-detail.js`): the mirror that answered last goes first; a mirror with a mirror-level fault
+After (`server/src/astek-detail.js`, rule shared with the line collector in `astek-origins.js`): the mirror that answered last goes first; a mirror with a mirror-level fault
 (unreachable, timeout, 5xx, 403/429) waits 5 minutes behind the healthy ones and stays the last fallback. A reply
 without the match does not count against the mirror. No extra retries; odds are unchanged. Test: 6 reads → 7 requests
 (before: 12), and when the working mirror fails the other one is still tried.
