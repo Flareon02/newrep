@@ -42,6 +42,9 @@ const jitter = (ms) => Math.max(250, Math.round(ms * (0.85 + Math.random() * 0.3
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isAuthError = (value) => /auth|token|unauthor|forbidden|permission|401|403/i.test(text(value));
 const backoff = (failures) => jitter(Math.min(config.databetMaxBackoffMs, 1000 * (2 ** Math.min(6, failures))));
+// A session that lived at least this long counts as healthy: its auth/refresh close may reconnect at once; shorter
+// sessions in a row (token rejected, closed right after the ack...) back off exponentially instead of looping.
+export const MIN_HEALTHY_SESSION_MS = 60000;
 
 // Public metadata of the guest token: the JWE protected header is plain base64url JSON (label, locale,
 // currency, isAuthorized). The encrypted payload is never touched.
@@ -133,7 +136,7 @@ export class DatabetLiveCollector {
     this.failures = 0; this.reconnects = 0; this.snapshots = 0; this.pushes = 0; this.publishes = 0; this.mismatchedPushes = 0; this.finishedEvents = 0;
     this.bootstrapFetches = 0; this.bootstrapFailures = 0; this.authRefreshes = 0; this.scheduledRefreshes = 0;
     this.lastMessageAt = 0; this.lastConnectAt = 0; this.lastAckAt = 0; this.lastSnapshotAt = 0; this.lastPushAt = 0; this.lastPublishAt = 0;
-    this.lastError = ''; this.lastClose = '';
+    this.lastError = ''; this.lastClose = ''; this.shortSessions = 0;
     this.publishTimer = null; this.snapshotSoon = null; this.reconnectTimer = null; this.maintenanceTimer = null;
   }
 
@@ -156,7 +159,7 @@ export class DatabetLiveCollector {
       label: this.bootstrap?.label || '', locale: this.bootstrap?.locale || '', currency: this.bootstrap?.currency || '', authorized: this.bootstrap?.isAuthorized === true,
       tokenRefreshedAt: iso(this.bootstrap?.at), sessionStartedAt: iso(this.lastConnectAt), lastMessageAt: iso(this.lastMessageAt), lastSnapshotAt: iso(this.lastSnapshotAt), lastPushAt: iso(this.lastPushAt), lastPublishAt: iso(this.lastPublishAt),
       events: this.events.size, markets, subscriptions: this.subscriptions.size, fullMarketEvents: full, lightEvents: this.subscriptions.size - full,
-      reconnects: this.reconnects, failures: this.failures, snapshots: this.snapshots, pushes: this.pushes, publishes: this.publishes, mismatchedPushes: this.mismatchedPushes, finishedEvents: this.finishedEvents,
+      reconnects: this.reconnects, failures: this.failures, shortSessions: this.shortSessions, snapshots: this.snapshots, pushes: this.pushes, publishes: this.publishes, mismatchedPushes: this.mismatchedPushes, finishedEvents: this.finishedEvents,
       bootstrapFetches: this.bootstrapFetches, bootstrapFailures: this.bootstrapFailures, authRefreshes: this.authRefreshes, scheduledRefreshes: this.scheduledRefreshes,
       lastError: redact(this.lastError), lastClose: redact(this.lastClose),
       snapshotIntervalMs: config.databetSnapshotIntervalMs, sessionRefreshMs: config.databetSessionRefreshMs, fullMarketsTtlMs: config.databetFullMarketsTtlMs, maxFullEvents: config.databetMaxFullEvents
@@ -421,10 +424,15 @@ export class DatabetLiveCollector {
     for (const row of this.tabs.values()) row.pending = false;
     if (this.stopped) return;
     this.failures++;
+    // Reconnect pacing: only a healthy, long session may refresh at once; a streak of short sessions or failures backs
+    // off (the connection_error path already scheduled a back-off before this close event - never shorten it).
+    const lived = this.lastConnectAt ? this.now() - this.lastConnectAt : 0;
+    this.shortSessions = lived < MIN_HEALTHY_SESSION_MS ? this.shortSessions + 1 : 0;
+    const streak = Math.max(this.failures, this.shortSessions), refresh = streak <= 1 ? jitter(500) : backoff(streak);
     const code = Number(event?.code);
-    if ([4401, 4403, 1008].includes(code) || isAuthError(event?.reason)) { this.authRefreshes++; this.bootstrap = null; this.scheduleReconnect(jitter(500)); }
-    else if (code === 4001) { this.bootstrap = null; this.scheduleReconnect(jitter(500)); }
-    else this.scheduleReconnect(backoff(this.failures));
+    if ([4401, 4403, 1008].includes(code) || isAuthError(event?.reason)) { this.authRefreshes++; this.bootstrap = null; this.scheduleReconnect(refresh); }
+    else if (code === 4001) { this.bootstrap = null; this.scheduleReconnect(refresh); }
+    else this.scheduleReconnect(backoff(streak));
   }
 
   maintenance() {
