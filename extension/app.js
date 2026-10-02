@@ -16,6 +16,7 @@ const dayKey=(ms=Date.now())=>new Date(ms+14400000).toISOString().slice(0,10),sh
 const VIEWS=['live','prematch','results','compare','history'];
 const BOOKS=['astek','fonbet','pinnacle','ggbet','databet'];
 const providerName=source=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET',databet:'DataBet'})[source]||source;
+const providerShort=source=>({astek:'Astek',fonbet:'Fonbet',pinnacle:'Pinn',ggbet:'GG',databet:'DB'})[source]||source;
 const norm=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 const refs=e=>e?.sourceRefs?.length?e.sourceRefs:[e].filter(Boolean);
 const alphabet=new Intl.Collator('ru',{sensitivity:'base',numeric:true});
@@ -207,13 +208,13 @@ async function copy(text){await navigator.clipboard.writeText(text);toast('Ск�
 // ---------------------------------------------------------------------------------------------------- row markup
 function quotesOf(e,books){const out={};for(const r of refs(e))if(books.includes(r.source)&&!out[r.source])out[r.source]=MatchFormat.orientQuote(r);return out;}
 function priceCell(e,source,ref,q,bestOf){
- if(!ref)return `<div class="price-col absent" aria-label="${providerName(source)}: нет матча"></div>`;
+ if(!ref)return `<div class="price-col absent" data-short="${esc(providerShort(source))}" aria-label="${providerName(source)}: нет матча"></div>`;
  const key=`${source}:${ref.sourceEventId||ref.id}`;
- if(!q)return `<div class="price-col" data-source-ref="${esc(key)}" title="${providerName(source)}: коэффициенты появятся после открытия линии"><span class="price none">—</span><span class="price none">—</span></div>`;
- if(q.s)return `<div class="price-col" data-source-ref="${esc(key)}" title="${providerName(source)}: ${q.s==='c'?'рынок закрыт':'приём ставок приостановлен'}"><span class="price closed" aria-label="приостановлено">⏸</span><span class="price closed"></span></div>`;
+ if(!q)return `<div class="price-col" data-short="${esc(providerShort(source))}" data-source-ref="${esc(key)}" title="${providerName(source)}: коэффициенты появятся после открытия линии"><span class="price none">—</span><span class="price none">—</span></div>`;
+ if(q.s)return `<div class="price-col" data-short="${esc(providerShort(source))}" data-source-ref="${esc(key)}" title="${providerName(source)}: ${q.s==='c'?'рынок закрыт':'приём ставок приостановлен'}"><span class="price closed" aria-label="приостановлено">⏸</span><span class="price closed"></span></div>`;
  // "Best" is marked only when at least two bookmakers price that side; text alternative for screen readers.
  const cell=side=>{const v=MatchFormat.openPrice(q[side]);if(v==null)return '<span class="price none">—</span>';const t=quoteTracker.track(`${key}:${side}`,v),best=bestOf[side]===v&&bestOf.countSide[side]>1;return `<span class="price${best?' best':''}"${best?` aria-label="${esc(MatchFormat.formatPrice(v))}, лучший коэффициент"`:''}>${t.dir?`<span class="chg ${t.dir}" aria-label="${t.dir==='up'?'вырос':'снизился'} с ${esc(MatchFormat.formatPrice(t.was))}">${t.dir==='up'?'▲':'▼'}</span>`:''}${esc(MatchFormat.formatPrice(v))}</span>`;};
- return `<div class="price-col" data-source-ref="${esc(key)}" data-book="${esc(source)}" title="${providerName(source)}${q.at?' · обновлено '+stamp(q.at,false,true):''}">${cell('h')}${cell('a')}</div>`;
+ return `<div class="price-col" data-short="${esc(providerShort(source))}" data-source-ref="${esc(key)}" data-book="${esc(source)}" title="${providerName(source)}${q.at?' · обновлено '+stamp(q.at,false,true):''}">${cell('h')}${cell('a')}</div>`;
 }
 function bestFor(quotes){const best=MatchFormat.bestPrices(quotes),countSide={h:0,a:0,d:0};for(const q of Object.values(quotes))if(q&&!q.s&&!q.stale)for(const side of ['h','a','d'])if(MatchFormat.openPrice(q[side])!=null)countSide[side]++;return {...best,countSide};}
 // Live score of a fixture: SSE patches update the bookmaker refs, so take the most recently changed visible ref
@@ -246,13 +247,13 @@ function cachedRow(e,view,opts){
 function matchRow(e,view,{meta=true,books=[]}={}){
  const sel=selectedId(view)===String(e.id),fav=matchFavorite(e),odds=!prefs.hideOdds&&books.length&&['live','prematch'].includes(view);
  let tail='';
- if(odds){const quotes=quotesOf(e,books),best=bestFor(quotes),byBook=new Map(refs(e).map(r=>[r.source,r]));tail=books.map(b=>priceCell(e,b,byBook.get(b),quotes[b],best)).join('');}
+ if(odds){const quotes=quotesOf(e,books),best=bestFor(quotes),byBook=new Map(refs(e).map(r=>[r.source,r]));tail=`<div class="prices">${books.map(b=>priceCell(e,b,byBook.get(b),quotes[b],best)).join('')}</div>`;}
  else tail=sourcesCell(e,view);
  return `<article class="match cols${odds?'':' no-odds'}" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}"><div class="fav"><button class="icon-btn" data-fav aria-pressed="${fav}" aria-label="${fav?'Убрать из избранного':'В избранное'}">${starIcon(fav)}</button></div>${teamsCell(e,{meta})}${scoreCell(e,view)}${tail}<span class="go" aria-hidden="true">›</span></article>`;
 }
 function listHeader(view,books){
  const odds=!prefs.hideOdds&&books.length&&['live','prematch'].includes(view);
- return `<div class="col-head cols${odds?'':' no-odds'}" data-group="head"><span></span><span>Матч</span><span class="right">${view==='prematch'?'Начало':'Счёт'}</span>${odds?books.map(b=>{const h=bookHealth(b);return `<span class="book-col" title="${esc(providerName(b))}${h&&!h.ok?' — '+esc(h.reason):''}"><span class="book-mark ${b}" aria-hidden="true"></span>${esc(providerName(b))}${h&&!h.ok?' <span aria-label="недоступен">⚠</span>':''}</span>`;}).join(''):'<span class="right">Конторы</span>'}<span></span></div>`;
+ return `<div class="col-head cols${odds?'':' no-odds'}" data-group="head"><span></span><span>Матч</span><span class="right">${view==='prematch'?'Начало':'Счёт'}</span>${odds?'<span class="prices">'+books.map(b=>{const h=bookHealth(b);return `<span class="book-col" title="${esc(providerName(b))}${h&&!h.ok?' — '+esc(h.reason):''}"><span class="book-mark ${b}" aria-hidden="true"></span>${esc(providerName(b))}${h&&!h.ok?' <span aria-label="недоступен">⚠</span>':''}</span>`;}).join('')+'</span>':'<span class="right">Конторы</span>'}<span></span></div>`;
 }
 
 // ---------------------------------------------------------------------------------------------------- views -----
@@ -709,6 +710,8 @@ $('content').addEventListener('toggle',event=>{const d=event.target;if(!d.matche
 for(const type of ['pointerover','focusin'])$('content').addEventListener(type,event=>{const row=event.target.closest?.('[data-id]');if(!row||!['live','prematch','compare'].includes(tab))return;clearTimeout(prefetchTimer);prefetchTimer=setTimeout(()=>{const e=findRow(tab,row.dataset.id);if(e)prefetchDetail(e,tab==='compare'?(e.inLive?'live':'prematch'):tab);},140);});
 $('content').addEventListener('pointerout',event=>{if(!event.relatedTarget?.closest?.('[data-id]'))clearTimeout(prefetchTimer);});
 $('drawerBackdrop').addEventListener('click',()=>DetailPanel.hide());
+// Wide layout: a click on empty list space (not a match, not a control) closes the detail as well.
+$('listPane').addEventListener('click',event=>{if(!DetailPanel.isOpen())return;if(event.target.closest('[data-id],button,a,input,select,label,summary,.group-head,.col-head,.list-head,[role="button"]'))return;DetailPanel.hide();});
 
 function filterChanged(){viewSignatures.delete(tab);if(['results','history'].includes(tab))reloadServerView(tab);else renderView(tab,true);renderChrome();updateNavCounts();}
 let searchTimer=0;

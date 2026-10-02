@@ -134,8 +134,10 @@ button,input,select,textarea{font:inherit;color:inherit}
 .list-head .updated{margin-left:auto}
 .list-head .updated.stale{color:#f2c46d}
 .views{position:relative;flex:1;min-height:0;display:grid}
-.views>.list{grid-area:1/1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-color:var(--line-strong) transparent}
-.detail-pane{display:flex;flex-direction:column;min-width:0;min-height:0;border-left:1px solid var(--line);background:var(--surface)}
+.views>.list{grid-area:1/1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-color:var(--line-strong) transparent;container:list/inline-size}
+/* The detail is one scroll container: the header scrolls away, the tabs stay, market group headers stick under them. */
+.detail-pane{display:flex;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-color:var(--line-strong) transparent;border-left:1px solid var(--line);background:var(--surface)}
+.detail-pane>*{flex:none}
 .drawer-backdrop{display:none}
 @media (max-width:1179px){
  .workspace.with-detail{grid-template-columns:minmax(0,1fr)}
@@ -143,10 +145,36 @@ button,input,select,textarea{font:inherit;color:inherit}
  .workspace.with-detail .drawer-backdrop{display:block;position:absolute;inset:0;z-index:29;background:var(--overlay)}
 }
 @media (max-width:860px){.brand-name{display:none}.nav button{padding:0 9px}}
+/* narrow window: tabs get their own scrollable row, the toolbar packs into a grid, the detail drawer takes the width */
+@media (max-width:640px){
+ .topbar{flex-wrap:wrap;height:auto;row-gap:2px;padding-block:6px}
+ .nav{order:3;flex-basis:100%;margin-left:0}
+ .sources-btn>span:not(.dot){display:none}
+ .toolbar{padding:6px var(--s3)}
+ .toolbar .search{flex-basis:100%;max-width:none}
+ .toolbar .select{flex:1 1 130px;min-width:0}
+ .toolbar .spacer{display:none}
+ .workspace.with-detail .detail-pane{width:100%}
+ .match,.col-head,.group-head,.list-head{padding-left:var(--s3);padding-right:var(--s3)}
+}
 
 /* columns shared by the header row and match rows */
 .cols{display:grid;align-items:center;column-gap:10px;grid-template-columns:28px minmax(200px,1fr) 104px repeat(var(--books,0),minmax(68px,96px)) 16px}
 .cols.no-odds{grid-template-columns:28px minmax(200px,1fr) 104px minmax(120px,auto) 16px}
+/* price cells are grouped for the narrow layout; in the column layout the group is transparent */
+.prices{display:contents}
+/* narrow list: teams + score on the first line, the bookmakers' prices on the second (each labelled) */
+@container list (max-width:620px){
+ .cols,.cols.no-odds{grid-template-columns:26px minmax(0,1fr) auto;row-gap:6px;column-gap:8px}
+ .cols>.prices{display:grid;grid-column:2/-1;grid-template-columns:repeat(var(--books,1),minmax(0,1fr));gap:6px}
+ .col-head>.prices,.match .go{display:none}
+ .price-col{grid-template-columns:auto 1fr 1fr;align-items:center;gap:4px;padding:2px 6px;border:1px solid var(--line);border-radius:var(--radius-s)}
+ .price-col::before{content:attr(data-short);color:var(--muted);font-size:10px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:6ch}
+ .cols.no-odds>.sources-col{grid-column:2/-1;justify-content:flex-start}
+ .cols.results,.cols.history{grid-template-columns:26px minmax(0,1fr) auto;row-gap:4px}
+ .cols.results>:nth-child(n+4),.cols.history>:nth-child(n+4){grid-column:2/-1;justify-content:flex-start;text-align:left}
+ .cols.results>.go,.cols.history>.go{display:none}
+}
 .col-head{position:sticky;top:0;z-index:5;padding:6px var(--s4);background:var(--bg);border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--fs-xs);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .col-head .book-col{display:flex;align-items:center;justify-content:center;gap:6px}
 .col-head .right{text-align:right}
@@ -238,10 +266,10 @@ html.team-logos-off .team .team-logo,html.team-logos-off .team .logo-ph{display:
 .detail-score .sub{font-size:var(--fs-s);color:var(--text-2)}
 .detail-status{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
 .detail-status .chip.live{background:var(--bad-soft);border-color:rgba(240,96,90,.4);color:#ffb3af}
-.detail-tabs{display:flex;gap:2px;padding:6px var(--s3) 0;border-bottom:1px solid var(--line)}
+.detail-tabs{position:sticky;top:0;z-index:5;display:flex;gap:2px;padding:6px var(--s3) 0;border-bottom:1px solid var(--line);background:var(--surface)}
 .detail-tabs .tab{border-radius:var(--radius-s) var(--radius-s) 0 0}
-.detail-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-color:var(--line-strong) transparent}
-.odds-controls{position:sticky;top:0;z-index:3;display:grid;gap:8px;padding:var(--s3) var(--s4) var(--s2);background:var(--surface);border-bottom:1px solid var(--line)}
+.detail-body{min-height:0}
+.odds-controls{display:grid;gap:8px;padding:var(--s3) var(--s4) var(--s2);background:var(--surface);border-bottom:1px solid var(--line)}
 .book-switch{display:flex;flex-wrap:wrap;gap:4px}
 .book-switch button{display:inline-flex;align-items:center;gap:7px;min-height:32px;padding:0 10px;border:1px solid var(--line-strong);border-radius:var(--radius-s);background:var(--control);color:var(--text-2);cursor:pointer;font-size:var(--fs-s);font-weight:550}
 .book-switch button:hover{color:var(--text)}
@@ -260,7 +288,7 @@ html.team-logos-off .team .team-logo,html.team-logos-off .team .logo-ph{display:
 .odds-meta .refreshing{color:var(--accent-strong)}
 .odds-meta .warn{color:#f2c46d}
 .mkt-group{border-bottom:1px solid var(--line)}
-.mkt-group h4{position:sticky;top:var(--odds-controls-h,0);z-index:2;display:flex;justify-content:space-between;margin:0;padding:8px var(--s4);background:#11161d;color:var(--text-2);font-size:var(--fs-xs);font-weight:650;text-transform:uppercase;letter-spacing:.04em}
+.mkt-group h4{position:sticky;top:var(--dp-tabs-h,0);z-index:2;display:flex;justify-content:space-between;margin:0;padding:8px var(--s4);background:#11161d;color:var(--text-2);font-size:var(--fs-xs);font-weight:650;text-transform:uppercase;letter-spacing:.04em}
 .detail-body{container-type:inline-size}
 .mkt{display:grid;grid-template-columns:1fr;gap:6px;padding:8px var(--s4);border-top:1px solid #1d2531}
 @container (min-width:640px){.mkt{grid-template-columns:minmax(160px,32%) 1fr;align-items:center;gap:12px}}

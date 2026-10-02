@@ -180,8 +180,8 @@ const DetailPanel=(()=>{
    if(fromQuote&&st.loading)html+=skeletonMarkets(3);
   }
   StableDOM.patch($('dpMarkets'),html);
-  // Market group headers stick right below the (sticky) controls.
-  $('dpMarkets').style.setProperty('--odds-controls-h',$('dpOddsControls').offsetHeight+'px');
+  // Market group headers stick right below the (sticky) detail tabs; the controls scroll away with the markets.
+  root.style.setProperty('--dp-tabs-h',($('dpTabs')?.offsetHeight||0)+'px');
  }
  function skeletonMarkets(n=6){return `<div aria-hidden="true">${Array.from({length:n},(_,i)=>`<div class="mkt" data-market-key="sk:${i}"><div class="skeleton" style="height:14px;width:${60+(i*17)%35}%"></div><div class="outcomes"><div class="skeleton" style="height:34px"></div><div class="skeleton" style="height:34px"></div></div></div>`).join('')}</div>`;}
  function state(title,text,kind=''){return `<div class="state ${kind}" data-market-key="state"><div class="state-icon" aria-hidden="true">${kind==='warn'?'!':'—'}</div><strong>${esc(title)}</strong><p>${esc(text)}</p></div>`;}

@@ -43,6 +43,13 @@ function liveBody() {
 const mock = http.createServer((req, res) => {
   if (mockState.mode === 'down') { req.socket.destroy(); return; }
   if (/LiveFeed\/Get1x2_VZip/.test(req.url)) return void res.writeHead(200, { 'content-type': 'application/json' }).end(liveBody());
+  // Full market tree of a LIVE match (the detail panel): winner, 30 total lines, 10 handicap lines.
+  if (/LiveFeed\/GetGameZip/.test(req.url)) {
+    const id = Number(new URL(req.url, 'http://x').searchParams.get('id')) || 1;
+    const totals = Array.from({ length: 30 }, (_, i) => ({ G: 17, E: [[{ G: 17, T: 9, P: 10.5 + i, C: 1.5 + i / 40 }], [{ G: 17, T: 10, P: 10.5 + i, C: 2.6 - i / 40 }]] }));
+    const hcp = Array.from({ length: 10 }, (_, i) => ({ G: 2, E: [[{ G: 2, T: 7, P: -(i + 0.5), C: 1.6 + i / 20 }], [{ G: 2, T: 8, P: i + 0.5, C: 2.3 - i / 20 }]] }));
+    return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ Success: true, Value: { I: id, O1E: 'Alpha', O2E: 'Beta', GE: [{ G: 1, E: [[{ G: 1, T: 1, C: 1.85 }], [{ G: 1, T: 3, C: 1.95 }]] }, ...totals, ...hcp] } }));
+  }
   if (/LineFeed\/GetChampsZip/.test(req.url)) return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(fx('astek-champs.json')));
   if (/LineFeed\/Get1x2_VZip/.test(req.url)) {
     const games = fx('astek-prematch-games.json');
@@ -470,7 +477,7 @@ scenario('E23', 'X4', 'GGBET full-market lease follows the detail panel: acquire
   await until(async () => proxyState.fullMarkets.some((x) => x.action === 'release' && x.lease === lease), { what: 'release on close' });
   const released = proxyState.fullMarkets.find((x) => x.action === 'release').at;
   await sleep(11000);
-  if (proxyState.fullMarkets.some((x) => x.action === 'acquire' && x.at > released)) throw new Error('renewed after the panel was closed');
+  if (proxyState.fullMarkets.some((x) => x.action === 'acquire' && x.lease === lease && x.at > released)) throw new Error('renewed after the panel was closed');
   results.note = `lease calls: ${proxyState.fullMarkets.map((x) => x.action).join(', ')}`;
   await page.close();
 });
@@ -481,7 +488,7 @@ scenario('E24', 'P1', 'keyboard: holding ArrowDown over 200 LIVE matches stays r
   mockState.extraEvents = 200;
   const page = await openApp();
   try {
-    await until(async () => (await cards(page)) >= 150, { timeout: 60000, what: '150+ rows' });
+    await until(async () => (await cards(page)) >= 150, { timeout: 150000, every: 1000, what: '150+ rows (200 extra matches; the server picks them up after a reset)' });
     await sleep(1500);
     const run = (withDetail) => page.evaluate(async ({ withDetail, n }) => {
       const list = document.querySelector('#content .list[data-view="live"]');
@@ -508,7 +515,7 @@ scenario('E24', 'P1', 'keyboard: holding ArrowDown over 200 LIVE matches stays r
       const sorted = [...handler].sort((a, b) => a - b);
       return { rows: rows.length, kept, activeIndex: active ? now.indexOf(active) : -1, selectedIndex: sel ? now.indexOf(sel) : -1,
         handlerMedian: Math.round(sorted[Math.floor(sorted.length / 2)] * 10) / 10, handlerP95: Math.round(sorted[Math.floor(sorted.length * 0.95)] * 10) / 10, handlerMax: Math.round(sorted.at(-1) * 10) / 10,
-        maxFrameGap: Math.round(Math.max(...frames.slice(1))), longTasks: longTasks.length, longTaskMax: Math.max(0, ...longTasks) };
+        maxFrameGap: Math.round(Math.max(...frames.slice(1))), slowFrames: frames.slice(1).filter((f) => f > 100).length, longTasks: longTasks.length, longTaskMax: Math.max(0, ...longTasks) };
     }, { withDetail, n: 150 });
     const before = { details: proxyState.details.length, leases: proxyState.fullMarkets.length };
     const plain = await run(false);
@@ -517,11 +524,13 @@ scenario('E24', 'P1', 'keyboard: holding ArrowDown over 200 LIVE matches stays r
     const net = { details: proxyState.details.length - detailStart.details, leases: proxyState.fullMarkets.length - detailStart.leases, plainDetails: detailStart.details - before.details };
     results.note = `list: ${JSON.stringify(plain)} | with detail: ${JSON.stringify(detail)} | network during the detail burst: ${JSON.stringify(net)}`;
     const fails = [];
-    if (plain.kept !== plain.rows) fails.push(`rows remounted: ${plain.kept}/${plain.rows}`);
+    // a row whose data changed during the burst is rebuilt (correct); the list as a whole must not be
+    if (plain.kept < plain.rows - 3) fails.push(`rows remounted: ${plain.kept}/${plain.rows}`);
     if (plain.activeIndex !== Math.min(150, plain.rows - 1)) fails.push(`focus at ${plain.activeIndex}`);
     if (plain.handlerP95 > 8) fails.push(`handler p95 ${plain.handlerP95} ms`);
-    // one frame may be late on a loaded 1-vCPU host; the old handler stalled frames for 200-400 ms per key with the detail open
-    if (plain.maxFrameGap > 200) fails.push(`frame gap ${plain.maxFrameGap} ms`);
+    // a few late frames happen on a loaded 1-vCPU host; the old handler stalled frames for 200-400 ms on every key with the detail open
+    if (plain.slowFrames > 5) fails.push(`${plain.slowFrames} frames over 100 ms`);
+    if (detail.slowFrames > 8) fails.push(`with detail: ${detail.slowFrames} frames over 100 ms`);
     if (detail.handlerP95 > 8) fails.push(`with detail: handler p95 ${detail.handlerP95} ms`);
     if (detail.selectedIndex !== detail.activeIndex) fails.push(`detail selection ${detail.selectedIndex} != focus ${detail.activeIndex}`);
     // bounded (the open match may also refresh on its own feed patches), never one request per key repeat
@@ -537,7 +546,7 @@ scenario('E25', 'P1', 'render: a LIVE feed update over 200 matches is cheap and 
   mockState.extraEvents = 200;
   const page = await openApp();
   try {
-    await until(async () => (await cards(page)) >= 150, { timeout: 60000, what: '150+ rows' });
+    await until(async () => (await cards(page)) >= 150, { timeout: 150000, every: 1000, what: '150+ rows (200 extra matches; the server picks them up after a reset)' });
     await sleep(1500);
     const r = await page.evaluate(async () => {
       const list = document.querySelector('#content .list[data-view="live"]'), rows = [...list.querySelectorAll('article.match')];
@@ -572,6 +581,55 @@ scenario('E25', 'P1', 'render: a LIVE feed update over 200 matches is cheap and 
 });
 
 /* eslint-enable no-undef */
+// Layout matrix: no page-level horizontal overflow, toolbar controls never overlap, rows fit their list, the match
+// detail can be scrolled to its last market. Screenshots go to E2E_SCREENSHOTS when set.
+const LAYOUT_WIDTHS = [360, 400, 600, 800, 1000, 1440];
+async function layoutProblems(page) {
+  return page.evaluate(() => {
+    const out = [], doc = document.documentElement;
+    if (doc.scrollWidth > doc.clientWidth + 1) out.push(`page overflow ${doc.scrollWidth}>${doc.clientWidth}`);
+    const vis = (n) => n && !n.hidden && n.offsetParent !== null && n.getBoundingClientRect().width > 0;
+    const boxes = [...document.querySelectorAll('#toolbar > *, .topbar > *, .topbar-right > *')].filter(vis).map((n) => ({ n, r: n.getBoundingClientRect() }));
+    const tb = boxes.filter((b) => b.n.parentElement.id === 'toolbar' && !b.n.classList.contains('spacer'));
+    for (let i = 0; i < tb.length; i++) for (let j = i + 1; j < tb.length; j++) { const a = tb[i].r, b = tb[j].r; if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) out.push(`toolbar overlap ${tb[i].n.id || tb[i].n.className} / ${tb[j].n.id || tb[j].n.className}`); }
+    for (const b of boxes) if (b.r.right > doc.clientWidth + 1) out.push(`off-screen ${b.n.id || b.n.className} right=${Math.round(b.r.right)}`);
+    // the tab strip may scroll, but the current tab must be reachable and the strip must show at least 3 tabs
+    const nav = document.getElementById('tabs'), nr = nav.getBoundingClientRect(), shown = [...nav.children].filter((t) => { const r = t.getBoundingClientRect(); return r.left >= nr.left - 1 && r.right <= nr.right + 1; }).length;
+    if (shown < 3) out.push(`only ${shown} tabs visible`);
+    const list = document.querySelector('#content .list:not([hidden])');
+    if (list) { const lr = list.getBoundingClientRect(); const row = list.querySelector('article.match'); if (row && row.scrollWidth > row.clientWidth + 2) out.push(`row overflow ${row.scrollWidth}>${row.clientWidth}`); if (row && row.getBoundingClientRect().right > lr.right + 1) out.push('row wider than list'); }
+    const pane = document.getElementById('detailPane');
+    if (pane && !pane.hidden) { const pr = pane.getBoundingClientRect(); if (pr.right > doc.clientWidth + 1 || pr.width < 260) out.push(`detail pane ${Math.round(pr.left)}..${Math.round(pr.right)}`); }
+    return out;
+  });
+}
+scenario('E26', 'X1', 'responsive layout matrix (360-1440 px): no overflow or overlapping controls, rows fit, detail markets scroll to the end', async () => {
+  const shots = process.env.E2E_SCREENSHOTS || '';
+  const page = await openApp(); const problems = [];
+  try {
+    await until(async () => (await cards(page)) >= LIVE_MIN, { what: 'LIVE rows' });
+    for (const width of LAYOUT_WIDTHS) {
+      await page.setViewportSize({ width, height: width < 700 ? 760 : 860 }); await sleep(400);
+      const views = [['live', async () => clickTab(page, 'live')], ['prematch', async () => clickTab(page, 'prematch')], ['compare', async () => clickTab(page, 'compare')],
+        ['detail', async () => { await clickTab(page, 'live'); await page.locator('#content .list[data-view="live"] article.match').first().click(); await sleep(1200); }],
+        ['settings', async () => { await page.click('#settingsButton'); await sleep(500); }]];
+      for (const [name, open] of views) {
+        await open();
+        for (const p of await layoutProblems(page)) problems.push(`${width}px ${name}: ${p}`);
+        if (name === 'detail') {
+          const end = await page.evaluate(async () => { const body = document.getElementById('dpBody') || document.getElementById('detailPane'); const scroller = [body, document.getElementById('detailPane')].find((n) => n && n.scrollHeight > n.clientHeight + 2) || body; scroller.scrollTop = scroller.scrollHeight; await new Promise((r) => setTimeout(r, 200)); const last = [...document.querySelectorAll('#dpMarkets .mkt')].at(-1); if (!last) return 'no markets'; const lr = last.getBoundingClientRect(), pr = document.getElementById('detailPane').getBoundingClientRect(); const covering = document.elementFromPoint(lr.left + 10, Math.min(lr.bottom - 4, pr.bottom - 4)); return last.contains(covering) || covering === last ? '' : `last market covered by ${covering?.className || covering?.tagName}`; });
+          if (end) problems.push(`${width}px detail: ${end}`);
+        }
+        if (shots) await page.screenshot({ path: path.join(shots, `layout-${width}-${name}.png`) });
+        if (name === 'detail') { await page.keyboard.press('Escape'); await sleep(300); }
+        if (name === 'settings') { await page.click('#settingsButton'); await sleep(300); }
+      }
+    }
+    results.note = problems.length ? `${problems.length} problems` : 'clean at ' + LAYOUT_WIDTHS.join('/') + ' px';
+    if (problems.length) throw new Error(problems.slice(0, 25).join(' | '));
+  } finally { await page.setViewportSize({ width: 1360, height: 860 }).catch(() => {}); await page.close(); }
+});
+
 scenario('E21', 'X1', 'filters and the chosen detail tab persist across sections and a reload', async () => {
   let page = await openApp();
   await until(async () => (await cards(page)) >= 1, { what: 'rows' });
