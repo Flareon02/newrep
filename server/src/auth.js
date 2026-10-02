@@ -13,6 +13,7 @@ const PROTECTED_GET = new Set([
   "/api/hltv/team",
   "/api/hltv/player",
   "/api/admin/ggbet-bootstrap",  // per-attempt GGBET bootstrap diagnostics (operators only)
+  "/api/admin/ggbet-forensics",  // GGBET egress/session/pricing-guard state (operators only)
 ]);
 
 const digest = (value) => createHash("sha256").update(String(value)).digest();

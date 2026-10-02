@@ -15,8 +15,40 @@ import zlib from 'node:zlib';
 import dns from 'node:dns';
 import net from 'node:net';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import tls from 'node:tls';
 
-const MODES = { ggbet: ['proxy', 'relay', 'direct'], databet: ['proxy', 'direct'] };
+// GGBET_NETWORK_MODE=netns: GGBET traffic leaves through an isolated network namespace (one Mullvad WireGuard egress,
+// ops/staging/ggbet-egress.sh). Inside it a CONNECT-only proxy listens on a Unix socket; this agent opens every GGBET
+// connection (bootstrap and WebSocket) through that socket, so nothing else of the host and no route is involved.
+export class NetnsConnectAgent extends https.Agent {
+  constructor(socketPath, options = {}) { super({ keepAlive: false, ...options }); this.socketPath = socketPath; }
+  createConnection(options, done) {
+    const host = String(options.host || options.hostname || ''), port = Number(options.port) || 443;
+    const raw = net.connect({ path: this.socketPath });
+    let head = Buffer.alloc(0), finished = false;
+    const fail = (error) => { if (finished) return; finished = true; raw.destroy(); done(error); };
+    raw.setTimeout(Number(options.timeout) || 15000, () => fail(Error('netns egress: CONNECT timeout')));
+    raw.once('error', (error) => fail(Error(`netns egress unavailable: ${error.code || error.message}`)));
+    raw.once('connect', () => raw.write(`CONNECT ${host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n\r\n`));
+    const onData = (chunk) => {
+      head = Buffer.concat([head, chunk]); const end = head.indexOf('\r\n\r\n');
+      if (end < 0) { if (head.length > 8192) fail(Error('netns egress: oversized CONNECT reply')); return; }
+      raw.removeListener('data', onData); raw.setTimeout(0);
+      const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(head.subarray(0, end).toString('latin1'))?.[1] || 0);
+      if (status !== 200) return fail(Error(`netns egress: CONNECT ${host} refused (${status || 'bad reply'})`));
+      if (head.length > end + 4) raw.unshift(head.subarray(end + 4));
+      const secure = tls.connect({ ...options, socket: raw, servername: options.servername || host });
+      finished = true; secure.once('secureConnect', () => {}); done(null, secure);
+    };
+    raw.on('data', onData);
+  }
+}
+let netnsAgentCache = null;
+// One agent per egress socket: the bootstrap token is reused only through the agent (= egress) it was issued through.
+export function netnsAgent(socketPath) { if (netnsAgentCache?.socketPath !== socketPath) netnsAgentCache = new NetnsConnectAgent(socketPath); return netnsAgentCache; }
+export function resetNetnsAgent() { netnsAgentCache = null; }
+
+const MODES = { ggbet: ['proxy', 'relay', 'direct', 'netns'], databet: ['proxy', 'direct'] };
 const truthy = (value) => /^(?:1|true|on|yes)$/i.test(String(value ?? '').trim());
 
 // The explicitly configured mode, or '' when unset/invalid (the provider's legacy default then applies).

@@ -26,7 +26,7 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.9.0",
+  version: "4.10.0",
   port: intEnv("PORT", 8080),
   // Listen address. Unset: 0.0.0.0 (Docker). 127.0.0.1 / localhost when only a local reverse proxy or tunnel may reach
   // the API. Any other value that is not an IP literal binds 127.0.0.1 (fails closed, never public) and is logged.
@@ -67,6 +67,14 @@ export const config = {
   ggbetBootstrapCacheMs: intEnv("GGBET_BOOTSTRAP_CACHE_MS", 4 * 60 * 1000, 30 * 1000),
   ggbetWatchdogMs: intEnv("GGBET_WATCHDOG_MS", 90000, 30000),
   ggbetMaxBackoffMs: intEnv("GGBET_MAX_BACKOFF_MS", 60000, 5000),
+  // GGBET_NETWORK_MODE=netns: the CONNECT socket of the isolated egress namespace and its status file (ggbet-egress.sh).
+  ggbetEgressSocket: String(process.env.GGBET_EGRESS_SOCKET || "/run/ggbet-egress/connect.sock").trim(),
+  ggbetEgressStatusFile: String(process.env.GGBET_EGRESS_STATUS_FILE || "/run/ggbet-egress/status.json").trim(),
+  // Sanitized GGBET forensic log (ggbet-forensics.js): 24 h rolling, size cap, free-disk floor; raw frames off by default.
+  ggbetForensicsEnabled: !/^(?:0|false|off|no)$/i.test(String(process.env.GGBET_FORENSICS_ENABLED || "1")),
+  ggbetForensicsRaw: /^(?:1|true|on|yes)$/i.test(String(process.env.GGBET_FORENSICS_RAW || "0")),
+  ggbetForensicsMaxMiB: intEnv("GGBET_FORENSICS_MAX_MIB", 2048, 64),
+  ggbetForensicsMinFreeMiB: intEnv("GGBET_FORENSICS_MIN_FREE_MIB", 8192, 256),
   // DataBet LIVE (public demo.data.bet). The guest token is read from the public SSR page on every
   // session start and kept only in memory; the collector is an ordinary server-side GraphQL-WS client.
   databetLiveEnabled: !/^(?:0|false|off|no)$/i.test(String(process.env.DATABET_LIVE_ENABLED || "1")),

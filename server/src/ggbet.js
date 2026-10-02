@@ -4,7 +4,7 @@ import GameCategories from './game-categories.cjs';
 import { canonicalCategory, englishize, eventKind } from './entity-resolver.js';
 import { config } from './config.js';
 import { canonicalizeGgbetMarket } from './market-semantics.js';
-import { proxyAgent, proxyDiagnostics, proxyFetch, redact, reportProxySession } from './egress.js';
+import { proxyAgent, proxyDiagnostics, proxyFetch, redact, reportProxySession, netnsAgent, resetNetnsAgent } from './egress.js';
 
 const SNAPSHOT_HASH='44839cf86de25b2875162086620dc57b7bfbb2453b09e6b065f54620c343e40c';
 const UPDATE_HASH='d47e6f564612369a803694590f09f1b88cfd5e0c270664e4599b330794de77dd';
@@ -274,7 +274,10 @@ function relayJson(url,{secret,ca,force=false,timeoutMs=12000,maxBytes=128*1024}
 }
 
 export class GgbetLiveCollector {
-  constructor(state,{fetchImpl=globalThis.fetch,WebSocketImpl=null,now=()=>Date.now(),relayRequestImpl=null,trustedOrigins=GGBET_TRUSTED_ORIGINS}={}){
+  constructor(state,{fetchImpl=globalThis.fetch,WebSocketImpl=null,now=()=>Date.now(),relayRequestImpl=null,trustedOrigins=GGBET_TRUSTED_ORIGINS,observer=null}={}){
+    // observer (ggbet-supervisor.js): forensic/session hooks only; it never steers the collector except for the clean
+    // session after an operator-selected egress change (resetForEgressChange). Its errors never reach the collector.
+    this.observer=observer;
     this.trusted=[...trustedOrigins].map(o=>String(o).replace(/\/+$/,'').toLowerCase());this.bootstrapLog=[];
     this.state=state;this.fetch=fetchImpl;this.WebSocket=WebSocketImpl;this.WebSocketPromise=null;this.now=now;this.ws=null;this.stopped=true;this.connecting=null;this.bootstrap=null;this.originIndex=0;this.failures=0;this.reconnects=0;this.snapshots=0;this.pushes=0;this.snapshotSeq=0;this.subSeq=1000;this.catalogSeq=0;this.events=new Map();this.subscriptions=new Map();this.marketTabs=new Map();this.requests=new Map();this.lastMessageAt=0;this.lastConnectAt=0;this.lastAckAt=0;this.lastSnapshotAt=0;this.lastPushAt=0;this.lastError='';this.lastClose='';this.degradedPolling=false;this.catalogPushFallback=false;this.bootstrapFetches=0;this.bootstrapFailures=0;this.authRefreshes=0;this.scheduledRefreshes=0;this.plainSnapshots=0;this.pushFallbacks=0;this.marketCatalogFetches=0;this.marketCatalogFailures=0;this.marketCatalogUpdates=0;this.fullMarketSubscriptions=0;this.relayFetches=0;this.relayFailures=0;this.lastRelayAt=0;this.lastRelayError='';this.relayRequestImpl=relayRequestImpl;this.metadataPublishTimer=null;this.shortSessions=0;
     // Full market trees are leased by clients (an open detail panel): lease id -> {eventId, until}; events with a
@@ -296,7 +299,10 @@ export class GgbetLiveCollector {
   }
   // Bootstrap origins = GGBET_ORIGINS ∩ the trusted list (exact); the rest is ignored and shown in the diagnostics.
   bootstrapOrigins(){const all=config.ggbetOrigins.map(o=>String(o).replace(/\/+$/,'').toLowerCase());return {use:all.filter(o=>this.trusted.includes(o)),ignored:all.filter(o=>!this.trusted.includes(o))};}
-  recordBootstrap(row){this.bootstrapLog.push(row);if(this.bootstrapLog.length>10)this.bootstrapLog.shift();}
+  recordBootstrap(row){this.bootstrapLog.push(row);if(this.bootstrapLog.length>10)this.bootstrapLog.shift();this.notify('bootstrap',row,row.reason==='ok'?this.bootstrap:null);}
+  notify(hook,...args){try{this.observer?.[hook]?.(...args);}catch{}}
+  // Operator selected another egress: drop the token, cookies-free agent and WebSocket; the next connect is a clean session.
+  resetForEgressChange(reason='egress changed'){this.bootstrap=null;this.bootstrapAgent=null;resetNetnsAgent();const ws=this.ws;if(ws){try{ws.close(4000,String(reason).slice(0,100));}catch{}}}
   // Admin-only (token-protected endpoint): the last bootstrap attempts, per origin. No token, cookie or body.
   bootstrapDiagnostics(){const o=this.bootstrapOrigins();return {trustedOrigins:this.trusted,configuredOrigins:config.ggbetOrigins,usedOrigins:o.use,ignoredOrigins:o.ignored,networkMode:config.ggbetNetworkMode,bootstrapFetches:this.bootstrapFetches,bootstrapFailures:this.bootstrapFailures,attempts:this.bootstrapLog.map(x=>({...x,redirectChain:[...x.redirectChain]}))};}
   // One GET of the public LIVE page, redirects followed by hand: each hop only to a trusted host (an untrusted target is
@@ -333,7 +339,7 @@ export class GgbetLiveCollector {
     const get=viaProxy?(url,options)=>proxyFetch(url,{headers:options.headers,signal:options.signal,timeoutMs:config.ggbetRequestTimeoutMs,agent,followRedirects:false}):(url,options)=>this.fetch(url,{...options,redirect:'manual'});
     for(let n=0;n<origins.length;n++){
       const idx=(this.originIndex+n)%origins.length,origin=origins[idx],started=Date.now();
-      const diag={at:new Date(this.now()).toISOString(),via:viaProxy?'proxy':'direct',requestedHost:new URL(origin).hostname,finalHost:'',status:0,redirects:0,redirectChain:[],setCookie:false,cookieOnRedirect:false,contentType:'',bodyKind:'',bodyBytes:0,tokenExtraction:'',reason:'',detail:'',elapsedMs:0};
+      const diag={at:new Date(this.now()).toISOString(),via:viaProxy?(config.ggbetNetworkMode==='netns'?'netns':'proxy'):'direct',requestedHost:new URL(origin).hostname,finalHost:'',status:0,redirects:0,redirectChain:[],setCookie:false,cookieOnRedirect:false,contentType:'',bodyKind:'',bodyBytes:0,tokenExtraction:'',reason:'',detail:'',elapsedMs:0};
       try{const data=await this.bootstrapPage(origin,get,diag);diag.reason='ok';this.originIndex=idx;this.bootstrap=data;this.bootstrapAgent=agent;this.bootstrapFetches++;return data;}
       catch(e){this.bootstrapFailures++;error=e;if(!diag.reason)diag.reason='failed';if(!diag.detail)diag.detail=redact(String(e?.message||e)).slice(0,160);
         if(e?.geoBlocked)break;
@@ -344,7 +350,7 @@ export class GgbetLiveCollector {
     }throw error||Error('GGBET: bootstrap недоступен');
   }
   // agent: proxy sessions reuse a cached token only if it was fetched through the same agent (= the same egress IP).
-  async fetchBootstrap(force=false,agent=null){if(!force&&this.bootstrap&&this.now()-this.bootstrap.at<config.ggbetBootstrapCacheMs&&(!agent||this.bootstrapAgent===agent))return this.bootstrap;const mode=config.ggbetNetworkMode;if(mode==='relay')return this.fetchRelayBootstrap(force);return this.fetchDirectBootstrap(mode==='proxy',agent);}
+  async fetchBootstrap(force=false,agent=null){if(!force&&this.bootstrap&&this.now()-this.bootstrap.at<config.ggbetBootstrapCacheMs&&(!agent||this.bootstrapAgent===agent))return this.bootstrap;const mode=config.ggbetNetworkMode;if(mode==='relay')return this.fetchRelayBootstrap(force);return this.fetchDirectBootstrap(mode==='proxy'||mode==='netns',agent);}
   send(data){if(this.ws?.readyState!==1)throw Error('GGBET: WebSocket не подключён');this.ws.send(JSON.stringify(data));}
   snapshotPayload(id,{plain=false}={}){const payload={operationName:'GetSportEventListByFilters',variables:{marketLimit:3,isTopMarkets:true,isClient:true,favorite:false,order:'RANK_RECOMMENDED',offset:0,limit:250,sportEventTypes:['MATCH'],marketStatuses:MARKET_STATUSES,matchStatuses:MATCH_STATUSES,marketStatusesForSportEvent:MARKET_STATUSES,sportIds:LIVE_SPORTS}};if(plain)payload.query=SNAPSHOT_QUERY;else payload.extensions={persistedQuery:{version:1,sha256Hash:SNAPSHOT_HASH}};return {id,type:'start',payload};}
   requestSnapshot({plain=false}={}){if(this.ws?.readyState!==1||!this.lastAckAt||[...this.requests.values()].some(r=>r.kind==='snapshot'))return;const id=`s${++this.snapshotSeq}`;if(plain)this.plainSnapshots++;this.requests.set(id,{kind:'snapshot',plain,at:this.now()});this.send(this.snapshotPayload(id,{plain}));}
@@ -459,7 +465,7 @@ export class GgbetLiveCollector {
   }
   async applySnapshot(list){const now=this.now(),next=new Map();for(const raw of Array.isArray(list)?list:[]){if(!raw?.id)continue;this.lightIds.set(raw.id,(raw.markets||[]).map(m=>text(m?.id)).filter(Boolean));const old=this.events.get(raw.id),tab=this.marketTabs.get(raw.id),keepFull=!!(this.fullEvents.has(raw.id)&&tab?.marketIds?.length&&old?.markets?.length),resync=keepFull&&this.checkFullStream(raw.id,raw,old,now);const patch=keepFull?{...raw,markets:resync?mergeMarketsById(old.markets,raw.markets):undefined}:raw,merged=mergeGgbetEvent(old,patch);merged.__updatedAt=old?.version===merged.version?(old.__updatedAt||now):now;next.set(raw.id,merged);}for(const id of this.events.keys())if(!next.has(id))this.forgetEvent(id);this.events=next;for(const raw of this.events.values()){if(this.fullEvents.has(raw.id)){if(!this.marketTabs.get(raw.id)?.providerTabs?.length)this.requestProviderTabs(raw);this.requestMarketCatalog(raw,{force:this.catalogPushFallback});}else this.syncLight(raw.id);}this.snapshots++;this.lastSnapshotAt=now;this.failures=0;this.lastError='';await this.publish(now);}
   async applyPush(patch){if(!patch?.id)return;const old=this.events.get(patch.id);if(!old){this.scheduleSnapshot(250);return;}const now=this.now(),merged=mergeGgbetEvent(old,patch);merged.__updatedAt=now;this.events.set(patch.id,merged);const sub=this.subscriptions.get(patch.id);if(sub){sub.version=merged.version||sub.version;sub.pushes=(sub.pushes||0)+1;}const tab=this.marketTabs.get(patch.id);if(tab)tab.version=merged.version||tab.version;this.pushes++;this.lastPushAt=now;this.failures=0;this.lastError='';await this.publish(now);}
-  async onMessage(raw){this.lastMessageAt=this.now();let msg;try{msg=JSON.parse(typeof raw==='string'?raw:String(raw));}catch{return;}if(msg.type==='connection_ack'){this.lastAckAt=this.now();this.failures=0;this.requestSnapshot();return;}if(msg.type==='ka'||msg.type==='connection_keep_alive')return;
+  async onMessage(raw){this.lastMessageAt=this.now();let msg;try{msg=JSON.parse(typeof raw==='string'?raw:String(raw));}catch{return;}this.notify('message',raw,msg);if(msg.type==='connection_ack'){this.lastAckAt=this.now();this.failures=0;this.requestSnapshot();return;}if(msg.type==='ka'||msg.type==='connection_keep_alive')return;
     const id=String(msg.id||''),req=this.requests.get(id);if(msg.type==='data'){
       if(req?.kind==='snapshot'){const matches=msg?.payload?.data?.matches?.sportEvents;if(Array.isArray(matches)){this.requests.delete(id);await this.applySnapshot(matches);}}
       else if(req?.kind==='provider-tabs'){const rows=msg?.payload?.data?.compiledMarketsTabs?.tabs;if(Array.isArray(rows)){this.requests.delete(id);const tab=this.marketTabs.get(req.eventId);if(tab&&tab.tabsQueryId===id)tab.tabsQueryId='';this.applyProviderTabs(req.eventId,rows);}}
@@ -494,7 +500,7 @@ export class GgbetLiveCollector {
   async webSocketClass(){if(this.WebSocket)return this.WebSocket;if(!this.WebSocketPromise)this.WebSocketPromise=import('ws').then(m=>m.WebSocket||m.default);return this.WebSocketPromise;}
   async connect(){if(this.stopped||!config.ggbetLiveEnabled||this.connecting)return this.connecting;this.connecting=(async()=>{try{
       // Proxy mode: one agent for the whole session - the token and the WebSocket leave through the same gateway.
-      const agent=config.ggbetNetworkMode==='proxy'?await proxyAgent():null;const bootstrap=await this.fetchBootstrap(!this.bootstrap,agent);if(this.stopped)return;const WebSocketClass=await this.webSocketClass();const ws=new WebSocketClass(bootstrap.wsUrl,'graphql-ws',{headers:{Origin:bootstrap.origin,'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/153 Safari/537.36'},handshakeTimeout:config.ggbetRequestTimeoutMs,perMessageDeflate:false,maxPayload:config.upstreamMaxBytes,...(agent?{agent}:{})});this.ws=ws;this.wsConnectionsCreated++;this.lastAckAt=0;this.lastConnectAt=this.now();this.lastMessageAt=this.now();this.requests.clear();this.subscriptions.clear();this.marketTabs.clear();
+      const agent=config.ggbetNetworkMode==='proxy'?await proxyAgent():config.ggbetNetworkMode==='netns'?netnsAgent(config.ggbetEgressSocket):null;const bootstrap=await this.fetchBootstrap(!this.bootstrap,agent);if(this.stopped)return;const WebSocketClass=await this.webSocketClass();const ws=new WebSocketClass(bootstrap.wsUrl,'graphql-ws',{headers:{Origin:bootstrap.origin,'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/153 Safari/537.36'},handshakeTimeout:config.ggbetRequestTimeoutMs,perMessageDeflate:false,maxPayload:config.upstreamMaxBytes,...(agent?{agent}:{})});this.ws=ws;this.wsConnectionsCreated++;this.lastAckAt=0;this.lastConnectAt=this.now();this.lastMessageAt=this.now();this.requests.clear();this.subscriptions.clear();this.marketTabs.clear();
       await new Promise((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>{try{ws.close();}catch{};reject(Error('GGBET: timeout подключения WebSocket'));},config.ggbetRequestTimeoutMs);timer.unref?.();
         const open=()=>{try{ws.send(JSON.stringify({type:'connection_init',payload:{headers:{'X-Auth-Token':bootstrap.token}}}));}catch(e){reject(e);}};
         const message=e=>{this.onMessage(e?.data).catch(err=>{this.lastError=err.message;});if(!settled){try{const x=JSON.parse(String(e?.data));if(x.type==='connection_ack'){settled=true;clearTimeout(timer);resolve();}else if(x.type==='connection_error'){settled=true;clearTimeout(timer);this.authRefreshes++;this.bootstrap=null;const detail=text(x?.payload?.message||x?.payload||'init rejected').slice(0,200);try{ws.close(4401,'refresh-token');}catch{};reject(Error(`GGBET connection_init rejected: ${detail}`));}}catch{}}};
@@ -502,9 +508,9 @@ export class GgbetLiveCollector {
         const close=e=>{this.handleClose(e);if(!settled){settled=true;clearTimeout(timer);reject(Error(`GGBET: WebSocket закрыт ${e?.code||''}`));}};
         ws.addEventListener('open',open);ws.addEventListener('message',message);ws.addEventListener('error',error);ws.addEventListener('close',close);
       });
-      this.reconnects+=this.reconnects||this.failures?1:0;this.failures=0;this.lastError='';if(agent)reportProxySession(true);
-    }catch(error){if(config.ggbetNetworkMode==='proxy')reportProxySession(false);this.failures++;this.lastError=redact(error?.message||String(error));await this.state.failure({message:this.lastError,status:error?.status||0});if(isAuthError(this.lastError))this.bootstrap=null;const delay=jitter(Math.min(config.ggbetMaxBackoffMs,1000*(2**Math.min(6,this.failures))));this.scheduleReconnect(delay);throw error;}finally{this.connecting=null;}})();return this.connecting;}
-  handleClose(event){if(this.ws&&event?.target&&this.ws!==event.target)return;this.lastClose=`${event?.code||0} ${event?.reason||''}`.trim();this.lastAckAt=0;this.ws=null;this.requests.clear();this.subscriptions.clear();this.marketTabs.clear();if(this.stopped)return;this.failures++;
+      this.reconnects+=this.reconnects||this.failures?1:0;this.failures=0;this.lastError='';if(agent&&config.ggbetNetworkMode==='proxy')reportProxySession(true);this.notify('wsConnected');
+    }catch(error){if(config.ggbetNetworkMode==='proxy')reportProxySession(false);this.notify('wsFailed',error);this.failures++;this.lastError=redact(error?.message||String(error));await this.state.failure({message:this.lastError,status:error?.status||0});if(isAuthError(this.lastError))this.bootstrap=null;const delay=jitter(Math.min(config.ggbetMaxBackoffMs,1000*(2**Math.min(6,this.failures))));this.scheduleReconnect(delay);throw error;}finally{this.connecting=null;}})();return this.connecting;}
+  handleClose(event){if(this.ws&&event?.target&&this.ws!==event.target)return;this.lastClose=`${event?.code||0} ${event?.reason||''}`.trim();this.notify('wsClosed',event?.code||0,event?.reason||'');this.lastAckAt=0;this.ws=null;this.requests.clear();this.subscriptions.clear();this.marketTabs.clear();if(this.stopped)return;this.failures++;
     // Reconnect pacing: only a healthy, long session may refresh at once; a streak of short sessions or failures backs off
     // (the connection_error path already scheduled a back-off before this close event - never shorten it to 500 ms).
     const lived=this.lastConnectAt?this.now()-this.lastConnectAt:0;this.shortSessions=lived<MIN_HEALTHY_SESSION_MS?this.shortSessions+1:0;

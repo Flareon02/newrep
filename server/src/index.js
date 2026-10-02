@@ -1,4 +1,6 @@
 import { log } from "./logger.js";
+import path from "node:path";
+import fs from "node:fs";
 import {stopMatcher} from './matcher-client.js';
 import { config } from "./config.js";
 import { createApi } from "./api.js";
@@ -14,6 +16,7 @@ import {checkpointSqliteStorage,closeSqliteStorage,storageMetrics} from "./sqlit
 
 import { loadMatcherAliases, flushMatcherAliases } from "./entity-resolver.js";
 import {teamLogos} from './team-logos.js';
+import {GgbetSupervisor} from './ggbet-supervisor.js';
 
 import {PinnacleCollector} from './pinnacle.js';
 import {HltvService} from './hltv-service.js';
@@ -44,7 +47,10 @@ const liveCollector = new LiveCollector(liveState);
 const prematchCollector = new PrematchCollector(prematchState);
 const pinnacleCollector=new PinnacleCollector(pinnaclePrematchState,{liveState:pinnacleLiveState});
 const fonbetCollector = new FonbetCollector(fonbetLiveState, fonbetPrematchState);
-const ggbetCollector = new GgbetLiveCollector(ggbetLiveState);
+// GGBET forensics/session supervisor (observe-only; see ggbet-supervisor.js). Its state lives in DATA_DIR/ggbet-forensics.
+const ggbetSupervisor = config.ggbetForensicsEnabled ? new GgbetSupervisor({ dir: path.join(config.dataDir, 'ggbet-forensics'), mode: config.ggbetNetworkMode, statusFile: config.ggbetEgressStatusFile, version: config.version, release: (() => { try { return path.basename(fs.realpathSync(path.resolve(process.cwd(), '..'))); } catch { return ''; } })(), raw: config.ggbetForensicsRaw, maxBytes: config.ggbetForensicsMaxMiB * 1048576, minFreeMiB: config.ggbetForensicsMinFreeMiB }) : null;
+const ggbetCollector = new GgbetLiveCollector(ggbetLiveState, { observer: ggbetSupervisor });
+ggbetSupervisor?.attach(ggbetCollector);
 const databetCollector = new DatabetLiveCollector(databetLiveState);
 // GGBET is LIVE-only until its ENDED/final-result transport is verified against production.
 const resultsService = new ResultsService(liveState, fonbetLiveState, prematchState, fonbetPrematchState);
@@ -55,7 +61,7 @@ await prematchCollector.load();
 const hltvService=new HltvService();
 const oddsService=new OddsService(hltvService);
 const crossbetService=new CrossbetService();
-const server = createApi({ liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState,databetCollector,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt });
+const server = createApi({ ggbetSupervisor, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState,databetCollector,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt });
 if(String(process.env.HOST||'').trim()&&!/^localhost$/i.test(String(process.env.HOST).trim())&&String(process.env.HOST).trim()!==config.host)log.warn(`[api] HOST is not an IP address; listening on ${config.host} instead`);
 server.listen(config.port, config.host, () => {
   log.info(`[api] listening on ${config.host.includes(":")?`[${config.host}]`:config.host}:${config.port}`);
@@ -68,7 +74,7 @@ server.listen(config.port, config.host, () => {
   if([config.ggbetNetworkMode,config.databetNetworkMode].includes('proxy'))startEgressCheck();
   liveCollector.start();
   prematchCollector.start();
-  fonbetCollector.start();ggbetCollector.start();databetCollector.start();pinnacleCollector.start();
+  fonbetCollector.start();ggbetSupervisor?.start();ggbetCollector.start();databetCollector.start();pinnacleCollector.start();
   resultsService.start();
   retention=startRetention({statistics:server.statistics,activeKeys:server.activeEventKeys});
 });
@@ -86,6 +92,7 @@ async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   const deadline=setTimeout(() => process.exit(exitCode||1), persist?30000:5000);deadline.unref();
   const closed=new Promise(resolve=>server.close(()=>resolve()));
   await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),databetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);
+  try{ggbetSupervisor?.stop();}catch{}
   await retention?.stop();
   await Promise.allSettled([server.stopStatistics(),oddsService.stop()]);
   if(persist){

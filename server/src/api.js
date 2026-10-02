@@ -191,7 +191,7 @@ export function sseEventWire(event,payload){
   return `event: ${String(event||'message')}\ndata: ${JSON.stringify(payload??{})}\n\n`;
 }
 
-export function createApi({ authToken=config.apiToken, userStore=null, accessMode=config.accessControl, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState=null,databetCollector=null,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
+export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupervisor=null, accessMode=config.accessControl, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState=null,databetCollector=null,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
   const authorizer=createAuthorizer(authToken);
   const users=userStore||new UserStore(),access=createAccess({masterToken:authorizer.misconfigured?'':authToken,users,mode:accessMode});
   if(access.enforce)log.info('[api] access control: per-user capabilities enforced (API_TOKEN holder = administrator)');
@@ -485,6 +485,12 @@ export function createApi({ authToken=config.apiToken, userStore=null, accessMod
     if(req.method==='POST'&&url.pathname==='/api/statistics/availability'){
       const body=await readBody(req,512000);if(!Array.isArray(body.events)||body.events.length>500)return sendJson(req,res,400,{error:'Слишком много матчей'});
       return sendJson(req,res,200,await statistics.availability(body.events));
+    }
+    if(req.method==='GET'&&url.pathname==='/api/admin/ggbet-forensics'){
+      // Administrators only (admin.diagnostics): egress, session ages, pricing-guard state, recent incidents. Built from
+      // the sanitized supervisor state - no token, cookie value or config secret.
+      if(!ggbetSupervisor)return sendJson(req,res,200,{enabled:false});
+      const st=ggbetSupervisor.stateSnapshot();return sendJson(req,res,200,{enabled:true,...st,sessions:st.sessions.slice(-20),history:st.history.slice(-50),incidents:(ggbetSupervisor.incidents||[]).slice(-20)});
     }
     if(req.method==='GET'&&url.pathname==='/api/admin/ggbet-bootstrap'){
       // Token-protected (auth.js): per-origin outcome of the last GGBET bootstrap attempts - hosts, status, redirect

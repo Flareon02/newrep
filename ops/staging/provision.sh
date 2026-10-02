@@ -76,6 +76,8 @@ install -m 0755 "$HERE/health-watch.sh" /usr/local/bin/esports-monitor-health-wa
 install -m 0755 "$HERE/profile.sh" /usr/local/bin/esports-monitor-profile
 install -m 0755 "$HERE/port.sh" /usr/local/bin/esports-monitor-port
 install -m 0755 "$HERE/ggbet-relay.sh" /usr/local/bin/esports-monitor-ggbet-relay
+install -m 0755 "$HERE/ggbet-egress.sh" /usr/local/bin/esports-monitor-ggbet-egress
+printf '#!/bin/sh\nexec /usr/local/bin/node /opt/esports-monitor/current/tools/ggbet-cli.mjs "$@"\n' > /usr/local/bin/esports-monitor-ggbet && chmod 0755 /usr/local/bin/esports-monitor-ggbet
 install -m 0755 "$HERE/deploy.sh" /usr/local/bin/esports-monitor-deploy
 install -m 0755 "$HERE/rollback.sh" /usr/local/bin/esports-monitor-rollback
 install -m 0755 "$HERE/compose-env.py" /usr/local/lib/esports-monitor-compose-env.py

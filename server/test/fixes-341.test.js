@@ -6,7 +6,7 @@ import {SnapshotState} from '../src/state.js';
 import {feedPushPayload} from '../src/api.js';
 
 test('3.7.1 keeps the retired external feed configuration disabled',()=>{
-  assert.equal(config.version,'4.9.0');
+  assert.equal(config.version,'4.10.0');
   assert.equal(Object.prototype.hasOwnProperty.call(config,'cyberEnabled'),false);
   assert.equal(Object.prototype.hasOwnProperty.call(config,'cyberOrigin'),false);
 });
