@@ -12,6 +12,8 @@ import zlib from 'node:zlib';
 import { randomBytes } from 'node:crypto';
 
 const HOUR = 3600000;
+// High-volume kinds that may be buffered (bufferMs); everything else is written synchronously.
+const BUFFERED = new Set(['raw', 'pricing', 'graphql', 'stats']);
 // Keys whose VALUES are never persisted (case-insensitive substring match on the key name).
 const SECRET_KEY = /(token|cookie|authorization|password|passwd|secret|private.?key|presharedkey|credential|api.?key)/i;
 // JWT/JWE-looking strings (base64url header starting with {" = eyJ) anywhere inside a value.
@@ -49,8 +51,11 @@ const hourKey = (ms) => new Date(Math.floor(ms / HOUR) * HOUR).toISOString().sli
 const hourOf = (name) => { const m = /^(\d{8})T(\d{2})\.ndjson/.exec(name); return m ? Date.parse(`${m[1].slice(0, 4)}-${m[1].slice(4, 6)}-${m[1].slice(6, 8)}T${m[2]}:00:00Z`) : NaN; };
 
 export class ForensicLog {
-  constructor({ dir, now = () => Date.now(), retentionMs = 24 * HOUR, maxBytes = 2 * 1024 ** 3, minFreeMiB = 4096, raw = false, statfs = (p) => fs.statfsSync(p) } = {}) {
-    Object.assign(this, { dir, now, retentionMs, maxBytes, minFreeMiB, rawRequested: raw, raw, statfs });
+  // bufferMs > 0: lines are collected and appended asynchronously (one write in flight) so the event loop never waits for
+  // the disk per frame; transitions/sessions/incidents and every hour change flush synchronously.
+  constructor({ dir, now = () => Date.now(), retentionMs = 24 * HOUR, incidentRetentionMs = 7 * 24 * HOUR, maxBytes = 2 * 1024 ** 3, minFreeMiB = 4096, raw = false, bufferMs = 0, statfs = (p) => fs.statfsSync(p) } = {}) {
+    Object.assign(this, { dir, now, retentionMs, incidentRetentionMs, maxBytes, minFreeMiB, rawRequested: raw, raw, statfs, bufferMs });
+    this.buffer = []; this.bufferHour = ''; this.flushing = null; this.bytesWritten = 0; this.linesWritten = 0;
     this.eventsDir = path.join(dir, 'events'); this.incidentsDir = path.join(dir, 'incidents');
     for (const d of [dir, this.eventsDir, this.incidentsDir]) { fs.mkdirSync(d, { recursive: true, mode: 0o700 }); try { fs.chmodSync(d, 0o700); } catch {} }
     this.currentHour = ''; this.writes = 0; this.dropped = 0; this.guard = { level: 'ok', freeMiB: null, bytes: 0, checkedAt: 0 };
@@ -61,10 +66,29 @@ export class ForensicLog {
   write(kind, record = {}) {
     if (kind === 'raw' && !this.raw) { this.dropped++; return false; }
     const at = this.now(), hour = hourKey(at);
-    if (hour !== this.currentHour) { const previous = this.currentHour; this.currentHour = hour; if (previous) this.compress(previous); this.maintain(true); }
+    if (hour !== this.currentHour) { this.flushSync(); const previous = this.currentHour; this.currentHour = hour; if (previous) this.compress(previous); this.maintain(true); }
     else if (++this.writes % 200 === 0 || at - this.guard.checkedAt > 60000) this.maintain(false);
     const line = JSON.stringify(sanitize({ at: new Date(at).toISOString(), kind, ...record })) + '\n';
+    this.linesWritten++; this.bytesWritten += line.length;
+    if (this.bufferMs > 0 && BUFFERED.has(kind)) { this.buffer.push(line); this.bufferHour = hour; if (!this.timer) { this.timer = setTimeout(() => this.flush(), this.bufferMs); this.timer.unref?.(); } if (this.buffer.length > 2000) this.flush(); return true; }
+    this.flushSync();
     try { fs.appendFileSync(this.file(hour), line, { mode: 0o600 }); return true; } catch { this.dropped++; return false; }
+  }
+  flush() {
+    clearTimeout(this.timer); this.timer = null; if (!this.buffer.length) return this.flushing;
+    const data = this.buffer.join(''), file = this.file(this.bufferHour || this.currentHour); this.buffer = [];
+    const prev = this.flushing || Promise.resolve();
+    this.flushing = prev.then(() => fs.promises.appendFile(file, data, { mode: 0o600 })).catch(() => { this.dropped++; }).finally(() => { if (this.flushing === run) this.flushing = null; });
+    const run = this.flushing; return run;
+  }
+  flushSync() {
+    clearTimeout(this.timer); this.timer = null; if (!this.buffer.length) return;
+    const data = this.buffer.join(''), file = this.file(this.bufferHour || this.currentHour); this.buffer = [];
+    try { fs.appendFileSync(file, data, { mode: 0o600 }); } catch { this.dropped++; }
+  }
+  updateIncident(id, patch = {}) {
+    const file = path.join(this.incidentsDir, `incident-${id}.json`);
+    try { const body = JSON.parse(fs.readFileSync(file, 'utf8')); fs.writeFileSync(file, JSON.stringify(sanitize({ ...body, ...patch }), null, 1), { mode: 0o600 }); return true; } catch { return false; }
   }
   incident(record = {}) {
     const at = this.now(), id = record.incidentId || `${new Date(at).toISOString().replace(/[-:.]/g, '').slice(0, 15)}Z-${randomBytes(3).toString('hex')}`;
@@ -91,7 +115,7 @@ export class ForensicLog {
     let total = files.reduce((n, f) => n + f.size, 0);
     for (const f of files) { if (total <= this.maxBytes) break; if (hourKey(f.hour) === this.currentHour) continue; try { fs.unlinkSync(f.path); total -= f.size; } catch {} }
     let incidents = []; try { incidents = fs.readdirSync(this.incidentsDir).map((n) => path.join(this.incidentsDir, n)); } catch {}
-    for (const p of incidents) { try { if (fs.statSync(p).mtimeMs < now - 7 * 24 * HOUR) fs.unlinkSync(p); } catch {} }
+    for (const p of incidents) { try { if (fs.statSync(p).mtimeMs < now - this.incidentRetentionMs) fs.unlinkSync(p); } catch {} }
     let freeMiB = null; try { const s = this.statfs(this.dir); freeMiB = Math.floor((Number(s.bavail) * Number(s.bsize)) / 1048576); } catch {}
     const level = freeMiB == null ? 'unknown' : freeMiB < this.minFreeMiB / 4 ? 'critical' : freeMiB < this.minFreeMiB ? 'low' : 'ok';
     // Low disk: raw messages stop first; critical: only incidents/state (events are still small transitions).
@@ -99,5 +123,5 @@ export class ForensicLog {
     this.guard = { level, freeMiB, bytes: total, checkedAt: now, raw: this.raw };
     return this.guard;
   }
-  status() { return { dir: this.dir, retentionHours: this.retentionMs / HOUR, maxBytes: this.maxBytes, minFreeMiB: this.minFreeMiB, rawRequested: this.rawRequested, ...this.guard, files: this.list().length, dropped: this.dropped }; }
+  status() { return { linesWritten: this.linesWritten, bytesWritten: this.bytesWritten, dir: this.dir, retentionHours: this.retentionMs / HOUR, maxBytes: this.maxBytes, minFreeMiB: this.minFreeMiB, rawRequested: this.rawRequested, ...this.guard, files: this.list().length, dropped: this.dropped }; }
 }

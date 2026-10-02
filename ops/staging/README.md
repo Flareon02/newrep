@@ -13,7 +13,8 @@ Everything here is for the **staging** VPS only. It never references production 
 | `health-watch.sh` + timer | Restarts the service after 3 failed `/health` checks (hangs); crashes are handled by systemd |
 | `esports-monitor-soak.service` | Runs `tools/soak-sampler.mjs` every minute -> `/var/lib/esports-monitor-soak/samples.jsonl` |
 | `ggbet-egress.sh` | `esports-monitor-ggbet-egress discover\|select <name.conf>\|status\|down`: ONE operator-chosen Mullvad WireGuard config as an isolated GGBET egress (namespace `ggbet-egress`, CONNECT proxy on a Unix socket, transient unit `esports-monitor-ggbet-egress`). The service uses it with `GGBET_NETWORK_MODE=netns`. Host route untouched; config contents never printed |
-| `esports-monitor-ggbet` (tools/ggbet-cli.mjs) | read-only GGBET diagnostics: `status`, `vpns`, `sessions`, `history`, `incidents [id]`, `tail`, `--json`; `select <name.conf>` = manual egress change |
+| `esports-monitor-ggbet-egressd.service` (tools/ggbet-egressd.mjs) | root egress controller: keeps ONE Mullvad config as the GGBET egress (preferred `ggbet-good.conf`), checks transport health every 30 s; only on transport failure: re-establish once, then cooldown + next config (max 3 switches/h), last resort = the HTTP proxy (`CZECH_PROXY_*`, still configured). Candidates are verified before the service sees them. Pool state: `/var/lib/esports-monitor-ggbet/pool.json` |
+| `esports-monitor-ggbet` (tools/ggbet-cli.mjs) | read-only GGBET diagnostics: `status`, `vpns`, `sessions`, `history`, `switches`, `qualification`, `incidents [id]`, `tail`, `--json`; `select <name.conf>` = manual egress change |
 | `compose-env.py` | Derives the service environment from the release's own `docker-compose.yml`, so staging runs production settings |
 
 ## Behind Cloudflare Tunnel (current staging)

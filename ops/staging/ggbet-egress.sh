@@ -14,7 +14,10 @@ PROXY_JS=${GGBET_EGRESS_PROXY:-$APP/tools/ggbet-egress-proxy.mjs}   # override o
 route_sig(){ ip route show default; ip -6 route show default; }
 outside_ip(){ curl -s --max-time 10 https://api.ipify.org; }
 perms(){ chmod 700 "$DIR"; find "$DIR" -maxdepth 1 -type f -name '*.conf' ! -perm 600 -exec chmod 600 {} +; }
-down(){ systemctl stop "$UNIT" 2>/dev/null || true; ip netns del "$NS" 2>/dev/null || true; rm -rf /etc/netns/"$NS"; rm -f "$RUN"/connect.sock "$RUN"/status.json; }
+# GGBET_EGRESS_NO_STATUS=1 (used by the egress controller): prepare/verify without touching status.json - the service keeps
+# its current egress until the controller has verified the new one and writes the status itself.
+NO_STATUS=${GGBET_EGRESS_NO_STATUS:-0}
+down(){ systemctl stop "$UNIT" 2>/dev/null || true; systemctl reset-failed "$UNIT" 2>/dev/null || true; ip netns del "$NS" 2>/dev/null || true; rm -rf /etc/netns/"$NS"; rm -f "$RUN"/connect.sock; [ "$NO_STATUS" = 1 ] || rm -f "$RUN"/status.json; }
 case "${1:-}" in
   discover) perms; find "$DIR" -maxdepth 1 -type f -name '*.conf' -printf '{"configFile":"%f","mode":"%m","owner":"%u:%g","size":%s}\n' | sort ;;
   status)
@@ -42,9 +45,9 @@ case "${1:-}" in
       /usr/local/bin/node "$PROXY_JS" --socket "$RUN/sock/connect.sock" --resolv /etc/netns/"$NS"/resolv.conf
     for _ in $(seq 1 20); do [ -S "$RUN/sock/connect.sock" ] && break; sleep 0.25; done
     ln -sfn "$RUN/sock/connect.sock" "$RUN/connect.sock"
-    jq -n --arg id "mullvad:${NAME%.conf}" --arg cf "$NAME" --arg ns "$NS" --arg at "$(date -u +%FT%T.%3NZ)" --argjson i "$INFO" \
-      '{id:$id,configFile:$cf,namespace:$ns,activatedAt:$at,exitIp:$i.ip,country:$i.country,city:$i.city,hostname:$i.mullvad_exit_ip_hostname,mullvad:$i.mullvad_exit_ip}' > "$RUN/status.json"
-    chown root:"$SVC_USER" "$RUN/status.json"; chmod 640 "$RUN/status.json"
-    echo "active egress:"; jq -c . "$RUN/status.json"; echo "outside default route unchanged: $(ip route show default)" ;;
+    STATUS=$(jq -cn --arg id "mullvad:${NAME%.conf}" --arg cf "$NAME" --arg ns "$NS" --arg at "$(date -u +%FT%T.%3NZ)" --argjson i "$INFO" \
+      '{id:$id,configFile:$cf,namespace:$ns,activatedAt:$at,exitIp:$i.ip,country:$i.country,city:$i.city,hostname:$i.mullvad_exit_ip_hostname,mullvad:$i.mullvad_exit_ip}')
+    if [ "$NO_STATUS" != 1 ]; then printf '%s\n' "$STATUS" > "$RUN/status.json.tmp"; chown root:"$SVC_USER" "$RUN/status.json.tmp"; chmod 640 "$RUN/status.json.tmp"; mv -f "$RUN/status.json.tmp" "$RUN/status.json"; echo "active egress:"; fi
+    printf '%s\n' "$STATUS"; echo "outside default route unchanged: $(ip route show default)" >&2 ;;
   *) sed -n '2,9p' "$0"; exit 2 ;;
 esac

@@ -13,7 +13,7 @@ export function jweMeta(token) {
   try { const h = JSON.parse(Buffer.from(String(token || '').split('.')[0], 'base64url').toString('utf8')); return Object.fromEntries(JWE_FIELDS.filter((k) => k in h).map((k) => [k, h[k]])); } catch { return null; }
 }
 export function readEgressStatus(file, mode) {
-  if (mode === 'netns') { try { const s = JSON.parse(fs.readFileSync(file, 'utf8')); return { id: String(s.id || 'netns'), kind: 'mullvad-netns', configFile: s.configFile || null, exitIp: s.exitIp || null, country: s.country || null, city: s.city || null, hostname: s.hostname || null, activatedAt: s.activatedAt || null, namespace: s.namespace || null }; } catch { return { id: 'netns:unavailable', kind: 'mullvad-netns', error: 'status file unreadable' }; } }
+  if (mode === 'netns') { try { const s = JSON.parse(fs.readFileSync(file, 'utf8')); if (s.kind === 'proxy-fallback') return { id: String(s.id || 'proxy:last-resort'), kind: 'proxy-fallback', fallbackReason: s.fallbackReason || null, fallbackStartedAt: s.fallbackStartedAt || s.activatedAt || null, activatedAt: s.activatedAt || null }; return { id: String(s.id || 'netns'), kind: 'mullvad-netns', configFile: s.configFile || null, exitIp: s.exitIp || null, country: s.country || null, city: s.city || null, hostname: s.hostname || null, activatedAt: s.activatedAt || null, namespace: s.namespace || null }; } catch { return { id: 'netns:unavailable', kind: 'mullvad-netns', error: 'status file unreadable' }; } }
   return { id: mode || 'direct', kind: mode || 'direct' };
 }
 // Walk a GraphQL payload; yield every market with its nearest enclosing sport event (id/version/status/start).
@@ -27,9 +27,11 @@ export function* marketsWithEvent(node, event = null, depth = 0) {
 }
 
 export class GgbetSupervisor {
-  constructor({ dir, mode = 'direct', statusFile = '/run/ggbet-egress/status.json', version = '', release = '', now = () => Date.now(), log = null, guard = null, raw = false, maxBytes, minFreeMiB } = {}) {
-    Object.assign(this, { dir, mode, statusFile, version, release, now });
-    this.log = log || new ForensicLog({ dir, now, raw, ...(maxBytes ? { maxBytes } : {}), ...(minFreeMiB ? { minFreeMiB } : {}) });
+  constructor({ dir, mode = 'direct', statusFile = '/run/ggbet-egress/status.json', version = '', release = '', now = () => Date.now(), log = null, guard = null, raw = false, maxBytes, minFreeMiB, bufferMs = 0, ringMs = 10 * 60000, afterMs = 5 * 60000 } = {}) {
+    Object.assign(this, { dir, mode, statusFile, version, release, now, ringMs, afterMs });
+    this.log = log || new ForensicLog({ dir, now, raw, bufferMs, ...(maxBytes ? { maxBytes } : {}), ...(minFreeMiB ? { minFreeMiB } : {}) });
+    // timeline: compact recent events (pricing, ws, session, graphql, egress) for incident context (10 min before / 5 after).
+    this.timeline = []; this.pendingAfter = []; this.transport = { failures: [], lastSuccessAt: null };
     this.guard = guard || new PricingGuard({ config: guardConfig(), now, onTransition: (t) => this.guardTransition(t), onIncident: (i) => this.incident(i) });
     this.stateFile = path.join(dir, 'state.json');
     const saved = (() => { try { return JSON.parse(fs.readFileSync(this.stateFile, 'utf8')); } catch { return {}; } })();
@@ -40,6 +42,16 @@ export class GgbetSupervisor {
     this.checkEgress('startup');
   }
   attach(collector) { this.collector = collector; return this; }
+  // The collector asks per connect: the configured mode, or 'proxy' while the egress controller runs the last-resort fallback.
+  networkMode() { return this.mode === 'netns' && this.egress?.kind === 'proxy-fallback' ? 'proxy' : this.mode; }
+  remember(kind, data) { const at = this.now(); this.timeline.push({ at: new Date(at).toISOString(), t: at, kind, ...data }); while (this.timeline.length && this.timeline[0].t < at - this.ringMs) this.timeline.shift(); if (this.timeline.length > 5000) this.timeline.shift(); }
+  transportSignal(kind, detail) { const at = this.iso(); this.transport.failures.push({ at, kind, detail: String(detail || '').slice(0, 160) }); if (this.transport.failures.length > 50) this.transport.failures.shift(); this.remember('transport', { failure: kind, detail }); }
+  // GraphQL operations the collector sends (start/stop): name, id and the identifying variables only.
+  sent(data) {
+    if (!data || (data.type !== 'start' && data.type !== 'stop')) return;
+    const v = data.payload?.variables || {}, row = { id: data.id, type: data.type, operationName: data.payload?.operationName, sportEventId: v.sportEventId || v.sportEvent || v.sportEventID || null, marketTabId: v.marketTabId || v.marketTabID || null, marketIds: Array.isArray(v.marketIds) ? v.marketIds.length : undefined, isTopMarkets: v.isTopMarkets, version: v.version };
+    this.log.write('graphql', { ...this.context(), ...row }); this.remember('graphql', { id: row.id, type: row.type, operationName: row.operationName, sportEventId: row.sportEventId });
+  }
   iso(ms = this.now()) { return new Date(ms).toISOString(); }
   age(iso) { return iso ? Math.max(0, this.now() - Date.parse(iso)) : null; }
   egressStats(id) { return this.egresses[id] || (this.egresses[id] = { id, firstSeenAt: this.iso(), activationCount: 0, totalActiveDurationMs: 0, sessions: 0, bootstrapSuccesses: 0, bootstrapFailures: 0, wsConnectSuccesses: 0, wsConnectFailures: 0, reconnects: 0, pricingSuspects: 0, pricingConfirmed: 0, lastGoodPricingAt: null, firstSuspectAt: null, lastFailureAt: null, lastFailureReason: null, state: 'UNTESTED' }); }
@@ -51,12 +63,15 @@ export class GgbetSupervisor {
     const next = readEgressStatus(this.statusFile, this.mode), prev = this.egress;
     const changed = !prev || prev.id !== next.id || (next.activatedAt && prev.activatedAt !== next.activatedAt);
     if (!changed) return false;
+    if (next.kind === 'proxy-fallback') this.log.write('egress', { note: 'last-resort proxy fallback', fallbackReason: next.fallbackReason, fallbackStartedAt: next.fallbackStartedAt });
+    if (!changed) return false;
     const at = this.iso();
     if (prev) { const st = this.egressStats(prev.id); st.totalActiveDurationMs += this.age(prev.activatedAtLocal) || 0; st.lastDeactivatedAt = at; st.currentActive = false; }
     this.egress = { ...next, activatedAtLocal: at, activatedAt: next.activatedAt || at };
     const st = this.egressStats(next.id); Object.assign(st, { configFile: next.configFile ?? st.configFile ?? null, exitIp: next.exitIp ?? null, country: next.country ?? null, city: next.city ?? null, hostname: next.hostname ?? null, lastActivatedAt: this.egress.activatedAt, currentActive: true, state: st.state === 'UNTESTED' ? 'ACTIVE' : st.state }); st.activationCount++;
     const entry = { at, from: prev?.id || null, to: next.id, reason: prev ? 'operator selected another egress' : reason, oldSessionId: this.session?.id || null, oldSessionAgeMs: this.age(this.session?.startedAt), oldEgressAgeMs: prev ? this.age(prev.activatedAtLocal) : null, pricingState: this.guard.state };
     this.history.push(entry); if (this.history.length > 500) this.history.shift();
+    this.remember('egress', { from: entry.from, to: entry.to, reason: entry.reason });
     this.log.write('egress', { ...entry, egress: { id: next.id, configFile: next.configFile, exitIp: next.exitIp, country: next.country, city: next.city, hostname: next.hostname } });
     if (prev && this.collector?.resetForEgressChange) { this.endSession('egress changed by operator'); this.collector.resetForEgressChange(`egress ${prev.id} -> ${next.id}`); }
     this.persist(); return true;
@@ -70,10 +85,12 @@ export class GgbetSupervisor {
       this.session = { id, egressId: this.egress?.id || null, startedAt: this.iso(), bootstrap: safe, jwe, wsConnects: 0, reconnects: 0, wsCloses: 0, wsConnectedAt: null, lastClose: null, firstGoodAt: null, lastGoodAt: null, pricingSuspects: 0, pricingConfirmed: 0, guardState: 'HEALTHY', endedAt: null, endReason: null };
       this.sessions.push(this.session); if (this.sessions.length > 200) this.sessions.shift();
       this.guard.reset('new session', id); if (st) { st.bootstrapSuccesses++; st.sessions++; }
-      this.log.write('session', { event: 'started', sessionId: id, egressId: this.session.egressId, bootstrap: safe, jwe });
+      this.log.write('session', { event: 'started', sessionId: id, egressId: this.session.egressId, bootstrap: safe, jwe }); this.remember('session', { event: 'started', sessionId: id });
     } else {
       if (st) { st.bootstrapFailures++; st.lastFailureAt = this.iso(); st.lastFailureReason = `bootstrap ${safe.reason || 'failed'} (${safe.status || 0})`; }
-      this.log.write('bootstrap', { ...ctx, result: 'failed', bootstrap: safe });
+      this.log.write('bootstrap', { ...ctx, result: 'failed', bootstrap: safe }); this.remember('bootstrap', { result: 'failed', reason: safe.reason, status: safe.status });
+      // Only network-level failures are transport signals; an HTTP answer (403 region page, token missing) is the site's.
+      if (['network', 'timeout'].includes(safe.reason)) this.transportSignal('bootstrap-' + safe.reason, safe.detail);
       if (safe.reason === 'geo-blocked' || (safe.status === 403 && safe.bodyKind === 'html')) this.incident({ classification: 'BOOTSTRAP_HARD_FAILURE', decision: 'observe-only: recorded; no automatic egress change', bootstrap: safe });
     }
     this.persist();
@@ -81,11 +98,13 @@ export class GgbetSupervisor {
   wsConnected() {
     const s = this.session; if (!s) return; s.wsConnects++; if (s.wsConnects > 1) s.reconnects++; s.wsConnectedAt = this.iso();
     const st = this.egressStats(s.egressId || 'unknown'); st.wsConnectSuccesses++; if (s.wsConnects > 1) st.reconnects++;
+    this.transport.lastSuccessAt = this.iso(); this.remember('ws', { event: 'connected', sessionId: s.id, reconnects: s.reconnects });
     this.log.write('ws', { event: 'connected', ...this.context(), wsConnects: s.wsConnects, reconnects: s.reconnects }); this.persist();
   }
-  wsFailed(error) { const st = this.egress ? this.egressStats(this.egress.id) : null; if (st) { st.wsConnectFailures++; st.lastFailureAt = this.iso(); st.lastFailureReason = String(error?.message || error).slice(0, 200); } this.log.write('ws', { event: 'connect-failed', ...this.context(), error: String(error?.message || error).slice(0, 300) }); }
+  wsFailed(error) { const msg = String(error?.message || error); if (/netns egress|ECONN|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|socket hang up/i.test(msg)) this.transportSignal('ws-connect', msg); this.remember('ws', { event: 'connect-failed', error: msg.slice(0, 120) });
+    const st = this.egress ? this.egressStats(this.egress.id) : null; if (st) { st.wsConnectFailures++; st.lastFailureAt = this.iso(); st.lastFailureReason = String(error?.message || error).slice(0, 200); } this.log.write('ws', { event: 'connect-failed', ...this.context(), error: String(error?.message || error).slice(0, 300) }); }
   wsClosed(code, reason) {
-    const s = this.session; const ctx = this.context(); if (s) { s.wsCloses++; s.lastClose = `${code || 0} ${reason || ''}`.trim(); s.wsConnectedAt = null; }
+    const s = this.session; const ctx = this.context(); this.remember('ws', { event: 'closed', code, reason: String(reason || '').slice(0, 80) }); if (s) { s.wsCloses++; s.lastClose = `${code || 0} ${reason || ''}`.trim(); s.wsConnectedAt = null; }
     this.log.write('ws', { event: 'closed', ...ctx, code, reason: String(reason || '').slice(0, 200), subscriptions: this.collector?.fullMarketStatus?.() ? (({ ggbetLightSubscriptions: light, ggbetActiveFullMarketSubscriptions: full, ggbetActiveFullMarketLeases: leases }) => ({ light, full, leases }))(this.collector.fullMarketStatus()) : null });
     this.persist();
   }
@@ -98,7 +117,7 @@ export class GgbetSupervisor {
       if (Number(market.typeId) !== TYPE_ODD_EVEN) continue;
       const obs = this.guard.observe(market, { ...(event || {}), ...this.context(), subscriptionId: msg.id || null });
       if (!obs) continue;
-      this.log.write('pricing', obs);
+      this.log.write('pricing', obs); this.remember('pricing', { eventId: obs.eventId, eventVersion: obs.eventVersion, marketId: obs.marketId, odd: obs.odd.price, even: obs.even.price, ratio: obs.ratio, guardState: obs.guardState, sessionId: obs.sessionId });
       const s = this.session; if (s && !obs.unusual) { s.firstGoodAt = s.firstGoodAt || obs.at; s.lastGoodAt = obs.at; if (this.egress) this.egressStats(this.egress.id).lastGoodPricingAt = obs.at; }
       if (s) s.guardState = this.guard.state;
     }
@@ -114,20 +133,26 @@ export class GgbetSupervisor {
     const id = this.log.incident({ ...record, ...this.context(), egress: this.egress && { id: this.egress.id, configFile: this.egress.configFile, exitIp: this.egress.exitIp, country: this.egress.country, city: this.egress.city, activatedAt: this.egress.activatedAt },
       session: s && { id: s.id, startedAt: s.startedAt, jwe: s.jwe, bootstrap: s.bootstrap, wsConnects: s.wsConnects, reconnects: s.reconnects, lastClose: s.lastClose, firstGoodAt: s.firstGoodAt, lastGoodAt: s.lastGoodAt },
       collector: c && { connected: !!c.lastAckAt, lastMessageAgeMs: c.lastMessageAt ? this.now() - c.lastMessageAt : null, failures: c.failures, reconnects: c.reconnects, bootstrapFetches: c.bootstrapFetches, bootstrapFailures: c.bootstrapFailures, wsConnectionsCreated: c.wsConnectionsCreated, ...(c.fullMarketStatus ? c.fullMarketStatus() : {}) },
-      recentOddEven: this.guard.recent.slice(-20), guard: this.guard.snapshot() });
-    (this.incidents = this.incidents || []).push(id); this.persist(); return id;
+      recentOddEven: this.guard.recent.slice(-20), guard: this.guard.snapshot(), timelineBefore: this.timeline.map(({ t, ...e }) => e), afterPendingUntil: this.iso(this.now() + this.afterMs) });
+    (this.incidents = this.incidents || []).push(id); this.pendingAfter.push({ id, from: this.now() }); this.persist(); return id;
   }
   endSession(reason) { const s = this.session; if (!s || s.endedAt) return; s.endedAt = this.iso(); s.endReason = reason; this.log.write('session', { event: 'ended', sessionId: s.id, egressId: s.egressId, reason, ageMs: this.age(s.startedAt), reconnects: s.reconnects, firstGoodAt: s.firstGoodAt, lastGoodAt: s.lastGoodAt, guardState: s.guardState }); }
+  // Appends the timeline of the AFTER window to incidents whose window has passed (called by the periodic tick).
+  completeIncidents() {
+    const now = this.now();
+    this.pendingAfter = this.pendingAfter.filter(({ id, from }) => { if (now < from + this.afterMs) return true; this.log.updateIncident(id, { timelineAfter: this.timeline.filter((e) => e.t > from).map(({ t, ...e }) => e), afterCompletedAt: this.iso(now), afterPendingUntil: null }); return false; });
+  }
+  stats() { const c = this.collector; if (!c) return; const f = c.fullMarketStatus ? c.fullMarketStatus() : {}; this.log.write('stats', { ...this.context(), connected: !!c.lastAckAt && !!c.ws, dataAgeMs: c.lastMessageAt ? this.now() - c.lastMessageAt : null, reconnects: c.reconnects, failures: c.failures, bootstrapFetches: c.bootstrapFetches, wsConnectionsCreated: c.wsConnectionsCreated, light: f.ggbetLightSubscriptions, full: f.ggbetActiveFullMarketSubscriptions, leases: f.ggbetActiveFullMarketLeases, catalog: f.ggbetCatalogEvents, guardState: this.guard.state, log: { bytesWritten: this.log.bytesWritten, lines: this.log.linesWritten, level: this.log.guard.level } }); }
   stateSnapshot() {
     const c = this.collector;
     return { updatedAt: this.iso(), version: this.version, release: this.release, mode: this.mode, seq: this.seq,
       egress: this.egress && { ...this.egress, ageMs: this.age(this.egress.activatedAt) }, session: this.session && { ...this.session, ageMs: this.age(this.session.startedAt), wsAgeMs: this.age(this.session.wsConnectedAt) },
       collector: c && { connected: !!c.lastAckAt && !!c.ws, dataAgeMs: c.lastMessageAt ? this.now() - c.lastMessageAt : null, reconnects: c.reconnects, failures: c.failures, bootstrapFetches: c.bootstrapFetches, wsConnectionsCreated: c.wsConnectionsCreated, ...(c.fullMarketStatus ? (({ ggbetLightSubscriptions: light, ggbetActiveFullMarketSubscriptions: full, ggbetActiveFullMarketLeases: leases }) => ({ light, full, leases }))(c.fullMarketStatus()) : {}) },
-      guard: this.guard.snapshot(), log: this.log.status(), egresses: this.egresses, sessions: this.sessions.slice(-100), history: this.history.slice(-200) };
+      guard: this.guard.snapshot(), log: this.log.status(), transport: { ...this.transport, failures: this.transport.failures.slice(-20) }, networkMode: this.networkMode(), egresses: this.egresses, sessions: this.sessions.slice(-100), history: this.history.slice(-200) };
   }
   persist() {
     try { const tmp = `${this.stateFile}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(this.stateSnapshot(), null, 1), { mode: 0o600 }); fs.renameSync(tmp, this.stateFile); } catch {}
   }
-  start(intervalMs = 15000) { this.timer = setInterval(() => { try { this.checkEgress(); this.persist(); } catch {} }, intervalMs); this.timer.unref?.(); return this; }
-  stop() { clearInterval(this.timer); this.endSession('process stop'); this.persist(); }
+  start(intervalMs = 10000) { let n = 0; this.timer = setInterval(() => { try { this.checkEgress(); this.completeIncidents(); if (++n % 6 === 0) this.stats(); this.persist(); } catch {} }, intervalMs); this.timer.unref?.(); return this; }
+  stop() { clearInterval(this.timer); this.endSession('process stop'); this.persist(); this.log.flushSync(); }
 }

@@ -149,7 +149,7 @@ test('CLI: status/vpns/sessions/history/incidents (+ --json) from the state; con
   const { dir, sup, tick } = supervisorFixture(); sup.bootstrap({ status: 200, reason: 'ok' }, { token: TOKEN }); sup.wsConnected(); tick(1000);
   sup.incident({ classification: 'PRICING_CONFIRMED', decision: 'observe-only: no egress or session change', note: TOKEN }); sup.persist();
   const conf = tmp('ggbet-conf-'); fs.writeFileSync(path.join(conf, 'ggbet-good.conf'), `[Interface]\nPrivateKey = ${WG_PRIVATE}\n`, { mode: 0o600 }); fs.writeFileSync(path.join(conf, 'hr-zag-wg-002.conf'), `PrivateKey = ${WG_PRIVATE}\n`, { mode: 0o600 });
-  const cli = (...a) => execFileSync(process.execPath, [new URL('../../tools/ggbet-cli.mjs', import.meta.url).pathname, ...a, '--dir', dir, '--configs', conf], { encoding: 'utf8' });
+  const cli = (...a) => execFileSync(process.execPath, [new URL('../../tools/ggbet-cli.mjs', import.meta.url).pathname, ...a, '--dir', dir, '--configs', conf, '--pool', path.join(dir, 'no-pool.json')], { encoding: 'utf8' });
   for (const c of ['status', 'vpns', 'sessions', 'history', 'incidents', 'tail']) { const text = cli(c), js = cli(c, '--json'); noSecrets(text + js, `cli ${c}`); JSON.parse(js); }
   assert.match(cli('status'), /Current egress: mullvad:ggbet-good[\s\S]*Exit: 178\.249\.209\.168 CZ Prague[\s\S]*Session: S1/);
   const vpns = JSON.parse(cli('vpns', '--json')); assert.deepEqual(vpns.map((v) => [v.configFile, v.state]), [['ggbet-good.conf', 'ACTIVE'], ['hr-zag-wg-002.conf', 'UNTESTED']]);
