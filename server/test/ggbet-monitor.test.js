@@ -8,7 +8,7 @@ import { GgbetSupervisor } from '../src/ggbet-supervisor.js';
 import { VpnPool } from '../src/ggbet-vpn-pool.js';
 import { config } from '../src/config.js';
 
-const DOTA = (n) => ({ id: `5:0000000${n}-aaaa-bbbb-cccc-000000000000`, version: 'v' + n, fixture: { sportId: 'esports_dota_2', status: 'LIVE' }, markets: [{ id: '1', typeId: 1, odds: [] }] });
+const DOTA = (n) => ({ id: `5:0000000${n}-aaaa-bbbb-cccc-000000000000`, version: 'v' + n, fixture: { sportId: 'esports_dota_2', status: 'LIVE', score: '0:0' }, markets: [{ id: '1', typeId: 1, odds: [] }] });
 const CS = { id: '5:99999999-aaaa-bbbb-cccc-000000000000', version: 'c', fixture: { sportId: 'esports_counter_strike', status: 'LIVE' }, markets: [{ id: '1', typeId: 1, odds: [] }] };
 const odd96 = (id, o, e) => ({ id, typeId: 96, status: 'ACTIVE', specifiers: [{ name: 'mapnr', value: id.slice(-1) }], odds: [{ id: '1', name: 'odd', value: o, isActive: true }, { id: '2', name: 'even', value: e, isActive: true }] });
 function collector(events, t0 = Date.parse('2026-10-03T00:00:00Z')) {
@@ -68,13 +68,13 @@ function supervisorWith(collectorStub) {
 test('operator reset-session: clean session on the SAME egress; healthy fresh samples => SESSION_DEGRADED; nothing switches', () => {
   let resets = 0; const { dir, sup, tok, feed, tick } = supervisorWith({ resetForEgressChange: () => { resets++; } });
   sup.bootstrap({ status: 200, reason: 'ok' }, { token: tok('old') });
-  for (let i = 0; i < 6; i++) { tick(30000); feed('2.02', '1.74', 'b' + i); }
+  for (let i = 0; i < 6; i++) { tick(30000); feed((2.02 + i / 100).toFixed(2), (1.74 - i / 100).toFixed(2), 'b' + i); }
   assert.equal(sup.guard.state, 'CONFIRMED'); assert.equal(resets, 0, 'a confirmed anomaly alone never resets anything');
   const inc = JSON.parse(fs.readFileSync(path.join(dir, 'incidents', fs.readdirSync(path.join(dir, 'incidents'))[0]), 'utf8')); assert.match(inc.operatorHint, /reset-session/);
   fs.writeFileSync(path.join(dir, 'control', 'reset-session.json'), JSON.stringify({ reason: 'test' })); sup.checkControl();
   assert.equal(resets, 1); assert.equal(sup.sessions[0].endReason, 'operator reset: test'); assert.ok(sup.verification);
   sup.bootstrap({ status: 200, reason: 'ok' }, { token: tok('new') }); assert.equal(sup.session.id, 'S2'); assert.equal(sup.guard.samples, 0, 'fresh samples only');
-  for (let i = 0; i < 6; i++) { tick(30000); feed('1.86', '1.86', 'g' + i); }
+  for (let i = 0; i < 6; i++) { tick(30000); const p = i % 2 ? '1.86' : '1.87'; feed(p, p, 'g' + i); }
   const v = sup.checkVerification(); assert.equal(v.result, 'SESSION_DEGRADED'); assert.equal(v.oldSessionId, 'S1'); assert.equal(v.newSessionId, 'S2'); assert.equal(v.action, 'none (observe-only; operator decides)');
   assert.equal(sup.egresses.direct.sessionDegradations, 1); assert.equal(resets, 1, 'no further resets');
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'incidents', fs.readdirSync(path.join(dir, 'incidents'))[0]), 'utf8')).verification.result, 'SESSION_DEGRADED');
@@ -82,7 +82,7 @@ test('operator reset-session: clean session on the SAME egress; healthy fresh sa
 
 test('operator reset-session: anomaly confirmed again on the fresh session => EGRESS_SUSPECT; too few samples => INCONCLUSIVE', () => {
   const a = supervisorWith({ resetForEgressChange() {} }); a.sup.bootstrap({ status: 200, reason: 'ok' }, { token: a.tok('o') }); a.sup.operatorReset('t');
-  a.sup.bootstrap({ status: 200, reason: 'ok' }, { token: a.tok('n') }); for (let i = 0; i < 6; i++) { a.tick(30000); a.feed('3.23', '1.32', 'x' + i); }
+  a.sup.bootstrap({ status: 200, reason: 'ok' }, { token: a.tok('n') }); for (let i = 0; i < 6; i++) { a.tick(30000); a.feed((3.23 + i / 100).toFixed(2), '1.32', 'x' + i); }
   assert.equal(a.sup.checkVerification().result, 'EGRESS_SUSPECT'); assert.equal(a.sup.egresses.direct.state, 'EGRESS_SUSPECT');
   const b = supervisorWith({ resetForEgressChange() {} }); b.sup.bootstrap({ status: 200, reason: 'ok' }, { token: b.tok('o') }); b.sup.operatorReset('t');
   b.sup.bootstrap({ status: 200, reason: 'ok' }, { token: b.tok('n') }); b.tick(30000); b.feed('1.86', '1.86', 'y');
@@ -113,7 +113,19 @@ test('end to end: a frame of the monitored stream gives the guard a RAW typeId 9
   const sup = new GgbetSupervisor({ dir, mode: 'direct' }).attach(c); c.observer = sup;
   sup.bootstrap({ status: 200, reason: 'ok' }, { token: Buffer.from('{"alg":"dir"}').toString('base64url') + '..' + 'z'.repeat(220) });
   c.monitorTick(); const subId = starts(sent, DOTA(1).id)[0].id, before = c.events.get(DOTA(1).id).markets;
-  await c.onMessage(JSON.stringify({ id: subId, type: 'data', payload: { data: { onUpdateSportEvent: { id: DOTA(1).id, version: 'v9', markets: [odd96('96m1', '1.86', '1.86')] } } } }));
-  assert.equal(sup.guard.samples, 1); assert.equal(sup.guard.recent[0].odd.id, '1'); assert.equal(sup.guard.recent[0].even.price, '1.86'); assert.equal(sup.guard.recent[0].eventId, DOTA(1).id);
-  assert.deepEqual(c.events.get(DOTA(1).id).markets, before); assert.equal(c.monitorStatus().samples, 1);
+  // Score 0:0 -> map 1 is being played: 96m1 is in-play (recorded, excluded), 96m2 (next map) is a guard sample.
+  await c.onMessage(JSON.stringify({ id: subId, type: 'data', payload: { data: { onUpdateSportEvent: { id: DOTA(1).id, version: 'v9', markets: [odd96('96m1', '3.23', '1.32'), odd96('96m2', '1.86', '1.86')] } } } }));
+  assert.equal(sup.guard.inPlaySamples, 1); assert.equal(sup.guard.state, 'HEALTHY', 'in-play asymmetry never moves the guard'); assert.equal(sup.guard.recent.find((o) => o.marketId === '96m1').excluded, 'in-play map');
+  sup.guard.recent = sup.guard.recent.filter((o) => o.marketId === '96m2'); assert.equal(sup.guard.samples, 1); assert.equal(sup.guard.recent[0].odd.id, '1'); assert.equal(sup.guard.recent[0].even.price, '1.86'); assert.equal(sup.guard.recent[0].eventId, DOTA(1).id);
+  assert.deepEqual(c.events.get(DOTA(1).id).markets, before); assert.equal(c.monitorStatus().samples, 2);
+});
+
+test('guard: the map being played never counts (LIVE, mapnr <= current map, or unknown score); identical prices count once per 60 s', async () => {
+  const { PricingGuard, guardConfig } = await import('../src/ggbet-pricing-guard.js');
+  let t = Date.parse('2026-10-03T00:00:00Z'); const g = new PricingGuard({ config: guardConfig({}), now: () => t });
+  for (let i = 0; i < 20; i++) { t += 30000; g.observe(odd96('96m2', (3.23 + i / 100).toFixed(2), '1.32'), { eventId: 'E', eventStatus: 'LIVE', liveMap: 2 }); }
+  for (let i = 0; i < 20; i++) { t += 30000; g.observe(odd96('96m3', (2.02 + i / 100).toFixed(2), '1.74'), { eventId: 'E', eventStatus: 'LIVE', liveMap: null }); }
+  assert.equal(g.state, 'HEALTHY'); assert.equal(g.samples, 0); assert.equal(g.inPlaySamples, 40);
+  for (let i = 0; i < 10; i++) { t += 5000; g.observe(odd96('96m3', '1.86', '1.86'), { eventId: 'E', eventStatus: 'LIVE', liveMap: 2 }); }
+  assert.equal(g.samples, 1, '10 pushes with the same prices within 50 s = one sample');
 });

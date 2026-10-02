@@ -95,14 +95,14 @@ test('incident keeps 10 min of context before and appends the 5 min after; one u
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pool-inc-')); let t = Date.parse('2026-10-03T00:00:00Z');
   const sup = new GgbetSupervisor({ dir, mode: 'direct', now: () => t }); sup.bootstrap({ status: 200, reason: 'ok' }, { token: 'eyJhbGciOiJkaXIifQ..' + 'x'.repeat(200) });
   const send = (o, e, v) => { const payload = { data: { x: { id: '5:efd696a5-9eae-4059-9e67-bbef3c0868bd', version: v, markets: [{ id: '96m1', typeId: 96, status: 'ACTIVE', odds: [{ id: '1', value: o }, { id: '2', value: e }] }] } } }; sup.message(JSON.stringify({ type: 'data', payload }), { type: 'data', payload }); };
-  for (let i = 0; i < 30; i++) { t += 30000; send('1.86', '1.86', 'h' + i); }
+  for (let i = 0; i < 30; i++) { t += 30000; const p = i % 2 ? '1.86' : '1.87'; send(p, p, 'h' + i); } // a moving, healthy market
   t += 30000; send('1.91', '1.83', 'x'); t += 30000; send('1.86', '1.86', 'y');
   assert.equal(fs.readdirSync(path.join(dir, 'incidents')).length, 0, 'a single unusual sample: no incident');
-  for (let i = 0; i < 5; i++) { t += 30000; send('2.02', '1.74', 'b' + i); }
+  for (let i = 0; i < 5; i++) { t += 30000; send((2.02 + i / 100).toFixed(2), (1.74 - i / 100).toFixed(2), 'b' + i); }
   const files = fs.readdirSync(path.join(dir, 'incidents')); assert.equal(files.length, 1);
   const before = JSON.parse(fs.readFileSync(path.join(dir, 'incidents', files[0]), 'utf8'));
   assert.ok(before.timelineBefore.length >= 15 && before.timelineBefore.length <= 25, 'about 10 minutes of pricing context');
-  for (let i = 0; i < 12; i++) { t += 30000; send('1.86', '1.86', 'a' + i); } sup.completeIncidents();
+  for (let i = 0; i < 12; i++) { t += 30000; const p = i % 2 ? '1.86' : '1.87'; send(p, p, 'a' + i); } sup.completeIncidents();
   const after = JSON.parse(fs.readFileSync(path.join(dir, 'incidents', files[0]), 'utf8'));
   assert.ok(after.timelineAfter.length >= 10); assert.ok(after.afterCompletedAt); assert.ok(!JSON.stringify(after).includes('x'.repeat(50)), 'no token');
 });

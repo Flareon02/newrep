@@ -6,6 +6,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ForensicLog } from './ggbet-forensics.js';
 import { PricingGuard, guardConfig, TYPE_ODD_EVEN } from './ggbet-pricing-guard.js';
+import { scoreParts } from './ggbet.js';
+
+// Current map of a LIVE event: the last map with a score, else finished maps (series score) + 1; null when unknown.
+export function liveMapOf(fixture) {
+  if (!fixture || fixture.status !== 'LIVE') return null;
+  try { const p = scoreParts(fixture); if (p.activeMap > 0) return p.activeMap; if (p.seriesScore) return p.seriesScore[0] + p.seriesScore[1] + 1; } catch {}
+  return null;
+}
 
 const JWE_FIELDS = ['alg', 'enc', 'currency', 'locale', 'isAuthorized', 'label', 'exp'];
 // Allow-listed fields of the token's public protected header; the token itself is never kept.
@@ -21,7 +29,7 @@ export function* marketsWithEvent(node, event = null, depth = 0) {
   if (!node || typeof node !== 'object' || depth > 14) return;
   if (Array.isArray(node)) { for (const v of node) yield* marketsWithEvent(v, event, depth + 1); return; }
   let ev = event;
-  if (typeof node.id === 'string' && /^\d+:[0-9a-f-]{36}$/i.test(node.id) && ('version' in node || 'fixture' in node || 'markets' in node)) ev = { eventId: node.id, eventVersion: node.version ?? event?.eventVersion ?? null, eventStatus: node.fixture?.status ?? node.status ?? null, scheduledAt: node.fixture?.startTime ?? null, slug: node.slug ?? null };
+  if (typeof node.id === 'string' && /^\d+:[0-9a-f-]{36}$/i.test(node.id) && ('version' in node || 'fixture' in node || 'markets' in node)) ev = { eventId: node.id, eventVersion: node.version ?? event?.eventVersion ?? null, eventStatus: node.fixture?.status ?? node.status ?? null, scheduledAt: node.fixture?.startTime ?? null, slug: node.slug ?? null, fixture: node.fixture || null };
   if (Array.isArray(node.odds) && 'typeId' in node && node.id != null) { yield { market: node, event: ev }; return; }
   for (const v of Object.values(node)) if (v && typeof v === 'object') yield* marketsWithEvent(v, ev, depth + 1);
 }
@@ -119,7 +127,9 @@ export class GgbetSupervisor {
     if (msg?.type !== 'data' || !String(rawText).includes(`"typeId":${TYPE_ODD_EVEN}`)) return;
     for (const { market, event } of marketsWithEvent(msg.payload)) {
       if (Number(market.typeId) !== TYPE_ODD_EVEN) continue;
-      const obs = this.guard.observe(market, { ...(event || {}), ...this.context(), subscriptionId: msg.id || null });
+      // A push often carries no fixture: status/score then come from the collector's catalog row of the event.
+      const { fixture: own, ...ev } = event || {}, fixture = own?.status ? own : this.collector?.events?.get?.(ev.eventId)?.fixture || own;
+      const obs = this.guard.observe(market, { ...ev, eventStatus: ev.eventStatus || fixture?.status || null, liveMap: liveMapOf(fixture), liveScore: fixture?.score != null ? String(fixture.score).slice(0, 40) : null, ...this.context(), subscriptionId: msg.id || null });
       if (!obs) continue;
       this.log.write('pricing', obs); this.remember('pricing', { eventId: obs.eventId, eventVersion: obs.eventVersion, marketId: obs.marketId, odd: obs.odd.price, even: obs.even.price, ratio: obs.ratio, guardState: obs.guardState, sessionId: obs.sessionId });
       const s = this.session; if (s && !obs.unusual) { s.firstGoodAt = s.firstGoodAt || obs.at; s.lastGoodAt = obs.at; if (this.egress) this.egressStats(this.egress.id).lastGoodPricingAt = obs.at; }

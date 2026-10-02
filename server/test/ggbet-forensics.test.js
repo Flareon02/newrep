@@ -77,7 +77,7 @@ test('pricing guard: odd != even once is only SUSPECT, never confirmed; a normal
 test('pricing guard: persistent asymmetry over the window -> CONFIRMED incident (observe-only), then recovery', () => {
   const { g, incidents, tick } = guardAt();
   g.observe(mk(1.86, 1.86), { eventId: 'E1', eventVersion: 'v1' });
-  for (let i = 0; i < 3; i++) { tick(20000); g.observe(mk(2.02, 1.74), { eventId: 'E1', eventVersion: `b${i}` }); }
+  for (let i = 0; i < 3; i++) { tick(20000); g.observe(mk((2.02 + i / 100).toFixed(2), (1.74 - i / 100).toFixed(2)), { eventId: 'E1', eventVersion: `b${i}` }); } // prices move: 3 samples
   assert.equal(g.state, 'SUSPECT', '3 samples within 40 s do not satisfy the 60 s window');
   tick(30000); g.observe(mk(2.03, 1.73), { eventId: 'E1', eventVersion: 'b9' });
   assert.equal(g.state, 'CONFIRMED'); assert.equal(incidents.length, 1);

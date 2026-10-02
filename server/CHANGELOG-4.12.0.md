@@ -22,6 +22,14 @@
   handshake + exit metadata, no proxy, no GGBET traffic, torn down after; one config per 10 min, only while the
   active egress is healthy, re-checked after 24 h. A failed check keeps a config out of selection for 6 h.
 
+## Pricing guard (fix found on production 4.11 data)
+- The map being played is priced in play (odd/even drifts with the kill count): LIVE markets with mapnr <= current map
+  (from the per-map scores, else series score + 1; unknown score = treated as in play) are recorded with
+  `inPlay` but never move the guard state. 4.11 had confirmed an "anomaly" from exactly such data (96m2 while map 2
+  was played: 1.63/2.19, then 3.32/1.30).
+- A sample is a price change: identical prices of the same market count at most once per 60 s (every push has a new
+  event version; 4.11 counted 154 pushes of one price as 154 samples).
+
 ## Fixes
 - A deactivated egress is shown INACTIVE (was still ACTIVE), also after a restart.
 

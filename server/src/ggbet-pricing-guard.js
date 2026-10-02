@@ -41,7 +41,7 @@ export class PricingGuard {
   }
   reset(reason = 'reset', sessionId = null) {
     this.state = 'HEALTHY'; this.sessionId = sessionId; this.suspects = []; this.recovering = 0; this.firstSuspect = null; this.confirmedAt = null;
-    this.lastGood = null; this.recent = []; this.seen = new Map(); this.samples = 0; this.unusual = 0; this.resetReason = reason;
+    this.lastGood = null; this.recent = []; this.seen = new Map(); this.samples = 0; this.unusual = 0; this.inPlaySamples = 0; this.resetReason = reason;
   }
   transition(to, ctx) { const from = this.state; if (from === to) return; this.state = to; this.onTransition({ from, to, at: new Date(this.now()).toISOString(), sessionId: this.sessionId, ...ctx }); }
   // market: raw GGBET market {id,typeId,specifiers,status,odds}; context: {eventId,eventVersion,eventStatus,scheduledAt,
@@ -50,13 +50,20 @@ export class PricingGuard {
     if (!this.config.enabled || Number(market?.typeId) !== TYPE_ODD_EVEN) return null;
     if (market.status && market.status !== 'ACTIVE') return null;
     const prices = oddEvenPrices(market); if (!prices || !prices.odd.active || !prices.even.active) return null;
-    const at = this.now(), key = `${context.eventId}|${market.id}`, sig = `${context.eventVersion}|${prices.odd.price}|${prices.even.price}`;
-    const prev = this.seen.get(key); if (prev && prev.sig === sig && at - prev.at < 5000) return null; // same update delivered twice
+    // A sample is a PRICE observation: the same prices of the same market count at most once per 60 s (every push carries a
+    // new event version, so the version is not part of the identity).
+    const at = this.now(), key = `${context.eventId}|${market.id}`, sig = `${prices.odd.price}|${prices.even.price}`;
+    const prev = this.seen.get(key); if (prev && prev.sig === sig && at - prev.at < 60000) return null;
     this.seen.set(key, { sig, at }); if (this.seen.size > 500) this.seen.delete(this.seen.keys().next().value);
     const specifiers = Object.fromEntries((market.specifiers || []).map((p) => [p?.name, p?.value]));
     const unusual = prices.ratio > this.config.maxRatio;
-    const obs = { at: new Date(at).toISOString(), ...context, marketId: market.id, typeId: TYPE_ODD_EVEN, specifiers, mapnr: specifiers.mapnr ?? null, odd: prices.odd, even: prices.even, ratio: Number(prices.ratio.toFixed(4)), unusual };
-    this.samples++; this.recent.push(obs); if (this.recent.length > this.keep) this.recent.shift();
+    // The map being played (LIVE, mapnr <= current map, or current map unknown) is priced in play: its odd/even legitimately
+    // drifts with the kill count. Recorded, but it never moves the guard state.
+    const mapnr = Number(specifiers.mapnr), inPlay = context.eventStatus === 'LIVE' && (!(context.liveMap > 0) || !(mapnr > context.liveMap));
+    const obs = { at: new Date(at).toISOString(), ...context, marketId: market.id, typeId: TYPE_ODD_EVEN, specifiers, mapnr: specifiers.mapnr ?? null, odd: prices.odd, even: prices.even, ratio: Number(prices.ratio.toFixed(4)), unusual, inPlay };
+    this.recent.push(obs); if (this.recent.length > this.keep) this.recent.shift();
+    if (inPlay) { this.inPlaySamples = (this.inPlaySamples || 0) + 1; obs.guardState = this.state; obs.excluded = 'in-play map'; return obs; }
+    this.samples++;
     if (!unusual) {
       this.lastGood = obs;
       if (this.state === 'SUSPECT') { this.suspects = []; this.firstSuspect = null; this.transition('HEALTHY', { reason: 'normal sample after a one-off', observation: obs }); }
@@ -76,5 +83,5 @@ export class PricingGuard {
     }
     obs.guardState = this.state; return obs;
   }
-  snapshot() { return { state: this.state, mode: this.config.mode, enforceIgnored: this.config.enforceIgnored, thresholds: { maxRatio: this.config.maxRatio, minSamples: this.config.minSamples, windowMs: this.config.windowMs, minEvents: this.config.minEvents, recoverSamples: this.config.recoverSamples }, samples: this.samples, unusual: this.unusual, suspects: this.suspects.length, firstSuspectAt: this.firstSuspect?.at || null, confirmedAt: this.confirmedAt, lastGoodAt: this.lastGood?.at || null, last: this.recent.at(-1) || null }; }
+  snapshot() { return { state: this.state, mode: this.config.mode, enforceIgnored: this.config.enforceIgnored, thresholds: { maxRatio: this.config.maxRatio, minSamples: this.config.minSamples, windowMs: this.config.windowMs, minEvents: this.config.minEvents, recoverSamples: this.config.recoverSamples }, samples: this.samples, unusual: this.unusual, inPlaySamples: this.inPlaySamples || 0, suspects: this.suspects.length, firstSuspectAt: this.firstSuspect?.at || null, confirmedAt: this.confirmedAt, lastGoodAt: this.lastGood?.at || null, last: this.recent.at(-1) || null }; }
 }
