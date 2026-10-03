@@ -84,5 +84,6 @@ test('authorizer unit rules: header forms, read paths open, no loopback bypass',
   assert.equal(auth.allows(req('POST', '172.17.0.1', { authorization: 'bearer unit-test-token-0123456789' }), '/x'), true);
   assert.equal(extractToken({ 'x-api-token': ' abc ' }), 'abc');
   assert.equal(requiresToken('GET', '/api/hltv/team'), true);
+  assert.equal(requiresToken('GET', '/api/admin/ggbet-browser'), true);
   assert.equal(requiresToken('GET', '/api/hltv/data'), false);
 });

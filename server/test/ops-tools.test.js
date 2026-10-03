@@ -82,7 +82,7 @@ test('soak sampler + report: one sample is complete, and the report forecasts gr
     const out = path.join(dir, 'samples.jsonl');
     await run('node', [path.join(repo, 'tools/soak-sampler.mjs'), '--url', api.base, '--out', out, '--once', '--data-dir', dir]);
     const row = JSON.parse(fs.readFileSync(out, 'utf8').trim());
-    assert.equal(row.health.version, '4.12.0');
+    assert.equal(row.health.version, '4.13.0');
     assert.ok(row.health.history && 'rows' in row.health.history);
     assert.ok(row.system.memAvailableMiB > 0);
     // Synthetic 3-day series: database +10 MiB/day.

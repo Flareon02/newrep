@@ -17,6 +17,7 @@ import {checkpointSqliteStorage,closeSqliteStorage,storageMetrics} from "./sqlit
 import { loadMatcherAliases, flushMatcherAliases } from "./entity-resolver.js";
 import {teamLogos} from './team-logos.js';
 import {GgbetSupervisor} from './ggbet-supervisor.js';
+import { BrowserGgbetSource } from './ggbet-browser-source.js';
 
 import {PinnacleCollector} from './pinnacle.js';
 import {HltvService} from './hltv-service.js';
@@ -49,7 +50,8 @@ const pinnacleCollector=new PinnacleCollector(pinnaclePrematchState,{liveState:p
 const fonbetCollector = new FonbetCollector(fonbetLiveState, fonbetPrematchState);
 // GGBET forensics/session supervisor (observe-only; see ggbet-supervisor.js). Its state lives in DATA_DIR/ggbet-forensics.
 const ggbetSupervisor = config.ggbetForensicsEnabled ? new GgbetSupervisor({ dir: path.join(config.dataDir, 'ggbet-forensics'), mode: config.ggbetNetworkMode, statusFile: config.ggbetEgressStatusFile, version: config.version, release: (() => { try { return path.basename(fs.realpathSync(path.resolve(process.cwd(), '..'))); } catch { return ''; } })(), raw: config.ggbetForensicsRaw, maxBytes: config.ggbetForensicsMaxMiB * 1048576, minFreeMiB: config.ggbetForensicsMinFreeMiB }) : null;
-const ggbetCollector = new GgbetLiveCollector(ggbetLiveState, { observer: ggbetSupervisor });
+const ggbetBrowser = config.ggbetBrowserSource ? new BrowserGgbetSource({ socketPath: config.ggbetBrowserSocket, pollMs: config.ggbetBrowserPollMs, ipcStaleMs: config.ggbetBrowserIpcStaleMs, stateFile: path.join(config.dataDir, 'ggbet-browser-arbiter.json'), log }) : null;
+const ggbetCollector = new GgbetLiveCollector(ggbetLiveState, { observer: ggbetSupervisor, browser: ggbetBrowser });
 ggbetSupervisor?.attach(ggbetCollector);
 const databetCollector = new DatabetLiveCollector(databetLiveState);
 // GGBET is LIVE-only until its ENDED/final-result transport is verified against production.
@@ -74,7 +76,7 @@ server.listen(config.port, config.host, () => {
   if([config.ggbetNetworkMode,config.databetNetworkMode].includes('proxy'))startEgressCheck();
   liveCollector.start();
   prematchCollector.start();
-  fonbetCollector.start();ggbetSupervisor?.start();ggbetCollector.start();databetCollector.start();pinnacleCollector.start();
+  fonbetCollector.start();ggbetSupervisor?.start();ggbetBrowser?.start();ggbetCollector.start();databetCollector.start();pinnacleCollector.start();
   resultsService.start();
   retention=startRetention({statistics:server.statistics,activeKeys:server.activeEventKeys});
 });
@@ -93,6 +95,7 @@ async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   const closed=new Promise(resolve=>server.close(()=>resolve()));
   await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),databetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);
   try{ggbetSupervisor?.stop();}catch{}
+  try{ggbetBrowser?.stop();}catch{}
   await retention?.stop();
   await Promise.allSettled([server.stopStatistics(),oddsService.stop()]);
   if(persist){

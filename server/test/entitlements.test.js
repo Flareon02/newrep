@@ -75,7 +75,7 @@ test('disabled comparison/tools endpoints are refused; admin endpoints only for 
     const token = json.token;
     assert.equal((await api.call('/api/prematch/compare', token, { events: [] })).status, 403, 'schedule comparison is a separate capability');
     assert.equal((await api.call('/api/odds/manual', token, { names: ['A', 'B'] })).status, 403);
-    for (const path of ['/api/admin/users', '/api/admin/capabilities', '/api/admin/ggbet-bootstrap', '/api/status']) {
+    for (const path of ['/api/admin/users', '/api/admin/capabilities', '/api/admin/ggbet-bootstrap', '/api/admin/ggbet-browser', '/api/status']) {
       assert.equal((await api.call(path, token)).status, 403, path);
       assert.equal((await api.call(path, '')).status, 401, path + ' anonymous');
     }

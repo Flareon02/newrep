@@ -5,6 +5,7 @@ import { canonicalCategory, englishize, eventKind } from './entity-resolver.js';
 import { config } from './config.js';
 import { canonicalizeGgbetMarket } from './market-semantics.js';
 import { proxyAgent, proxyDiagnostics, proxyFetch, redact, reportProxySession, netnsAgent, resetNetnsAgent } from './egress.js';
+import { unavailableRow } from './ggbet-browser-source.js';
 
 const SNAPSHOT_HASH='44839cf86de25b2875162086620dc57b7bfbb2453b09e6b065f54620c343e40c';
 const UPDATE_HASH='d47e6f564612369a803694590f09f1b88cfd5e0c270664e4599b330794de77dd';
@@ -274,7 +275,10 @@ function relayJson(url,{secret,ca,force=false,timeoutMs=12000,maxBytes=128*1024}
 }
 
 export class GgbetLiveCollector {
-  constructor(state,{fetchImpl=globalThis.fetch,WebSocketImpl=null,now=()=>Date.now(),relayRequestImpl=null,trustedOrigins=GGBET_TRUSTED_ORIGINS,observer=null}={}){
+  constructor(state,{fetchImpl=globalThis.fetch,WebSocketImpl=null,now=()=>Date.now(),relayRequestImpl=null,trustedOrigins=GGBET_TRUSTED_ORIGINS,observer=null,browser=null}={}){
+    // browser (ggbet-browser-source.js, 4.13.0): the hybrid arbiter. Events it owns are published from the Firefox worker's
+    // data (whole event, never mixed with Node markets) and never get a Node full-market subscription.
+    this.browser=browser;if(browser)browser.onChange=()=>this.scheduleBrowserPublish();
     // observer (ggbet-supervisor.js): forensic/session hooks only; it never steers the collector except for the clean
     // session after an operator-selected egress change (resetForEgressChange). Its errors never reach the collector.
     this.observer=observer;
@@ -285,7 +289,7 @@ export class GgbetLiveCollector {
     this.leases=new Map();this.fullEvents=new Set();this.lightIds=new Map();this.fullCache=new Map();this.fullStale=new Map();this.fullResyncs=0;
     this.fullSubscribes=0;this.fullUnsubscribes=0;this.leaseExpirations=0;this.fullCapRejects=0;this.wsConnectionsCreated=0;this.expiryRefreshes=0;
   }
-  status(){const mode=this.networkMode(),proxy=mode==='proxy'?proxyDiagnostics():null;return {enabled:config.ggbetLiveEnabled,transport:'graphql-ws',networkMode:mode,bootstrapMode:mode,...(proxy?{proxyEnabled:proxy.proxyEnabled,proxyHost:proxy.proxyHost,proxyPort:proxy.proxyPort}:{}),relayConfigured:!!config.ggbetBootstrapRelayUrl,relayInUse:mode==='relay',freshnessMs:this.lastMessageAt?Math.max(0,this.now()-this.lastMessageAt):null,connected:this.ws?.readyState===1,acknowledged:!!this.lastAckAt&&this.ws?.readyState===1,origin:this.bootstrap?.origin||'',endpoint:this.bootstrap?.wsUrl?.replace(/\/graphql$/,'')||'',tokenRefreshedAt:this.bootstrap?.at?new Date(this.bootstrap.at).toISOString():null,sessionStartedAt:this.lastConnectAt?new Date(this.lastConnectAt).toISOString():null,lastMessageAt:this.lastMessageAt?new Date(this.lastMessageAt).toISOString():null,lastSnapshotAt:this.lastSnapshotAt?new Date(this.lastSnapshotAt).toISOString():null,lastPushAt:this.lastPushAt?new Date(this.lastPushAt).toISOString():null,reconnects:this.reconnects,failures:this.failures,shortSessions:this.shortSessions,snapshots:this.snapshots,pushes:this.pushes,subscriptions:this.subscriptions.size,marketCatalogSubscriptions:[...this.marketTabs.values()].filter(x=>x.updateId).length,fullMarketEvents:[...this.marketTabs.values()].filter(x=>x.marketIds?.length).length,fullMarketIds:[...this.marketTabs.values()].reduce((n,x)=>n+(x.marketIds?.length||0),0),marketCatalogFetches:this.marketCatalogFetches,marketCatalogFailures:this.marketCatalogFailures,marketCatalogUpdates:this.marketCatalogUpdates,fullMarketSubscriptions:this.fullMarketSubscriptions,catalogPushFallback:this.catalogPushFallback,degradedPolling:this.degradedPolling,lastError:redact(this.lastError),lastClose:redact(this.lastClose),snapshotIntervalMs:this.degradedPolling?config.ggbetDegradedSnapshotMs:config.ggbetSnapshotIntervalMs,sessionRefreshMs:config.ggbetSessionRefreshMs,bootstrapFetches:this.bootstrapFetches,bootstrapFailures:this.bootstrapFailures,relayFetches:this.relayFetches,relayFailures:this.relayFailures,lastRelayAt:this.lastRelayAt?new Date(this.lastRelayAt).toISOString():null,lastRelayError:redact(this.lastRelayError),authRefreshes:this.authRefreshes,scheduledRefreshes:this.scheduledRefreshes,expiryRefreshes:this.expiryRefreshes,tokenExpiresAt:this.bootstrap?.expiresAt?new Date(this.bootstrap.expiresAt).toISOString():null,plainSnapshots:this.plainSnapshots,pushFallbacks:this.pushFallbacks,...this.fullMarketStatus()};}
+  status(){const mode=this.networkMode(),proxy=mode==='proxy'?proxyDiagnostics():null;return {...(this.browser?{browserSource:this.browserSummary()}:{}),enabled:config.ggbetLiveEnabled,transport:'graphql-ws',networkMode:mode,bootstrapMode:mode,...(proxy?{proxyEnabled:proxy.proxyEnabled,proxyHost:proxy.proxyHost,proxyPort:proxy.proxyPort}:{}),relayConfigured:!!config.ggbetBootstrapRelayUrl,relayInUse:mode==='relay',freshnessMs:this.lastMessageAt?Math.max(0,this.now()-this.lastMessageAt):null,connected:this.ws?.readyState===1,acknowledged:!!this.lastAckAt&&this.ws?.readyState===1,origin:this.bootstrap?.origin||'',endpoint:this.bootstrap?.wsUrl?.replace(/\/graphql$/,'')||'',tokenRefreshedAt:this.bootstrap?.at?new Date(this.bootstrap.at).toISOString():null,sessionStartedAt:this.lastConnectAt?new Date(this.lastConnectAt).toISOString():null,lastMessageAt:this.lastMessageAt?new Date(this.lastMessageAt).toISOString():null,lastSnapshotAt:this.lastSnapshotAt?new Date(this.lastSnapshotAt).toISOString():null,lastPushAt:this.lastPushAt?new Date(this.lastPushAt).toISOString():null,reconnects:this.reconnects,failures:this.failures,shortSessions:this.shortSessions,snapshots:this.snapshots,pushes:this.pushes,subscriptions:this.subscriptions.size,marketCatalogSubscriptions:[...this.marketTabs.values()].filter(x=>x.updateId).length,fullMarketEvents:[...this.marketTabs.values()].filter(x=>x.marketIds?.length).length,fullMarketIds:[...this.marketTabs.values()].reduce((n,x)=>n+(x.marketIds?.length||0),0),marketCatalogFetches:this.marketCatalogFetches,marketCatalogFailures:this.marketCatalogFailures,marketCatalogUpdates:this.marketCatalogUpdates,fullMarketSubscriptions:this.fullMarketSubscriptions,catalogPushFallback:this.catalogPushFallback,degradedPolling:this.degradedPolling,lastError:redact(this.lastError),lastClose:redact(this.lastClose),snapshotIntervalMs:this.degradedPolling?config.ggbetDegradedSnapshotMs:config.ggbetSnapshotIntervalMs,sessionRefreshMs:config.ggbetSessionRefreshMs,bootstrapFetches:this.bootstrapFetches,bootstrapFailures:this.bootstrapFailures,relayFetches:this.relayFetches,relayFailures:this.relayFailures,lastRelayAt:this.lastRelayAt?new Date(this.lastRelayAt).toISOString():null,lastRelayError:redact(this.lastRelayError),authRefreshes:this.authRefreshes,scheduledRefreshes:this.scheduledRefreshes,expiryRefreshes:this.expiryRefreshes,tokenExpiresAt:this.bootstrap?.expiresAt?new Date(this.bootstrap.expiresAt).toISOString():null,plainSnapshots:this.plainSnapshots,pushFallbacks:this.pushFallbacks,...this.fullMarketStatus()};}
   fullMarketStatus(now=this.now()){
     const leases=[...this.leases.values()].filter(l=>l.until>now);
     return {ggbetCatalogEvents:this.events.size,ggbetLightSubscriptions:[...this.subscriptions.values()].filter(x=>x.mode==='light').length,ggbetActiveFullMarketEvents:this.fullEvents.size,ggbetActiveFullMarketSubscriptions:[...this.subscriptions.values()].filter(x=>x.mode==='full').length,
@@ -388,7 +392,10 @@ export class GgbetLiveCollector {
   // A client (detail panel) holds a lease on one event; renewing it with another event moves the lease (A -> B).
   // Returns {ok,capped}. Never touches the WebSocket or the session.
   lease(leaseId,sourceEventId,now=this.now()){
-    const key=text(leaseId);if(!key)return {ok:false};const raw=sourceEventId?this.findRawEvent(sourceEventId):null,old=this.leases.get(key);
+    const key=text(leaseId);if(!key)return {ok:false};
+    // A browser-owned event: Firefox already streams its full "All" tree; no Node full-market subscription is created.
+    if(sourceEventId&&this.browser?.owns(sourceEventId)){if(this.leases.has(key))this.releaseLease(key);return {ok:true,browser:true};}
+    const raw=sourceEventId?this.findRawEvent(sourceEventId):null,old=this.leases.get(key);
     if(!raw){if(old)this.releaseLease(key);return {ok:false,missing:true};}
     const eventId=text(raw.id);
     if(old&&old.eventId!==eventId)this.releaseLease(key);
@@ -426,6 +433,7 @@ export class GgbetLiveCollector {
   // Detail hydration. Full markets only for an event a client holds a lease on (an open detail panel); everything
   // else (hover prefetch, a capped request) gets the light event, or the full tree cached after a recent release.
   async detail(sourceEventId,{timeoutMs=5000,full=null}={}){
+    if(this.browser?.owns(sourceEventId))return this.browser.detailRow(sourceEventId);
     const raw=this.findRawEvent(sourceEventId);if(!raw)return null;
     const eventId=text(raw.id),wantFull=full??this.fullEvents.has(eventId),cached=this.fullCache.get(eventId);
     const light=()=>{const current=this.events.get(eventId)||raw,event=parseGgbetLiveEvent(current,{origin:this.bootstrap?.origin,at:current.__updatedAt||this.now(),providerTabs:this.providerTabInfo(eventId)});
@@ -449,7 +457,26 @@ export class GgbetLiveCollector {
     const current=this.events.get(eventId)||raw;
     return parseGgbetLiveEvent(current,{origin:this.bootstrap?.origin,at:current.__updatedAt||this.now(),providerTabs:this.providerTabInfo(eventId)});
   }
-  async publish(at=this.now()){const rows=[...this.events.values()].map(raw=>parseGgbetLiveEvent(raw,{origin:this.bootstrap?.origin,at:raw.__updatedAt||at,providerTabs:this.providerTabInfo(raw.id)})).filter(Boolean);await this.state.success(rows,{status:200,elapsedMs:0});}
+  publish(at=this.now()){
+    const run=()=>this.publishCurrent(at);
+    const pending=(this.publishQueue||Promise.resolve()).then(run,run);
+    this.publishQueue=pending.catch(()=>{});return pending;
+  }
+  async publishCurrent(at=this.now()){
+    const parse=raw=>parseGgbetLiveEvent(raw,{origin:this.bootstrap?.origin,at:raw.__updatedAt||at,providerTabs:this.providerTabInfo(raw.id)});
+    if(!this.browser){await this.state.success([...this.events.values()].map(parse).filter(Boolean),{status:200,elapsedMs:0});return;}
+    // Browser updates must not make an old/disconnected Node event look fresh through the shared provider state.
+    const node=new Map();for(const raw of this.events.values()){const row=parse(raw);node.set(text(raw.id),this.nodeEventFresh(raw.id)?row:unavailableRow(row,this.now()));}
+    const {rows,browserIds}=this.browser.merge(node,{nodeFresh:id=>this.nodeEventFresh(id),parse:(raw,t)=>parseGgbetLiveEvent(raw,{origin:'https://gg.bet',at:t}),at});
+    // The browser owns these events' full tree: an existing Node full subscription (a lease taken before the handoff) ends.
+    for(const id of browserIds)if(this.fullEvents.has(id)){for(const [k,l] of [...this.leases])if(l.eventId===id)this.leases.delete(k);this.deactivateFull(id);}
+    await this.state.success(rows.filter(Boolean),{status:200,elapsedMs:0});
+    await this.browser.acknowledgeHandoffs();
+  }
+  // Node's view of one event is fresh: session up and acknowledged, the event in a recent snapshot.
+  nodeEventFresh(id,now=this.now()){const raw=this.events.get(id);return this.ws?.readyState===1&&!!this.lastAckAt&&raw?.__receivedAt>=this.lastConnectAt&&['LIVE','SUSPENDED'].includes(raw?.fixture?.status)&&now-raw.__receivedAt<=2*config.ggbetSnapshotIntervalMs+5000&&!!this.lastSnapshotAt&&now-this.lastSnapshotAt<=2*config.ggbetSnapshotIntervalMs+5000;}
+  scheduleBrowserPublish(){if(this.browserPublishTimer)return;this.browserPublishTimer=setTimeout(()=>{this.browserPublishTimer=null;this.publish().catch(e=>{this.lastError=e?.message||String(e);});},200);this.browserPublishTimer.unref?.();}
+  browserSummary(){const st=this.browser.status(),owned=new Set(st.owned.map(o=>o.eventId));return {...st,node:{source:'node-proxy',networkMode:this.networkMode(),eventCount:[...this.events.keys()].filter(id=>!owned.has(id)).length,freshnessMs:this.lastMessageAt?Math.max(0,this.now()-this.lastMessageAt):null,lastSnapshotAt:this.lastSnapshotAt?new Date(this.lastSnapshotAt).toISOString():null}};}
   // A leased full stream that went quiet while the event moves on: the snapshot (every 30 s) shows other prices for
   // markets the full tree also has. If two snapshots at least 10 s apart disagree and the stream pushed nothing in
   // between, only this stream is restarted inside the same WebSocket (the session is never torn down for it), and
@@ -473,20 +500,20 @@ export class GgbetLiveCollector {
   monitorTick(now=this.now()){
     if(!config.ggbetPricingMonitor)return;this.monitorSkip=this.monitorSkip||new Map();for(const [id,until] of this.monitorSkip)if(until<=now)this.monitorSkip.delete(id);
     const m=this.monitor;
-    if(m){const gone=!this.events.has(m.eventId),noData=!m.samples&&now-m.startedMs>config.ggbetPricingMonitorNoDataMs,expired=now-m.startedMs>config.ggbetPricingMonitorMaxMs;
+    if(m){const gone=!this.events.has(m.eventId)||!!this.browser?.owns(m.eventId),noData=!m.samples&&now-m.startedMs>config.ggbetPricingMonitorNoDataMs,expired=now-m.startedMs>config.ggbetPricingMonitorMaxMs;
       if(!gone&&!noData&&!expired)return;
       if(noData||expired)this.monitorSkip.set(m.eventId,now+(noData?2*3600000:30*60000));
       this.monitor=null;this.monitorEnded={eventId:m.eventId,reason:gone?'event left LIVE':noData?'no typeId 96 in its stream':'max monitoring time',at:new Date(now).toISOString(),samples:m.samples};
       if(!gone)try{this.syncLight(m.eventId);}catch{}
     }
-    const pick=[...this.events.values()].find(e=>e?.fixture?.sportId==='esports_dota_2'&&!this.monitorSkip.has(e.id)&&!this.fullEvents.has(e.id)&&e.version);
+    const pick=[...this.events.values()].find(e=>e?.fixture?.sportId==='esports_dota_2'&&!this.monitorSkip.has(e.id)&&!this.fullEvents.has(e.id)&&!this.browser?.owns(e.id)&&e.version);
     if(!pick)return;
     this.monitor={eventId:pick.id,marketIds:['96m1','96m2','96m3','96m4','96m5'],startedMs:now,since:new Date(now).toISOString(),samples:0,lastSampleAt:null};
     try{this.syncLight(pick.id);}catch{}
   }
   monitorStatus(){if(!config.ggbetPricingMonitor)return {state:'disabled'};const m=this.monitor;return m?{state:'monitoring',eventId:m.eventId,since:m.since,samples:m.samples,lastSampleAt:m.lastSampleAt,marketIds:m.marketIds}:{state:'waiting-for-eligible-event',lastEnded:this.monitorEnded||null,skipped:this.monitorSkip?.size||0};}
-  async applySnapshot(list){const now=this.now(),next=new Map();for(const raw of Array.isArray(list)?list:[]){if(!raw?.id)continue;this.lightIds.set(raw.id,(raw.markets||[]).map(m=>text(m?.id)).filter(Boolean));const old=this.events.get(raw.id),tab=this.marketTabs.get(raw.id),keepFull=!!(this.fullEvents.has(raw.id)&&tab?.marketIds?.length&&old?.markets?.length),resync=keepFull&&this.checkFullStream(raw.id,raw,old,now);const patch=keepFull?{...raw,markets:resync?mergeMarketsById(old.markets,raw.markets):undefined}:raw,merged=mergeGgbetEvent(old,patch);merged.__updatedAt=old?.version===merged.version?(old.__updatedAt||now):now;next.set(raw.id,merged);}for(const id of this.events.keys())if(!next.has(id))this.forgetEvent(id);this.events=next;this.monitorTick(now);for(const raw of this.events.values()){if(this.fullEvents.has(raw.id)){if(!this.marketTabs.get(raw.id)?.providerTabs?.length)this.requestProviderTabs(raw);this.requestMarketCatalog(raw,{force:this.catalogPushFallback});}else this.syncLight(raw.id);}this.snapshots++;this.lastSnapshotAt=now;this.failures=0;this.lastError='';await this.publish(now);}
-  async applyPush(patch){if(!patch?.id)return;patch=this.stripMonitorMarkets(patch);const old=this.events.get(patch.id);if(!old){this.scheduleSnapshot(250);return;}const now=this.now(),merged=mergeGgbetEvent(old,patch);merged.__updatedAt=now;this.events.set(patch.id,merged);const sub=this.subscriptions.get(patch.id);if(sub){sub.version=merged.version||sub.version;sub.pushes=(sub.pushes||0)+1;}const tab=this.marketTabs.get(patch.id);if(tab)tab.version=merged.version||tab.version;this.pushes++;this.lastPushAt=now;this.failures=0;this.lastError='';await this.publish(now);}
+  async applySnapshot(list){const now=this.now(),next=new Map();for(const raw of Array.isArray(list)?list:[]){if(!raw?.id)continue;this.lightIds.set(raw.id,(raw.markets||[]).map(m=>text(m?.id)).filter(Boolean));const old=this.events.get(raw.id),tab=this.marketTabs.get(raw.id),keepFull=!!(this.fullEvents.has(raw.id)&&tab?.marketIds?.length&&old?.markets?.length),resync=keepFull&&this.checkFullStream(raw.id,raw,old,now);const patch=keepFull?{...raw,markets:resync?mergeMarketsById(old.markets,raw.markets):undefined}:raw,merged=mergeGgbetEvent(old,patch);merged.__receivedAt=now;merged.__updatedAt=old?.version===merged.version?(old.__updatedAt||now):now;next.set(raw.id,merged);}for(const id of this.events.keys())if(!next.has(id))this.forgetEvent(id);this.events=next;this.monitorTick(now);for(const raw of this.events.values()){if(this.fullEvents.has(raw.id)){if(!this.marketTabs.get(raw.id)?.providerTabs?.length)this.requestProviderTabs(raw);this.requestMarketCatalog(raw,{force:this.catalogPushFallback});}else this.syncLight(raw.id);}this.snapshots++;this.lastSnapshotAt=now;this.failures=0;this.lastError='';await this.publish(now);}
+  async applyPush(patch){if(!patch?.id)return;patch=this.stripMonitorMarkets(patch);const old=this.events.get(patch.id);if(!old){this.scheduleSnapshot(250);return;}const now=this.now(),merged=mergeGgbetEvent(old,patch);merged.__receivedAt=now;merged.__updatedAt=now;this.events.set(patch.id,merged);const sub=this.subscriptions.get(patch.id);if(sub){sub.version=merged.version||sub.version;sub.pushes=(sub.pushes||0)+1;}const tab=this.marketTabs.get(patch.id);if(tab)tab.version=merged.version||tab.version;this.pushes++;this.lastPushAt=now;this.failures=0;this.lastError='';await this.publish(now);}
   async onMessage(raw){this.lastMessageAt=this.now();let msg;try{msg=JSON.parse(typeof raw==='string'?raw:String(raw));}catch{return;}this.notify('message',raw,msg);if(msg.type==='connection_ack'){this.lastAckAt=this.now();this.failures=0;this.requestSnapshot();return;}if(msg.type==='ka'||msg.type==='connection_keep_alive')return;
     const id=String(msg.id||''),req=this.requests.get(id);if(msg.type==='data'){
       if(req?.kind==='snapshot'){const matches=msg?.payload?.data?.matches?.sportEvents;if(Array.isArray(matches)){this.requests.delete(id);await this.applySnapshot(matches);}}
@@ -542,5 +569,5 @@ export class GgbetLiveCollector {
   // (renewed a minute before it), or an explicitly configured GGBET_SESSION_REFRESH_MS. No timer by default.
   maintenance(){if(this.stopped||!config.ggbetLiveEnabled)return;const now=this.now();this.expireLeases(now);if(this.ws?.readyState===1&&this.lastAckAt){const interval=this.degradedPolling?config.ggbetDegradedSnapshotMs:config.ggbetSnapshotIntervalMs;if(now-this.lastSnapshotAt>=interval)this.requestSnapshot();if(now-this.lastMessageAt>config.ggbetWatchdogMs){this.lastError='GGBET: watchdog reconnect';try{this.ws.close(4001,'watchdog');}catch{}}else if(this.bootstrap?.expiresAt&&now>=this.bootstrap.expiresAt-60000&&now-this.lastConnectAt>=MIN_HEALTHY_SESSION_MS){this.expiryRefreshes++;this.bootstrap=null;try{this.ws.close(4001,'token-expiry');}catch{}}else if(config.ggbetSessionRefreshMs>0&&now-this.lastConnectAt>config.ggbetSessionRefreshMs){this.scheduledRefreshes++;this.bootstrap=null;try{this.ws.close(4001,'scheduled-token-refresh');}catch{}}}else if(!this.connecting&&!this.reconnectTimer)this.scheduleReconnect(0);}
   start(){if(!config.ggbetLiveEnabled)return;this.stopped=false;this.maintenanceTimer=setInterval(()=>this.maintenance(),1000);this.maintenanceTimer.unref?.();this.connect().catch(()=>{});}
-  async stop(){this.stopped=true;clearInterval(this.maintenanceTimer);clearTimeout(this.reconnectTimer);clearTimeout(this.snapshotSoon);clearTimeout(this.metadataPublishTimer);this.reconnectTimer=null;this.snapshotSoon=null;try{if(this.ws?.readyState===1)this.ws.close(1000,'shutdown');}catch{};if(this.connecting)await this.connecting.catch(()=>{});this.ws=null;}
+  async stop(){this.stopped=true;clearInterval(this.maintenanceTimer);clearTimeout(this.browserPublishTimer);clearTimeout(this.reconnectTimer);clearTimeout(this.snapshotSoon);clearTimeout(this.metadataPublishTimer);this.reconnectTimer=null;this.snapshotSoon=null;try{if(this.ws?.readyState===1)this.ws.close(1000,'shutdown');}catch{};if(this.connecting)await this.connecting.catch(()=>{});this.ws=null;}
 }

@@ -102,9 +102,9 @@ async function call(context, fn) { const r = await S.bidi.send('script.callFunct
 // A normal DOM click on the market-tab button labelled All/Все (the one next to Popular/Популярное).
 const CLICK_TAB = (labels) => `() => { const want = ${JSON.stringify(labels)}; const els = [...document.querySelectorAll('button, a, [role="tab"], li, span, div')].filter((e) => want.includes((e.textContent || '').trim()) && e.children.length <= 2 && e.offsetParent !== null);
   const pick = els.find((e) => /Popular|Популярное|Match|Матч/.test(e.parentElement?.textContent || '')) || els[0]; if (!pick) return false; pick.click(); return true; }`;
-// One lightweight discovery tab cycles through GG.BET's own listings: each sport page lists that sport's matches in the
-// provider's RANK_RECOMMENDED order; the LIVE tab of /esports lists every LIVE match in the provider's cross-sport order.
-const DISCOVERY = [{ path: '/counter-strike' }, { path: '/dota2' }, { path: '/league-of-legends' }, { path: '/esports', live: true }];
+// One lightweight discovery tab cycles through GG.BET's own listings: each sport's /live page lists that sport's LIVE matches in the
+// provider's RANK_RECOMMENDED order; the global /live page lists every LIVE match in the provider's cross-sport order.
+const DISCOVERY = [{ path: '/counter-strike/live' }, { path: '/dota2/live' }, { path: '/league-of-legends/live' }, { path: '/live' }];
 const DISCOVERY_STEP_MS = Math.max(10000, Number(env.GGBET_BROWSER_DISCOVERY_STEP_MS) || 30000);
 async function openDiscovery() {
   const context = S.startupContext || (await S.bidi.send('browsingContext.create', { type: 'tab' })).context;

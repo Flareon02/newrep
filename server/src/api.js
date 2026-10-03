@@ -492,6 +492,12 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
       if(!ggbetSupervisor)return sendJson(req,res,200,{enabled:false});
       const st=ggbetSupervisor.stateSnapshot();return sendJson(req,res,200,{enabled:true,...st,sessions:st.sessions.slice(-20),history:st.history.slice(-50),incidents:(ggbetSupervisor.incidents||[]).slice(-20)});
     }
+    if(req.method==='GET'&&url.pathname==='/api/admin/ggbet-browser'){
+      // Administrators only (admin.diagnostics): browser-selected events (rank, selection reason, page state, source),
+      // Node event count/freshness, handoff history, IPC state. Parsed data only - no cookie, token or VPN secret.
+      if(!ggbetCollector?.browser)return sendJson(req,res,200,{enabled:false,node:{source:'node-proxy',networkMode:ggbetCollector?.networkMode?.()}});
+      return sendJson(req,res,200,{...ggbetCollector.browserSummary(),handoffs:ggbetCollector.browser.history.slice(-50)});
+    }
     if(req.method==='GET'&&url.pathname==='/api/admin/ggbet-bootstrap'){
       // Token-protected (auth.js): per-origin outcome of the last GGBET bootstrap attempts - hosts, status, redirect
       // chain, Set-Cookie presence, body kind/size, token-extraction reason. Never a token, cookie, header or body.

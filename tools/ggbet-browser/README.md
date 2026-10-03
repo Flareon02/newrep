@@ -9,8 +9,8 @@ those events from the browser; every other GGBET event stays with the Node colle
 
 - **Disciplines:** the provider sport ids from GG.BET's categorizer: `esports_counter_strike`, `esports_dota_2`,
   `esports_league_of_legends`.
-- **Popularity:** GG.BET's own `RANK_RECOMMENDED` order, read by one discovery tab cycling through `/counter-strike`,
-  `/dota2`, `/league-of-legends` (per-sport order) and `/esports` → Live (cross-sport order).
+- **Popularity:** GG.BET's own `RANK_RECOMMENDED` order, read by one discovery tab cycling through `/counter-strike/live`,
+  `/dota2/live`, `/league-of-legends/live` (per-sport order) and `/live` (cross-sport order).
 - **Cases:**
   - A: one top event per sport;
   - B: one per available sport, then the next most popular among them;

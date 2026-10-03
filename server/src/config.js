@@ -26,7 +26,7 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.12.0",
+  version: "4.13.0",
   port: intEnv("PORT", 8080),
   // Listen address. Unset: 0.0.0.0 (Docker). 127.0.0.1 / localhost when only a local reverse proxy or tunnel may reach
   // the API. Any other value that is not an IP literal binds 127.0.0.1 (fails closed, never public) and is logged.
@@ -73,6 +73,12 @@ export const config = {
   ggbetPricingMonitorNoDataMs: intEnv("GGBET_PRICING_MONITOR_NO_DATA_MS", 5 * 60 * 1000, 60 * 1000),
   ggbetPricingMonitorMaxMs: intEnv("GGBET_PRICING_MONITOR_MAX_MS", 3 * 60 * 60 * 1000, 10 * 60 * 1000),
   ggbetEgressSocket: String(process.env.GGBET_EGRESS_SOCKET || "/run/ggbet-egress/connect.sock").trim(),
+  // Hybrid GGBET source (ggbet-browser-source.js): up to 3 LIVE events served by the Firefox browser worker sidecar over
+  // its local Unix socket. Off unless GGBET_BROWSER_SOURCE=1; turning it off hands every event back to the Node collector.
+  ggbetBrowserSource: /^(?:1|true|on|yes)$/i.test(String(process.env.GGBET_BROWSER_SOURCE || "0")),
+  ggbetBrowserSocket: String(process.env.GGBET_BROWSER_SOCKET || "/run/ggbet-browser/data.sock").trim(),
+  ggbetBrowserPollMs: intEnv("GGBET_BROWSER_POLL_MS", 1000, 250),
+  ggbetBrowserIpcStaleMs: intEnv("GGBET_BROWSER_IPC_STALE_MS", 5000, 2000),
   ggbetEgressStatusFile: String(process.env.GGBET_EGRESS_STATUS_FILE || "/run/ggbet-egress/status.json").trim(),
   // Sanitized GGBET forensic log (ggbet-forensics.js): 24 h rolling, size cap, free-disk floor; raw frames off by default.
   ggbetForensicsEnabled: !/^(?:0|false|off|no)$/i.test(String(process.env.GGBET_FORENSICS_ENABLED || "1")),

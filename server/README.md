@@ -63,3 +63,12 @@ After the original updater has finished restoring the previous container,
 extract this corrected archive into a fresh directory as described in
 `START-HERE.md`. Do not reuse a directory containing another update's rollback
 records. The new updater builds the corrected image itself.
+
+
+### GGBET hybrid source (4.13.0)
+
+`GGBET_BROWSER_SOURCE=1` enables the local Firefox sidecar source. At most 3 LIVE CS / Dota 2 / LoL events use the full browser market tree; all other events retain Node collector leases through `GGBET_NETWORK_MODE=proxy` and the existing `CZECH_PROXY_*` settings. The extension API/SSE schema and event IDs stay compatible, so no extension reinstall is needed.
+
+Readiness and source ownership are per whole event. Browser failures remove prices and mark the event stale without substituting Node odds. Node-to-browser handoff requires fresh identity-confirmed All data. Browser-to-Node handback requires a fresh Node snapshot from the current connection; publication precedes the local page-close acknowledgement. `/api/admin/ggbet-browser` requires `admin.diagnostics`. IPC uses a Unix socket (0660, directory 0750) shared only by `ggbetfx` and `monitor` in `esports-ggbet-browser`.
+
+See [4.13.0 changelog](CHANGELOG-4.13.0.md) and [sidecar operations](../tools/ggbet-browser/README.md). Rollback keeps `GGBET_NETWORK_MODE=proxy`: disable `GGBET_BROWSER_SOURCE`, restart only esports-monitor, or switch the server back to `/opt/esports-monitor/releases/4c6a5e3`.
