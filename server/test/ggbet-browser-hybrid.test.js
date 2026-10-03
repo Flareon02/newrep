@@ -296,6 +296,27 @@ test('a failed publication cannot acknowledge page closure; acknowledgement fail
   } finally { await h.c.stop(); }
 });
 
+test('an event absent from both LIVE sources releases its retiring slot only after removal is published, with retry', async () => {
+  const h = await hybrid();
+  try {
+    h.w.feed = feed({ selected: [sel(1)], events: { [ID(1)]: browserRaw(1) } }); await h.sync();
+    LineSocket.line = LineSocket.line.filter((e) => e.id !== ID(1)); await h.c.applySnapshot(LineSocket.line);
+    const request = h.src.request; let acks = 0, failAck = true;
+    h.src.request = async (...args) => {
+      if (args[1] !== '/handoff') return request(...args);
+      assert.equal(h.row(1), undefined, 'event removal is already visible');
+      assert.deepEqual(args[3], { worker: 'W1', sessionId: 'B1', eventId: ID(1), pageId: 'P1' });
+      acks++; if (failAck) throw Error('IPC lost'); return { ok: true };
+    };
+    h.w.feed = feed({ seq: 2, retiring: [sel(1, { retiring: 'gone from the provider list', ready: false })] }); await h.src.poll();
+    const success = h.state.success; h.state.success = async () => { throw Error('publish failure'); };
+    await assert.rejects(h.c.publish(), /publish failure/); assert.equal(acks, 0);
+    h.state.success = success; await h.c.publish(); assert.equal(acks, 1);
+    failAck = false; await h.src.poll(); await h.c.publish(); assert.equal(acks, 2, 'retry after ownership state was removed');
+    assert.equal(h.state.rows.length, 29); assert.equal(new Set(h.state.rows.map((r) => r.id)).size, 29);
+  } finally { await h.c.stop(); }
+});
+
 test('real IPC POST handoff supports bounded JSON, epoch rejection, timeout and malformed replies', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ggbr-ipc-')), sock = path.join(dir, 's.sock');
   const srv = serveIpc({ socketPath: sock, handle: async ({ url, body }) => {

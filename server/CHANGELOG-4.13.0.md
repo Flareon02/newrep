@@ -15,6 +15,7 @@ Based on 4.12.0 (4c6a5e3). The undeployed guard change 88b05eb is not part of th
   - Node → browser only when the worker reports the event ready (page healthy/quiet, identity confirmed, All tree
     received, fresh).
   - Browser → node only when the event was really deselected (settled selection) and the Node event is fresh in the current connection. A retiring LIVE page remains open until publication succeeds and the server acknowledges its worker/session/page identity.
+  - An event absent from both LIVE sources also releases its retiring page after its removal is published; failed acknowledgements are retried even after browser ownership was removed.
   - Browser cannot serve an owned event (VPN_DOWN, page stale, browser restarting, IPC lost): the event stays visible with
     every price removed and `odds.stale`. Node odds are never silently substituted. Modes persist across server restarts
     (`DATA_DIR/ggbet-browser-arbiter.json`).

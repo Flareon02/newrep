@@ -104,7 +104,7 @@ export class BrowserGgbetSource {
     const now = this.now(), fresh = this.ipcFresh(now), rows = [], owned = new Set(), changed = [];
     this.pendingAcks.clear();
     const settled = fresh && this.feed?.vpnState === 'UP' && this.feed?.browserRunning && this.feed?.selectionReady;
-    const ids = new Set([...nodeRows.keys(), ...(fresh ? this.selected.keys() : []), ...this.modes.keys()]);
+    const ids = new Set([...nodeRows.keys(), ...(fresh ? this.selected.keys() : []), ...this.modes.keys(), ...this.retiring.keys()]);
     for (const id of ids) {
       const prev = this.mode(id), sel = fresh ? this.selected.get(id) : null; let next;
       if (this.ready(id, now)) next = 'browser';
@@ -115,9 +115,9 @@ export class BrowserGgbetSource {
       else if (settled && !nodeRows.has(id) && !sel) next = 'gone'; // left LIVE (Node no longer lists it) and the browser does not serve it
       else if (prev !== 'node' && !sel && this.ready(id, now, true)) next = 'browser'; // hold the retiring browser copy until Node is fresh
       else next = 'browser-unavailable';
-      if (next === 'gone') { this.modes.delete(id); this.lastRows.delete(id); this.published.delete(id); this.raws.delete(id); changed.push({ eventId: id, from: prev, to: 'gone', reason: 'event left LIVE' }); continue; }
+      if (next === 'gone') { this.modes.delete(id); this.lastRows.delete(id); this.published.delete(id); this.raws.delete(id); if (this.retiring.has(id)) this.pendingAcks.add(id); changed.push({ eventId: id, from: prev, to: 'gone', reason: 'event left LIVE' }); continue; }
       if (next !== prev) { changed.push({ eventId: id, from: prev, to: next, reason: this.reason(id, next, sel, fresh) }); if (next === 'node') this.modes.delete(id); else this.modes.set(id, { mode: next, since: now }); }
-      if (next === 'node') { if (this.retiring.has(id) && nodeFresh(id)) this.pendingAcks.add(id); this.lastRows.delete(id); this.published.delete(id); const r = nodeRows.get(id); if (r) rows.push(r); continue; }
+      if (next === 'node') { if (this.retiring.has(id) && (nodeFresh(id) || (settled && !sel && !nodeRows.has(id)))) this.pendingAcks.add(id); this.lastRows.delete(id); this.published.delete(id); const r = nodeRows.get(id); if (r) rows.push(r); continue; }
       owned.add(id);
       const src = this.raws.get(id), sAt = Date.parse((sel || this.retiring.get(id))?.lastUpdateAt || '') || src?.at || at;
       const built = src ? parse(src.raw, sAt) : null;
@@ -143,7 +143,7 @@ export class BrowserGgbetSource {
   // The published browser-owned row (the full "All" tree when browser; prices removed when unavailable) for a detail
   // panel, or null when the browser does not own the event.
   detailRow(id) { const eid = this.owns(id); if (!eid) return null; const row = this.published.get(eid) || null; return this.mode(eid) === 'browser' && this.ready(eid, this.now(), true) ? row : unavailableRow(row, this.now()); }
-  // Called only after state.success resolves: the extension now sees the fresh Node copy. Failed acknowledgements
+  // Called only after state.success resolves: the extension now sees the fresh Node copy or the ended event's removal. Failed acknowledgements
   // are retried on later polls; stale worker/session/page acknowledgements cannot close a new page.
   async acknowledgeHandoffs() {
     if (!this.ipcFresh()) return;
