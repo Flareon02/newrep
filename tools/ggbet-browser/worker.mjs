@@ -104,7 +104,7 @@ const CLICK_TAB = (labels) => `() => { const want = ${JSON.stringify(labels)}; c
   const pick = els.find((e) => /Popular|Популярное|Match|Матч/.test(e.parentElement?.textContent || '')) || els[0]; if (!pick) return false; pick.click(); return true; }`;
 // One lightweight discovery tab cycles through GG.BET's own listings: each sport page lists that sport's matches in the
 // provider's RANK_RECOMMENDED order; the LIVE tab of /esports lists every LIVE match in the provider's cross-sport order.
-const DISCOVERY = [{ path: '/counter-strike' }, { path: '/dota2' }, { path: '/league-of-legends' }, { path: '/esports', live: true }];
+const DISCOVERY = [{ path: '/counter-strike', live: true }, { path: '/dota2', live: true }, { path: '/league-of-legends', live: true }, { path: '/esports', live: true }];
 const DISCOVERY_STEP_MS = Math.max(10000, Number(env.GGBET_BROWSER_DISCOVERY_STEP_MS) || 30000);
 async function openDiscovery() {
   const context = S.startupContext || (await S.bidi.send('browsingContext.create', { type: 'tab' })).context;

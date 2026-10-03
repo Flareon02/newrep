@@ -144,7 +144,7 @@ export class Discovery {
   // Gone = absent from its sport's fresh list for endedGraceMs, judged on the list's own clock (a silent or unreachable
   // discovery never ends anything).
   gone(page, now, cfg) {
-    const l = this.sports.get(page.sportId), r = this.refs.get(page.eventId); if (!l || now - l.at > cfg.listFreshMs) return false;
+    const l = this.sports.get(page.sportId), r = this.refs.get(page.eventId); if (!l || now - l.at > cfg.listFreshMs || l.count > l.rows.length) return false; // a truncated list cannot prove absence
     return !l.rows.some((x) => x.eventId === page.eventId) && l.at - Math.max(r?.seenAt || 0, page.openedAt) > cfg.endedGraceMs;
   }
 }

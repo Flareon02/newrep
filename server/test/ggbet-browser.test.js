@@ -143,6 +143,13 @@ test('discovery: provider list order -> ranks; global list -> cross-sport rank; 
   assert.equal(d.gone(page, 1000 + cfgSel.endedGraceMs + 6000 + cfgSel.listFreshMs, cfgSel), false, 'a silent discovery never ends anything');
   d.applyUpdate({ id: ev(3, CS).id, fixture: { status: 'ENDED' } }, 5000); assert.equal(d.ended(ev(3, CS).id), true);
 });
+test('discovery cannot expire a LIVE page just because it fell outside a truncated provider list', () => {
+  const d = new Discovery(), page = { eventId: 'held', sportId: CS, openedAt: 1 };
+  d.applyList([CS], { count: 50, rows: [{ eventId: 'other', sportId: CS, status: 'LIVE', slug: 'other' }] }, cfgSel.endedGraceMs + 1000);
+  assert.equal(d.gone(page, cfgSel.endedGraceMs + 2000, cfgSel), false);
+  d.applyList([CS], { count: 1, rows: [{ eventId: 'other', sportId: CS, status: 'LIVE', slug: 'other' }] }, cfgSel.endedGraceMs + 3000);
+  assert.equal(d.gone(page, cfgSel.endedGraceMs + 4000, cfgSel), true);
+});
 test('raw event for the server: merged GraphQL event + "All" catalog markets (ACTIVE/SUSPENDED), raw values as received', () => {
   const s = new MarketStore(), id = EV(1);
   s.ingest({ type: 'data', id: '8', payload: { data: { matchBySlug: { id, slug: 'a', version: 'v1', fixture: { status: 'LIVE', title: 'A vs B', competitors: [{ id: 'h', name: 'A', score: [{ type: 'total', points: '0' }] }, { id: 'a', name: 'B' }] } } } } });
