@@ -1,0 +1,38 @@
+# Experimental GGBET Firefox browser worker (sidecar). Separate from esports-monitor: its own release directory
+# (/opt/ggbet-browser, installed by ggbet-browser-install.sh), its own Mullvad tunnel in the fail-closed network
+# namespace ggbet-browser (only lo + WireGuard + nftables killswitch; never the host route, never a proxy), its own
+# unprivileged user (ggbetfx). Data is served on /run/ggbet-browser/data.sock only; esports-monitor is not changed.
+# No mount isolation (PrivateTmp/ProtectSystem/...): the namespace created by ExecStartPre must stay visible on the host.
+[Unit]
+Description=Esports Monitor - experimental GGBET Firefox browser worker (Mullvad netns, fail-closed)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=900
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=GGBET_BROWSER_VPN_CONF=/root/.secrets/mullvad-browser/hr-zag-wg-002.conf
+Environment=GGBET_BROWSER_EXPECTED_EXIT=hr-zag-wg-002
+Environment=GGBET_BROWSER_MAX_PAGES=10
+# Optional tuning (see tools/ggbet-browser/core.mjs): GGBET_BROWSER_WS_STALE_MS, _EVENT_STALE_MS, _PAGE_STALE_MS,
+# _QUIET_MS, _ENDED_GRACE_MS, _CONTENT_PROCESSES. Put overrides in a drop-in, not here.
+ExecStartPre=/opt/ggbet-browser/current/ops/staging/ggbet-browser-netns.sh ensure
+ExecStartPre=/usr/bin/install -d -o ggbetfx -g monitor -m 750 /run/ggbet-browser
+ExecStartPre=/usr/bin/install -d -o ggbetfx -g ggbetfx -m 700 /var/lib/esports-monitor-ggbet-browser
+ExecStart=/usr/bin/ip netns exec ggbet-browser /usr/sbin/runuser -u ggbetfx -- /usr/bin/env HOME=/home/ggbetfx /usr/local/bin/node /opt/ggbet-browser/current/tools/ggbet-browser/worker.mjs
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+# Production keeps priority: lower CPU weight, at most ~1 of the 2 vCPUs, killed first under memory pressure.
+Nice=5
+CPUWeight=50
+CPUQuota=120%
+OOMScoreAdjust=500
+MemoryHigh=@MEMORY_HIGH@
+MemoryMax=@MEMORY_MAX@
+MemorySwapMax=256M
+TasksMax=1024
+
+[Install]
+WantedBy=multi-user.target
