@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Operator CLI for the experimental GGBET Firefox worker (local Unix socket only).
-//   ggbet-browser status | matches | markets <eventId> | stale | stats   [--json]
+// Operator CLI for the GGBET Firefox browser worker (local Unix socket only).
+//   ggbet-browser status | selected | matches | markets <eventId> | stale | stats   [--json]
 import http from 'node:http';
 
 const SOCK = process.env.GGBET_BROWSER_SOCKET || '/run/ggbet-browser/data.sock';
@@ -23,6 +23,10 @@ async function main() {
       `resources firefox PSS ${h.firefoxPssMiB} MiB (${h.firefoxProcesses} procs)  worker RSS ${h.workerRssMiB} MiB  MemAvailable ${h.systemMemAvailableMiB} MiB`,
     ].join('\n'));
   }
+  if (cmd === 'selected') {
+    const m = await get('/selected');
+    return out(m, () => (m.length ? m.map((p) => `${String(p.sport).padEnd(7)} ${p.eventId}  ${p.title || '?'}  [${p.league || '?'}]  ${p.status || '?'} ${p.score || ''}  rank ${p.sportRank ?? '-'} global ${p.globalRank ?? '-'}  ${p.state}${p.ready ? ' READY' : ''}  markets ${p.marketCount}  -- ${p.reason || ''}`).join('\n') : 'no selected events'));
+  }
   if (cmd === 'matches') {
     const m = await get('/matches');
     return out(m, () => (m.length ? m.map((p) => `${p.state.padEnd(13)} ${p.eventId}  ${p.eventName || '?'}  [${p.league || '?'}]  ${p.status || '?'} ${p.score || ''}  v${p.eventVersion || '?'}  markets ${p.markets} outcomes ${p.outcomes}  tab ${age(p.tabAgeMs)}  data ${age(p.eventUpdateAgeMs)}  price ${age(p.priceChangeAgeMs)}  recoveries ${p.recoveries}`).join('\n') : 'no pages'));
@@ -40,6 +44,6 @@ async function main() {
     const h = await get('/health');
     return out({ stats: h.stats, updatesPerMinute: h.updatesPerMinute, thresholds: h.thresholds }, () => `${Object.entries(h.stats).map(([k, v]) => `${k} ${v}`).join('  ')}  updates/min ${h.updatesPerMinute}\nthresholds ${Object.entries(h.thresholds || {}).map(([k, v]) => `${k}=${v}`).join(' ')}`);
   }
-  throw new Error('usage: ggbet-browser status | matches | markets <eventId> | stale | stats [--json]');
+  throw new Error('usage: ggbet-browser status | selected | matches | markets <eventId> | stale | stats [--json]');
 }
 main().catch((e) => { console.error(`ggbet-browser: ${e.message}`); process.exit(1); });

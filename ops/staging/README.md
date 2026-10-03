@@ -52,3 +52,10 @@ STAGING_TOKEN=$(sed -n 's/^API_TOKEN=//p' /etc/esports-monitor/server.env) node 
 
 The staging token lives only in `/etc/esports-monitor/server.env` (mode 0640, root:monitor). The private extension build
 (`tools/build-staging-extension.mjs`) reads it from there and writes into `dist/`, which is git-ignored.
+
+
+### GGBET Firefox sidecar / hybrid release 4.13.0
+
+Install the committed sidecar with `ops/staging/ggbet-browser-install.sh <commit>`; it creates the system group `esports-ggbet-browser` for `ggbetfx` and `monitor`, installs an immutable release, and restarts only the browser service. Firefox is headless, with a hard maximum of 3 LIVE match tabs and one discovery tab. The controller only reads Firefox/BiDi and local IPC; it does not issue GG.BET HTTP/WS/GraphQL requests.
+
+Before server cutover verify the Zagreb exit and `ggbet-browser-netns.sh leaktest`, back up `/etc/esports-monitor/server.env` with mode 0600, and verify monitor can read `/run/ggbet-browser/data.sock`. Deploy the tested server commit with `GGBET_BROWSER_SOURCE=1`, `GGBET_NETWORK_MODE=proxy` and the existing Czech proxy credentials. The restarted server picks up its shared group membership despite ProtectSystem=strict. After cutover stop/disable the separate Node egress controller; leave cloudflared running. Verify bootstrap and WS use the Czech proxy, browser data comes from Firefox in Zagreb, and host routing is unchanged. Roll back to 4c6a5e3 with browser authority disabled and Node still on Czech proxy.

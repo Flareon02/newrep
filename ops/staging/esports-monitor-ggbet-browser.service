@@ -1,10 +1,12 @@
-# Experimental GGBET Firefox browser worker (sidecar). Separate from esports-monitor: its own release directory
-# (/opt/ggbet-browser, installed by ggbet-browser-install.sh), its own Mullvad tunnel in the fail-closed network
+# GGBET Firefox browser worker (sidecar of esports-monitor 4.13+). Separate from esports-monitor: its own release
+# directory (/opt/ggbet-browser, installed by ggbet-browser-install.sh), its own Mullvad tunnel in the fail-closed network
 # namespace ggbet-browser (only lo + WireGuard + nftables killswitch; never the host route, never a proxy), its own
-# unprivileged user (ggbetfx). Data is served on /run/ggbet-browser/data.sock only; esports-monitor is not changed.
+# unprivileged user (ggbetfx). Headless Firefox only (no X server, no VNC). Max 3 LIVE match tabs + 1 discovery tab.
+# Parsed data is served on /run/ggbet-browser/data.sock only: socket 0660 ggbetfx:esports-ggbet-browser, directory 0750 -
+# readable by the members of esports-ggbet-browser (ggbetfx and the server user monitor), nobody else; no TCP listener.
 # No mount isolation (PrivateTmp/ProtectSystem/...): the namespace created by ExecStartPre must stay visible on the host.
 [Unit]
-Description=Esports Monitor - experimental GGBET Firefox browser worker (Mullvad netns, fail-closed)
+Description=Esports Monitor - GGBET Firefox headless browser worker (Mullvad netns, fail-closed)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=900
@@ -14,13 +16,14 @@ StartLimitBurst=5
 Type=simple
 Environment=GGBET_BROWSER_VPN_CONF=/root/.secrets/mullvad-browser/hr-zag-wg-002.conf
 Environment=GGBET_BROWSER_EXPECTED_EXIT=hr-zag-wg-002
-Environment=GGBET_BROWSER_MAX_PAGES=10
+Environment=GGBET_BROWSER_MAX_PAGES=3
 # Optional tuning (see tools/ggbet-browser/core.mjs): GGBET_BROWSER_WS_STALE_MS, _EVENT_STALE_MS, _PAGE_STALE_MS,
-# _QUIET_MS, _ENDED_GRACE_MS, _CONTENT_PROCESSES. Put overrides in a drop-in, not here.
+# _QUIET_MS, _ENDED_GRACE_MS, _LAG_MS, _LIST_FRESH_MS, _DIVERSITY_PRESENCE_MS, _DIVERSITY_HOLD_MS, _EXCLUDE_MS,
+# _DISCOVERY_STEP_MS, _CONTENT_PROCESSES. Put overrides in a drop-in, not here.
 ExecStartPre=/opt/ggbet-browser/current/ops/staging/ggbet-browser-netns.sh ensure
-ExecStartPre=/usr/bin/install -d -o ggbetfx -g monitor -m 750 /run/ggbet-browser
+ExecStartPre=/usr/bin/install -d -o ggbetfx -g esports-ggbet-browser -m 750 /run/ggbet-browser
 ExecStartPre=/usr/bin/install -d -o ggbetfx -g ggbetfx -m 700 /var/lib/esports-monitor-ggbet-browser
-ExecStart=/usr/bin/ip netns exec ggbet-browser /usr/sbin/runuser -u ggbetfx -- /usr/bin/env HOME=/home/ggbetfx /usr/local/bin/node /opt/ggbet-browser/current/tools/ggbet-browser/worker.mjs
+ExecStart=/usr/bin/ip netns exec ggbet-browser /usr/sbin/runuser -u ggbetfx -g esports-ggbet-browser -- /usr/bin/env HOME=/home/ggbetfx /usr/local/bin/node /opt/ggbet-browser/current/tools/ggbet-browser/worker.mjs
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=30

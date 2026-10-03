@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import vm from 'node:vm';
-import { MarketStore, pageState, planPages, liveDotaCandidates, publish, config, DEFAULTS, pruneCandidates, goneFromList } from '../../tools/ggbet-browser/core.mjs';
+import { MarketStore, pageState, publish, config, DEFAULTS, Discovery, listRows, selectEvents, mergeRawEvent, TARGET_SPORTS } from '../../tools/ggbet-browser/core.mjs';
 import { PRELOAD } from '../../tools/ggbet-browser/preload.mjs';
 import { ForensicLog } from '../src/ggbet-forensics.js';
 
@@ -67,29 +67,95 @@ test('liveness reference: same version as a fresh discovery list = QUIET (source
   assert.equal(pageState(dead, e, cfg, c.now(), { version: 'v3', versionAt: c.now() }), 'STALE', 'source quiet but the page transport is dead');
 });
 
-test('page registry: up to 10 LIVE pages, deterministic, no rotation of open pages, ended pages closed, new LIVE opened', () => {
-  const cands = Array.from({ length: 14 }, (_, i) => ({ eventId: EV(String(i).padStart(2, '0')), slug: `m${i}`, status: 'LIVE', scheduledAt: `2026-10-03T0${(i % 9)}:00:00Z` }));
-  const first = planPages({ open: [], candidates: cands, maxPages: 10 }); assert.equal(first.add.length, 10); assert.deepEqual(planPages({ open: [], candidates: [...cands].reverse(), maxPages: 10 }).add.map((c) => c.eventId), first.add.map((c) => c.eventId), 'deterministic');
-  const open = first.add.map((c) => ({ eventId: c.eventId, ended: false })); assert.equal(planPages({ open, candidates: cands, maxPages: 10 }).add.length, 0, 'full: nothing rotates');
-  open[3].ended = true; const next = planPages({ open, candidates: cands, maxPages: 10 });
-  assert.deepEqual(next.close.map((p) => p.eventId), [open[3].eventId]); assert.equal(next.add.length, 1); assert.ok(!open.some((p) => p.eventId === next.add[0].eventId));
-  assert.equal(planPages({ open: open.filter((p) => !p.ended), candidates: cands, maxPages: 10, exclude: [open[3].eventId] }).add.some((c) => c.eventId === open[3].eventId), false, 'ended event never reopened while the list lags');
-  assert.equal(planPages({ open: [], candidates: cands.slice(0, 2), maxPages: 10 }).add.length, 2, 'fewer LIVE matches: as many as exist');
-  const mixed = [{ eventId: EV(90), slug: 'p', status: 'NOT_STARTED', scheduledAt: '2026-10-03T00:00:00Z' }, cands[0]];
-  assert.deepEqual(planPages({ open: [], candidates: mixed, maxPages: 10 }).add.map((c) => c.eventId), [cands[0].eventId], 'prematch never opened by default');
-  assert.deepEqual(planPages({ open: [], candidates: mixed, maxPages: 10, allowPrematch: true }).add.map((c) => c.eventId), [cands[0].eventId, EV(90)], 'capacity fill: LIVE first');
-  assert.deepEqual(liveDotaCandidates({ type: 'data', payload: { data: { matches: { sportEvents: [{ id: EV(1), slug: 'a', version: 'x', fixture: { sportId: 'esports_dota_2', status: 'LIVE' } }, { id: EV(2), slug: 'b', fixture: { sportId: 'esports_dota_2', status: 'NOT_STARTED' } }, { id: EV(3), slug: 'c', fixture: { sportId: 'esports_counter_strike', status: 'LIVE' } }] } } } }).map((c) => c.eventId), [EV(1)]);
-});
+// ---- selection: provider ranking, CASE A-D, stability ------------------------------------------------------------------
+const CS = 'esports_counter_strike', DOTA = 'esports_dota_2', LOL = 'esports_league_of_legends';
+const cand = (sportId, n, extra = {}) => ({ eventId: `${sportId}#${n}`, slug: `${sportId}-${n}`, sportId, title: `${sportId} ${n}`, sportRank: n, globalRank: null, firstSeenAt: 0, ...extra });
+const C = (spec) => new Map(Object.entries(spec).map(([s, n]) => [s, Array.from({ length: n }, (_, i) => cand(s, i + 1))]));
+const T0 = 10 * 60000, cfgSel = { ...DEFAULTS };
+const ids = (r) => r.add.map((c) => c.eventId);
+const held = (list, at = 0) => list.map((c) => ({ eventId: c.eventId ?? c, sportId: String(c.eventId ?? c).split('#')[0], selectedAt: at }));
 
-test('ended detection: absence counts only against a fresh list; an unreachable GG.BET never ends pages', () => {
-  const c = clock(), t0 = c.now(), page = { eventId: EV(1), openedAt: t0 }, cands = new Map([[EV(1), { eventId: EV(1), seenAt: t0 }], [EV(2), { eventId: EV(2), seenAt: t0 }]]);
-  c.tick(cfg.endedGraceMs * 3); // list received nothing since t0 (blocked)
-  pruneCandidates(cands, t0, cfg); assert.equal(cands.size, 2, 'no candidate expires while the list is silent');
-  assert.equal(goneFromList(page, cands, t0, cfg, c.now()), false);
-  cands.delete(EV(1)); assert.equal(goneFromList(page, cands, t0, cfg, c.now()), false, 'a stale list proves nothing');
-  const listAt = c.now() - 1000; cands.set(EV(2), { eventId: EV(2), seenAt: listAt }); pruneCandidates(cands, listAt, cfg);
-  assert.equal(goneFromList(page, cands, listAt, cfg, c.now()), true, 'fresh list without the event, long after the page opened: ended');
-  assert.equal(goneFromList({ eventId: EV(1), openedAt: c.now() - 5000 }, cands, listAt, cfg, c.now()), false, 'a just-opened page gets the grace period');
+test('selection: target sports are the provider ids; max 3 by default', () => {
+  assert.deepEqual(TARGET_SPORTS, [CS, DOTA, LOL]); assert.equal(DEFAULTS.maxPages, 3); assert.equal(config({}).maxPages, 3);
+});
+test('selection CASE A: LIVE in all three sports -> top CS + top Dota + top LoL', () => {
+  const r = selectEvents({ candidates: C({ [CS]: 5, [DOTA]: 2, [LOL]: 2 }), now: T0, cfg: cfgSel });
+  assert.deepEqual(ids(r).sort(), [`${CS}#1`, `${DOTA}#1`, `${LOL}#1`].sort()); assert.ok(r.add.every((c) => /top/.test(c.reason)));
+});
+test('selection CASE B: two sports -> one each, third = next most popular among them (provider global rank)', () => {
+  const c = C({ [CS]: 4, [DOTA]: 3 }); c.get(DOTA)[1].globalRank = 2; c.get(CS)[1].globalRank = 7; c.get(CS)[0].globalRank = 1; c.get(DOTA)[0].globalRank = 4;
+  const r = selectEvents({ candidates: c, now: T0, cfg: cfgSel });
+  assert.deepEqual(ids(r), [`${CS}#1`, `${DOTA}#1`, `${DOTA}#2`]); assert.match(r.add[2].reason, /next most popular/);
+});
+test('selection never invents cross-sport popularity; it waits for the provider global list', () => {
+  const candidates = C({ [CS]: 4, [DOTA]: 3 });
+  const first = selectEvents({ candidates, now: T0, cfg: cfgSel });
+  assert.deepEqual(ids(first), [`${CS}#1`, `${DOTA}#1`]);
+  candidates.get(DOTA)[1].globalRank = 2; candidates.get(CS)[1].globalRank = 7;
+  const next = selectEvents({ current: held(first.add), candidates, now: T0, cfg: cfgSel });
+  assert.deepEqual(ids(next), [`${DOTA}#2`]); assert.equal(next.drop.length, 0);
+});
+test('selection CASE C: one sport -> its top 3; CASE D: fewer than 3 LIVE -> all of them', () => {
+  assert.deepEqual(ids(selectEvents({ candidates: C({ [CS]: 6 }), now: T0, cfg: cfgSel })), [`${CS}#1`, `${CS}#2`, `${CS}#3`]);
+  assert.deepEqual(ids(selectEvents({ candidates: C({ [LOL]: 1, [DOTA]: 1 }), now: T0, cfg: cfgSel })).sort(), [`${DOTA}#1`, `${LOL}#1`].sort());
+  assert.deepEqual(ids(selectEvents({ candidates: C({}), now: T0, cfg: cfgSel })), []);
+});
+test('selection: an ended event is replaced (uncovered sport first), excluded events never selected', () => {
+  const c = C({ [CS]: 4, [DOTA]: 1 }); c.get(CS).forEach((x, i) => x.globalRank = i + 1);
+  const r = selectEvents({ current: held([`${CS}#2`, `${CS}#3`]), candidates: c, now: T0, cfg: cfgSel, excluded: new Set([`${CS}#1`]) });
+  assert.deepEqual(ids(r), [`${DOTA}#1`], 'free slot: the uncovered sport, not CS#1 (excluded/ended)');
+  const r2 = selectEvents({ current: held([`${DOTA}#1`, `${CS}#2`]), candidates: c, now: T0, cfg: cfgSel, excluded: new Set([`${CS}#1`]) });
+  assert.deepEqual(ids(r2), [`${CS}#3`]);
+});
+test('selection: diversity - CS1,CS2,CS3 + Dota appears -> CS1,CS2,DOTA1; + LoL -> CS1,DOTA1,LOL1 (one swap per round)', () => {
+  let cur = held([`${CS}#1`, `${CS}#2`, `${CS}#3`]);
+  let r = selectEvents({ current: cur, candidates: C({ [CS]: 5, [DOTA]: 2 }), now: T0, cfg: cfgSel });
+  assert.deepEqual(r.drop.map((d) => d.eventId), [`${CS}#3`]); assert.deepEqual(ids(r), [`${DOTA}#1`]);
+  cur = [...r.keep, ...held(ids(r), T0 - 600000)];
+  r = selectEvents({ current: cur, candidates: C({ [CS]: 5, [DOTA]: 2, [LOL]: 1 }), now: T0, cfg: cfgSel });
+  assert.deepEqual(r.drop.map((d) => d.eventId), [`${CS}#2`]); assert.deepEqual(ids(r), [`${LOL}#1`]);
+  assert.deepEqual([...r.keep, ...r.add].map((x) => x.eventId).sort(), [`${CS}#1`, `${DOTA}#1`, `${LOL}#1`].sort());
+  const both = selectEvents({ current: held([`${CS}#1`, `${CS}#2`, `${CS}#3`]), candidates: C({ [CS]: 5, [DOTA]: 2, [LOL]: 2 }), now: T0, cfg: cfgSel });
+  assert.equal(both.drop.length, 1, 'bounded: one diversity swap per round');
+});
+test('selection: no thrashing - rank changes never move a held tab; diversity waits for presence and hold time', () => {
+  const c = C({ [CS]: 5 }); c.get(CS).reverse().forEach((x, i) => { x.sportRank = i + 1; }); // provider ranks flipped
+  const r = selectEvents({ current: held([`${CS}#1`, `${CS}#2`, `${CS}#3`]), candidates: c, now: T0, cfg: cfgSel });
+  assert.deepEqual([r.add.length, r.drop.length], [0, 0]);
+  const fresh = C({ [CS]: 3, [DOTA]: 1 }); fresh.get(DOTA)[0].firstSeenAt = T0 - 10000;
+  assert.equal(selectEvents({ current: held([`${CS}#1`, `${CS}#2`, `${CS}#3`]), candidates: fresh, now: T0, cfg: cfgSel }).drop.length, 0, 'Dota listed for 10 s only');
+  assert.equal(selectEvents({ current: held([`${CS}#1`, `${CS}#2`, `${CS}#3`], T0 - 30000), candidates: C({ [CS]: 3, [DOTA]: 1 }), now: T0, cfg: cfgSel }).drop.length, 0, 'held tabs younger than diversityHoldMs stay');
+  // repeated rounds with an unchanged world: nothing moves
+  let cur = held([`${CS}#1`, `${DOTA}#1`, `${LOL}#1`]); for (let i = 0; i < 20; i++) { const x = selectEvents({ current: cur, candidates: C({ [CS]: 5, [DOTA]: 2, [LOL]: 2 }), now: T0 + i * 15000, cfg: cfgSel }); assert.deepEqual([x.add.length, x.drop.length], [0, 0]); }
+});
+test('discovery: provider list order -> ranks; global list -> cross-sport rank; gone/ended judged on the list clock', () => {
+  const ev = (n, sportId, status = 'LIVE') => ({ id: `5:0000000${n}-aaaa-bbbb-cccc-000000000000`, slug: `s${n}`, version: `v${n}`, fixture: { sportId, status, title: `T${n}`, tournament: { name: 'L' } } });
+  const list = (evs, count = evs.length) => ({ type: 'data', id: '9', payload: { data: { matches: { count, sportEvents: evs } } } });
+  const d = new Discovery();
+  d.applyList([CS], listRows(list([ev(1, CS), ev(2, CS, 'NOT_STARTED'), ev(3, CS)])), 1000);
+  d.applyList(TARGET_SPORTS.concat(['football']), listRows(list([ev(9, 'football'), ev(3, CS), ev(1, CS)])), 1000);
+  const c = d.candidates(2000, cfgSel).get(CS);
+  assert.deepEqual(c.map((x) => [x.eventId.slice(2, 10), x.sportRank, x.globalRank]), [['0000000' + '1', 1, 3], ['0000000' + '3', 2, 2]], 'NOT_STARTED skipped; provider order kept');
+  assert.equal(d.candidates(1000 + cfgSel.listFreshMs + 1, cfgSel).has(CS), false, 'a stale list offers nothing new');
+  const page = { eventId: ev(1, CS).id, sportId: CS, openedAt: 0 };
+  d.applyList([CS], listRows(list([ev(3, CS)])), 1000 + cfgSel.endedGraceMs + 5000);
+  assert.equal(d.gone(page, 1000 + cfgSel.endedGraceMs + 6000, cfgSel), true, 'absent from a fresh list for the grace period');
+  assert.equal(d.gone(page, 1000 + cfgSel.endedGraceMs + 6000 + cfgSel.listFreshMs, cfgSel), false, 'a silent discovery never ends anything');
+  d.applyUpdate({ id: ev(3, CS).id, fixture: { status: 'ENDED' } }, 5000); assert.equal(d.ended(ev(3, CS).id), true);
+});
+test('raw event for the server: merged GraphQL event + "All" catalog markets (ACTIVE/SUSPENDED), raw values as received', () => {
+  const s = new MarketStore(), id = EV(1);
+  s.ingest({ type: 'data', id: '8', payload: { data: { matchBySlug: { id, slug: 'a', version: 'v1', fixture: { status: 'LIVE', title: 'A vs B', competitors: [{ id: 'h', name: 'A', score: [{ type: 'total', points: '0' }] }, { id: 'a', name: 'B' }] } } } } });
+  s.ingest({ type: 'data', id: '15', payload: { data: { compiledMarketsTab: { sportEvent: { id }, marketIds: ['96m1', '1'] } } } }, { allTab: true });
+  s.ingest({ type: 'data', id: '15', payload: { data: { compiledMarketsTab: { sportEvent: { id }, marketIds: ['popular-only'] } } } }, { allTab: false });
+  s.ingest(push(EV(1), 'v2', [mk('96m1', 96, '1.85', '1.85'), mk('1', 1, '1.5', '2.5'), mk('77', 77, '1.1', '1.2', 'DEACTIVATED'), mk('extra', 5, '2', '2')], { competitors: [{ id: 'h', score: [{ type: 'total', points: '1' }] }] }));
+  const raw = s.rawEvent(id);
+  assert.equal(raw.id, id); assert.equal(raw.version, 'v2'); assert.equal(raw.slug, 'a');
+  assert.deepEqual(raw.markets.map((m) => m.id).sort(), ['1', '96m1'], 'catalog of the All tab only; non-active statuses dropped');
+  assert.deepEqual(raw.markets.find((m) => m.id === '96m1').odds.map((o) => o.value), ['1.85', '1.85'], 'raw provider value, never corrected');
+  assert.equal(raw.fixture.competitors.find((c) => c.id === 'h').name, 'A', 'competitors merged by id'); assert.equal(raw.fixture.competitors.find((c) => c.id === 'h').score[0].points, '1');
+  assert.deepEqual(mergeRawEvent(null, { id }), { id });
+  s.reset(); assert.equal(s.rawEvent(id), null);
 });
 
 test('freshness: after VPN loss or browser loss every market is stale/unavailable (old prices never served as fresh)', () => {
@@ -100,7 +166,7 @@ test('freshness: after VPN loss or browser loss every market is stale/unavailabl
   s.reset(); const reopened = { pageId: 'P9', eventId: EV(1), openedAt: c.now(), lastWsFrameAt: c.now() };
   assert.equal(publish(s, [reopened], { now: c.now() })[0].state, 'RECOVERING', 'after a session ends, pre-outage data is gone: a reopened page waits for new data');
   assert.equal(publish(s, [reopened], { now: c.now() })[0].markets.length, 0);
-  assert.equal(config({ GGBET_BROWSER_MAX_PAGES: '5', GGBET_BROWSER_EVENT_STALE_MS: '60000' }).maxPages, 5);
+  assert.equal(config({ GGBET_BROWSER_MAX_PAGES: '5', GGBET_BROWSER_EVENT_STALE_MS: '60000' }).maxPages, 3);
 });
 
 test('preload: only gg-b-gql sockets observed; connection_init never forwarded; native socket and prototype kept', () => {
