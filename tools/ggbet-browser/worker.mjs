@@ -141,6 +141,8 @@ function onMessage(p) {
   if (!page) return;
   if (page.allSubIds.has(String(msg.id)) && msg.type === 'data' && !page.allLoadedAt) { page.allLoadedAt = now; note('page', { event: 'all-loaded', pageId: page.pageId, eventId: page.eventId }); }
   const r = store.ingest(msg, { capturedAt: f.t, pageId: page.pageId });
+  // typeId 96 (total kills odd/even) price history for forensics/comparison: every new or changed row, raw prices only.
+  for (const m of r.changed) if (Number(m.typeId) === 96) { const e = store.events.get(m.eventId); note('price96', { eventId: m.eventId, eventVersion: e?.version || null, status: e?.meta?.status || null, score: e?.meta?.score ?? null, marketId: m.marketId, mapnr: m.mapnr, marketStatus: m.marketStatus, outcomes: m.outcomes.map((o) => [o.outcomeId, o.outcomeName, o.rawPrice, o.active]), capturedAt: m.capturedAt, exit: S.vpnExit?.hostname || null, session: S.browserSessionId }); }
   if (page.recovering && r.events.includes(page.eventId)) { page.recovering = false; note('page', { event: 'recovered', pageId: page.pageId, eventId: page.eventId }); }
 }
 

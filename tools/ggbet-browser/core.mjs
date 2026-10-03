@@ -37,8 +37,8 @@ export class MarketStore {
   // One incoming graphql-ws frame (already JSON-parsed). capturedAt = browser timestamp of the frame.
   ingest(msg, { capturedAt = this.now(), pageId = null } = {}) {
     const receivedAt = this.now(); this.stats.frames++;
-    if (msg?.type !== 'data' || !msg.payload) return { events: [] };
-    this.stats.dataFrames++; const touched = new Set();
+    if (msg?.type !== 'data' || !msg.payload) return { events: [], changed: [] };
+    this.stats.dataFrames++; const touched = new Set(), changed = [];
     for (const item of walk(msg.payload)) {
       if (item.kind === 'event') {
         const e = this.ev(item.event.id), f = item.event.fixture || {}; touched.add(e.eventId); e.lastEventUpdateAt = receivedAt; e.pageId = pageId || e.pageId;
@@ -54,13 +54,13 @@ export class MarketStore {
         if (old && old.sig === sig) { this.stats.duplicates++; old.lastSeenAt = at; e.lastMarketUpdateAt = at; e.lastEventUpdateAt = at; continue; }
         const priceChanged = !old || JSON.stringify(old.outcomes.map((o) => [o.outcomeId, o.rawPrice])) !== JSON.stringify(outcomes.map((o) => [o.outcomeId, o.rawPrice]));
         const s = spec(m), row = { eventId: e.eventId, marketId: id, typeId: m.typeId ?? null, specifier: s, mapnr: s.mapnr ?? null, marketName: m.name ?? old?.marketName ?? null, marketStatus: m.status ?? null, outcomes, sig, capturedAt, receivedAt: at, lastSeenAt: at, priceChangedAt: priceChanged ? at : old.priceChangedAt, pageId, source: 'firefox-browser' };
-        e.markets.set(id, row); e.lastMarketUpdateAt = at; e.lastEventUpdateAt = at; this.stats.marketUpdates++;
+        e.markets.set(id, row); e.lastMarketUpdateAt = at; e.lastEventUpdateAt = at; this.stats.marketUpdates++; changed.push(row);
         if (priceChanged && old) { e.lastPriceChangeAt = at; this.stats.priceChanges++; }
         if (!old) e.lastPriceChangeAt = e.lastPriceChangeAt || at;
       }
     }
     this.updates.push(receivedAt); while (this.updates.length && this.updates[0] < receivedAt - 60000) this.updates.shift();
-    return { events: [...touched] };
+    return { events: [...touched], changed }; // changed = new or changed market rows (price, status or activity)
   }
   // A browser session ended (VPN loss, crash, restart): nothing it delivered may be served once a new session starts.
   reset() { this.events.clear(); this.updates = []; }

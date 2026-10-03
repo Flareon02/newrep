@@ -20,10 +20,12 @@ test('market parsing: full All tree, typeId 96 ids/outcomes, original names kept
   s.ingest(push(EV(1), 'v1', [mk('96m1', 96, '1.85', '1.85'), mk('1', 1, '1.5', '2.5'), mk('50m1', 50, '1.7', '2.0')]), { pageId: 'P1' });
   const e = s.events.get(EV(1)); assert.equal(e.markets.size, 3); assert.equal(e.meta.eventName, 'A vs B'); assert.equal(e.meta.league, 'L');
   const m96 = s.typeId96(EV(1))[0]; assert.equal(m96.marketId, '96m1'); assert.equal(m96.mapnr, '1'); assert.deepEqual(m96.outcomes.map((o) => [o.outcomeId, o.outcomeName, o.rawPrice]), [['1', 'odd', '1.85'], ['2', 'even', '1.85']]); assert.equal(m96.source, 'firefox-browser');
-  c.tick(1000); s.ingest(push(EV(1), 'v2', [mk('96m1', 96, '1.85', '1.85')]));
+  c.tick(1000); assert.equal(s.ingest(push(EV(1), 'v2', [mk('96m1', 96, '1.85', '1.85')])).changed.length, 0, 'duplicate push: nothing changed');
   assert.equal(s.stats.duplicates, 1, 'same prices again = duplicate, not a price change'); assert.equal(e.version, 'v2');
   c.tick(1000); s.ingest(push(EV(1), 'v3', [mk('96m1', 96, '1.74', '1.74', 'SUSPENDED')]));
-  assert.equal(e.markets.get('96m1').marketStatus, 'SUSPENDED'); assert.equal(s.stats.priceChanges, 1);
+  assert.equal(s.ingest(push(EV(1), 'v4', [mk('96m1', 96, '1.74', '2.10')])).changed[0].marketId, '96m1', 'price change reported');
+  assert.equal(e.markets.get('96m1').outcomes[1].rawPrice, '2.10'); c.tick(1000); s.ingest(push(EV(1), 'v5', [mk('96m1', 96, '1.74', '1.74', 'SUSPENDED')]));
+  assert.equal(e.markets.get('96m1').marketStatus, 'SUSPENDED'); assert.equal(s.stats.priceChanges, 3);
 });
 
 test('liveness: unchanged price with live event data is QUIET (healthy), not stale', () => {
