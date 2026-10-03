@@ -208,7 +208,7 @@ async function reconcile() {
   for (const p of [...S.pages.values()]) {
     const st = String(store.events.get(p.eventId)?.meta?.status || '').toUpperCase();
     const reason = p.ended || ['ENDED', 'CLOSED', 'FINISHED', 'CANCELLED', 'ABANDONED'].includes(st) || S.disc.ended(p.eventId) ? 'ended' : S.disc.gone(p, now, cfg) ? 'gone from the provider list' : null;
-    if (reason && !p.retiring) { S.excluded.set(p.eventId, now + cfg.excludeMs);
+    if (reason && (reason === 'ended' || !p.retiring)) { S.excluded.set(p.eventId, now + cfg.excludeMs);
       if (reason === 'ended') await closePage(p, reason); else retirePage(p, reason);
     }
   }
