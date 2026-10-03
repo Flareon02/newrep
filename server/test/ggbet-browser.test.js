@@ -95,6 +95,10 @@ test('selection never invents cross-sport popularity; it waits for the provider 
   const next = selectEvents({ current: held(first.add), candidates, now: T0, cfg: cfgSel });
   assert.deepEqual(ids(next), [`${DOTA}#2`]); assert.equal(next.drop.length, 0);
 });
+test('CASE B with remaining events in only one sport uses that sport provider order for the third slot', () => {
+  const r = selectEvents({ candidates: C({ [CS]: 4, [DOTA]: 1 }), now: T0, cfg: cfgSel });
+  assert.deepEqual(ids(r), [`${CS}#1`, `${DOTA}#1`, `${CS}#2`]);
+});
 test('selection CASE C: one sport -> its top 3; CASE D: fewer than 3 LIVE -> all of them', () => {
   assert.deepEqual(ids(selectEvents({ candidates: C({ [CS]: 6 }), now: T0, cfg: cfgSel })), [`${CS}#1`, `${CS}#2`, `${CS}#3`]);
   assert.deepEqual(ids(selectEvents({ candidates: C({ [LOL]: 1, [DOTA]: 1 }), now: T0, cfg: cfgSel })).sort(), [`${DOTA}#1`, `${LOL}#1`].sort());

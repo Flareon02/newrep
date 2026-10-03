@@ -177,7 +177,8 @@ export function selectEvents({ current = [], candidates = new Map(), maxPages = 
     const open = avail.filter((s) => !covered().has(s) && pool(s).length).sort(sportPriority); let c, reason;
     if (open.length) { c = pool(open[0])[0]; reason = `top ${SPORT_LABEL[c.sportId]} (provider rank ${c.sportRank})`; }
     else { // Cross-sport slots require the provider's global order; wait for it rather than inventing a score.
-      c = avail.flatMap(pool).filter((c) => avail.length === 1 || c.globalRank != null).sort((a, b) => avail.length === 1 ? a.sportRank - b.sportRank : g(a) - g(b))[0]; if (c) reason = `next most popular: ${SPORT_LABEL[c.sportId]} #${c.sportRank}${c.globalRank ? `, global #${c.globalRank}` : ''}`; }
+      const remainingSports = avail.filter((s) => pool(s).length);
+      c = remainingSports.flatMap(pool).filter((c) => remainingSports.length === 1 || c.globalRank != null).sort((a, b) => remainingSports.length === 1 ? a.sportRank - b.sportRank : g(a) - g(b))[0]; if (c) reason = `next most popular: ${SPORT_LABEL[c.sportId]} #${c.sportRank}${c.globalRank ? `, global #${c.globalRank}` : ''}`; }
     if (!c) break; add.push({ ...c, reason }); taken.add(c.eventId);
   }
   return { keep, add, drop };
