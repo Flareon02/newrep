@@ -104,7 +104,7 @@ const CLICK_TAB = (labels) => `() => { const want = ${JSON.stringify(labels)}; c
   const pick = els.find((e) => /Popular|Популярное|Match|Матч/.test(e.parentElement?.textContent || '')) || els[0]; if (!pick) return false; pick.click(); return true; }`;
 // One lightweight discovery tab cycles through GG.BET's own listings: each sport page lists that sport's matches in the
 // provider's RANK_RECOMMENDED order; the LIVE tab of /esports lists every LIVE match in the provider's cross-sport order.
-const DISCOVERY = [{ path: '/counter-strike', live: true }, { path: '/dota2', live: true }, { path: '/league-of-legends', live: true }, { path: '/esports', live: true }];
+const DISCOVERY = [{ path: '/counter-strike' }, { path: '/dota2' }, { path: '/league-of-legends' }, { path: '/esports', live: true }];
 const DISCOVERY_STEP_MS = Math.max(10000, Number(env.GGBET_BROWSER_DISCOVERY_STEP_MS) || 30000);
 async function openDiscovery() {
   const context = S.startupContext || (await S.bidi.send('browsingContext.create', { type: 'tab' })).context;
@@ -302,6 +302,7 @@ function serve() {
     else if (u.pathname === '/markets') { const id = u.searchParams.get('eventId'); body = publish(store, [...S.pages.values()].filter((p) => p.eventId === id), { vpnState: S.vpnState, browserUp: !!S.bidi, cfg, now, refs: S.disc.refs })[0] || { error: 'unknown event' }; }
     else if (u.pathname === '/selected') body = selected(now);
     else if (u.pathname === '/feed') body = feed(Number(u.searchParams.get('since') || 0), now);
+    else if (u.pathname === '/debug/discovery') body = S.discovery && S.bidi ? JSON.parse(await call(S.discovery.context, `() => JSON.stringify({ path: location.pathname, text: document.body.innerText.slice(0,6000), links: [...document.querySelectorAll('a')].map(e => ({text: e.textContent.trim(), path: new URL(e.href).pathname})).filter(e => /live|counter|dota|league|more|show/i.test(e.path+' '+e.text)).slice(0,100) })`)) : {};
     else if (u.pathname === '/debug/frames') body = (RING.get(u.searchParams.get('tab') || 'discovery') || []).slice(-Number(u.searchParams.get('n') || 300));
     else if (u.pathname === '/stale') body = matches().filter((m) => !['HEALTHY', 'QUIET'].includes(m.state));
     else return { status: 404 };
