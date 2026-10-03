@@ -215,7 +215,6 @@ async function reconcile() {
   // Warm-up: no selection before every target sport's list was seen in this session (or two full discovery cycles
   // passed - a sport page may fail), so the first choice is already the diverse one instead of three tabs of one sport.
   if (!TARGET_SPORTS.every((x) => S.disc.sports.has(x)) && now - S.discovery.openedAt < 2 * DISCOVERY.length * DISCOVERY_STEP_MS) { S.selectionReady = false; return; }
-  S.selectionReady = true; // from here, an event absent from the selection is really deselected (the server may hand it back)
   const candidates = S.disc.candidates(now, cfg);
   // Diagnostics: current provider ranks of the held events.
   for (const p of S.pages.values()) { const c = (candidates.get(p.sportId) || []).find((x) => x.eventId === p.eventId); if (c) { p.sportRank = c.sportRank; p.globalRank = c.globalRank; } }
@@ -225,6 +224,9 @@ async function reconcile() {
   for (const d of plan.drop) { const p = [...S.pages.values()].find((x) => x.eventId === d.eventId); if (p) retirePage(p, d.reason); }
   if (plan.drop.length) return; // wait for handoff acknowledgement before opening a replacement
   for (const c of plan.add) { note('select', { eventId: c.eventId, sport: c.sportId, sportRank: c.sportRank, globalRank: c.globalRank, reason: c.reason, title: c.title }); await openPage({ ...c, selectedAt: Date.now() }); }
+  // Never declare an empty/intermediate set settled while asynchronous page creation is still in progress.
+  // Initial cross-sport selection also waits for the global provider order before permitting any handback.
+  S.selectionReady = !!S.disc.global;
 }
 async function watchdog() {
   const now = Date.now();

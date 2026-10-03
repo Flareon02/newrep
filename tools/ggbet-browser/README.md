@@ -21,7 +21,7 @@ those events from the browser; every other GGBET event stays with the Node colle
   - is gone from its fresh sport list for `ENDED_GRACE_MS`;
   - was excluded as unrecoverable (3 reloads + 2 recreates within 30 min);
   - or for diversity: one swap per round, after `DIVERSITY_PRESENCE_MS` / `DIVERSITY_HOLD_MS`.
-- **Warm-up:** the first selection waits for all sport lists (or two discovery cycles if a page fails). Cross-sport extra slots wait for the provider global order; no synthetic popularity score is used.
+- **Warm-up:** the first selection waits for all sport lists (or two discovery cycles if a page fails). `selectionReady` is declared only after the selected pages are registered and the global provider order has arrived; a restarting worker never relinquishes old browser authority through an intermediate empty set. Cross-sport extra slots wait for the provider global order; no synthetic popularity score is used.
 - **Safe handback:** a LIVE page marked `retiring` remains open until the server has published a fresh Node Czech-proxy copy and acknowledges its worker/session/page identity with `POST /handoff`. The slot remains occupied until that acknowledgement. Ended pages can close immediately.
 
 ## Network (fail-closed)
