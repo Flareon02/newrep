@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import vm from 'node:vm';
-import { MarketStore, pageState, publish, config, DEFAULTS, Discovery, listRows, selectEvents, mergeRawEvent, TARGET_SPORTS } from '../../tools/ggbet-browser/core.mjs';
+import { MarketStore, pageState, publish, config, DEFAULTS, Discovery, listRows, selectEvents, mergeRawEvent, browserReadiness, TARGET_SPORTS } from '../../tools/ggbet-browser/core.mjs';
 import { PRELOAD } from '../../tools/ggbet-browser/preload.mjs';
 import { ForensicLog } from '../src/ggbet-forensics.js';
 
@@ -167,6 +167,22 @@ test('raw event for the server: merged GraphQL event + "All" catalog markets (AC
   assert.equal(raw.fixture.competitors.find((c) => c.id === 'h').name, 'A', 'competitors merged by id'); assert.equal(raw.fixture.competitors.find((c) => c.id === 'h').score[0].points, '1');
   assert.deepEqual(mergeRawEvent(null, { id }), { id });
   s.reset(); assert.equal(s.rawEvent(id), null);
+});
+
+test('browser readiness requires the first full snapshot; later catalog additions preserve fresh browser authority', () => {
+  const page = { eventId: EV(1), slug: 'match', allLoadedAt: 1000 }, view = { fresh: true, state: 'HEALTHY' };
+  const event = { catalog: new Set(['1', '96m1']), rawMarkets: new Map([['1', {}]]) };
+  const raw = { id: EV(1), slug: 'match', markets: [mk('1', 1, '1.5', '2.5')] };
+  assert.equal(browserReadiness(page, event, view, raw, 1001).ready, false);
+  event.rawMarkets.set('96m1', {}); raw.markets.push(mk('96m1', 96, '1.87', '1.87'));
+  assert.equal(browserReadiness(page, event, view, raw, 1002).ready, true);
+  event.catalog.add('new');
+  const delta = browserReadiness(page, event, view, raw, 1003);
+  assert.equal(delta.complete, false); assert.equal(delta.snapshotReceived, true); assert.equal(delta.ready, true);
+  for (const state of ['STALE', 'UNAVAILABLE', 'RECOVERING']) assert.equal(browserReadiness(page, event, { fresh: false, state }, raw, 1004).ready, false);
+  assert.equal(browserReadiness(page, event, view, { ...raw, id: EV(2) }, 1005).ready, false);
+  page.snapshotReceivedAt = 0; page.allLoadedAt = 0;
+  assert.equal(browserReadiness(page, event, view, raw, 1006).ready, false, 'reload cannot reuse previous readiness');
 });
 
 test('freshness: after VPN loss or browser loss every market is stale/unavailable (old prices never served as fresh)', () => {

@@ -91,6 +91,17 @@ export function mergeRawEvent(prev, patch) {
   return { ...prev, ...patch, meta: patch.meta || prev.meta, fixture: { ...pf, ...nf, sport: nf.sport || pf.sport, tournament: nf.tournament || pf.tournament, competitors: comp } };
 }
 
+// The initial All snapshot must be complete before handoff. Later catalog deltas can announce new market ids before
+// their prices arrive; the already received browser tree remains usable while the page/data is healthy and fresh.
+// A reload/session change clears snapshotReceivedAt, so pre-reload prices can never establish readiness.
+export function browserReadiness(page, event, view, raw, now = Date.now()) {
+  const identity = !!raw && raw.id === page.eventId && (!raw.slug || raw.slug === page.slug);
+  const complete = !!event?.catalog?.size && [...event.catalog].every((id) => event.rawMarkets.has(id));
+  const usable = !!view?.fresh && ['HEALTHY', 'QUIET'].includes(view.state) && !!page.allLoadedAt && identity && (raw?.markets?.length || 0) > 0;
+  if (usable && complete && !page.snapshotReceivedAt) page.snapshotReceivedAt = now;
+  return { identity, complete, snapshotReceived: !!page.snapshotReceivedAt, ready: usable && !!page.snapshotReceivedAt };
+}
+
 // One page (tab) = one LIVE event. Transport/data/price liveness -> state.
 // ref = { version, versionAt } of the same event from the discovery list (optional).
 export function pageState(page, event, cfg, now = Date.now(), ref = null) {

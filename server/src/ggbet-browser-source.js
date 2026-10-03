@@ -89,7 +89,7 @@ export class BrowserGgbetSource {
     const s = this.selected.get(id) || (retirement ? this.retiring.get(id) : null), src = this.raws.get(id);
     const evidence = Date.parse(s?.validatedAt || ''), updated = Date.parse(s?.lastUpdateAt || '');
     const maxAge = Math.min(180000, Number(s?.dataFreshMs) || 180000);
-    return this.ipcFresh(now) && this.feed?.vpnState === 'UP' && this.feed?.browserRunning && !!s?.ready && !!s?.fresh && !!s?.identity && !!s?.allLoaded && !!s?.catalogComplete &&
+    return this.ipcFresh(now) && this.feed?.vpnState === 'UP' && this.feed?.browserRunning && !!s?.ready && !!s?.fresh && !!s?.identity && !!s?.allLoaded && (!!s?.catalogComplete || !!s?.snapshotReceived) &&
       ['HEALTHY', 'QUIET'].includes(s.state) && src?.raw?.id === id && src.raw.fixture?.sportId === s.sportId &&
       (!src.raw.slug || src.raw.slug === s.slug) && Number(src.seq) >= Number(s.seq) && src.pageId === s.pageId &&
       (!s.version || src.raw.version === s.version) && src.raw.markets?.length > 0 &&

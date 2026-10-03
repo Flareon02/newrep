@@ -28,6 +28,7 @@ Based on 4.12.0 (4c6a5e3). The undeployed guard change 88b05eb is not part of th
   - handoff history and IPC state.
 
   `/health` for admins carries `ggbetCollector.browserSource`; anonymous `/health` is unchanged.
+- Initial browser handoff requires the complete All snapshot. Later catalog additions do not suspend an otherwise fresh browser event while newly announced market prices are arriving. Reload/session changes clear the snapshot readiness evidence.
 - Server validates feed timestamps, page identity, session changes, catalog completeness and freshness evidence independently. QUIET remains valid with a recent matching provider version; expired IPC/data fails closed.
 - **Config:**
   - `GGBET_BROWSER_SOURCE=1` (default off);

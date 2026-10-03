@@ -238,6 +238,18 @@ test('fresh browser updates do not renew freshness for disconnected Node events'
   } finally { await h.c.stop(); }
 });
 
+test('a new catalog delta after the initial full snapshot does not suspend a fresh browser-owned event', async () => {
+  const h = await hybrid();
+  try {
+    h.w.feed = feed({ selected: [sel(1)], events: { [ID(1)]: browserRaw(1) } }); await h.sync();
+    h.w.feed = feed({ seq: 2, selected: [sel(1, { catalogComplete: false, snapshotReceived: true })] }); await h.sync();
+    assert.equal(h.src.mode(ID(1)), 'browser'); assert.equal(h.row(1).odds.stale, false);
+    assert.deepEqual(price96(h.row(1)), [1.85, 1.85]);
+    h.w.feed = feed({ seq: 3, selected: [sel(1, { state: 'STALE', fresh: false, snapshotReceived: true })] }); await h.sync();
+    assert.equal(h.src.mode(ID(1)), 'browser-unavailable'); assert.deepEqual(price96(h.row(1)), [null, null]);
+  } finally { await h.c.stop(); }
+});
+
 test('browser session change within the same worker clears raw snapshots; unavailable detail never falls through to Node', async () => {
   const h = await hybrid();
   try {

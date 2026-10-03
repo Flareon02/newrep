@@ -13,7 +13,7 @@ import { randomBytes } from 'node:crypto';
 import { Bidi } from './bidi.mjs';
 import { PRELOAD } from './preload.mjs';
 import { serveIpc } from './ipc.mjs';
-import { MarketStore, Discovery, config, pageState, publish, listRows, selectEvents, walk, SPORT_LABEL, TARGET_SPORTS } from './core.mjs';
+import { MarketStore, Discovery, config, pageState, publish, browserReadiness, listRows, selectEvents, walk, SPORT_LABEL, TARGET_SPORTS } from './core.mjs';
 import { ForensicLog } from '../../server/src/ggbet-forensics.js';
 
 process.umask(0o077);
@@ -126,7 +126,7 @@ async function openPage(c) {
   if (S.pages.size >= cfg.maxPages) return;
   store.events.delete(c.eventId); // a recreated page must receive its own fresh snapshot
   const { context } = await S.bidi.send('browsingContext.create', { type: 'tab' });
-  const page = { pageId: `P${randomBytes(3).toString('hex')}`, context, eventId: c.eventId, slug: c.slug, sportId: c.sportId, title: c.title || null, league: c.league || null, sportRank: c.sportRank ?? null, globalRank: c.globalRank ?? null, reason: c.reason || null, selectedAt: c.selectedAt || Date.now(), openedAt: Date.now(), lastWsFrameAt: 0, lastKeepAliveAt: 0, allRequestedAt: 0, allLoadedAt: 0, allSubIds: new Set(), recoveries: [], recovering: false, recoveringSince: 0, ended: false, state: 'RECOVERING' };
+  const page = { pageId: `P${randomBytes(3).toString('hex')}`, context, eventId: c.eventId, slug: c.slug, sportId: c.sportId, title: c.title || null, league: c.league || null, sportRank: c.sportRank ?? null, globalRank: c.globalRank ?? null, reason: c.reason || null, selectedAt: c.selectedAt || Date.now(), openedAt: Date.now(), lastWsFrameAt: 0, lastKeepAliveAt: 0, allRequestedAt: 0, allLoadedAt: 0, snapshotReceivedAt: 0, allSubIds: new Set(), recoveries: [], recovering: false, recoveringSince: 0, ended: false, state: 'RECOVERING' };
   S.pages.set(context, page); note('page', { event: 'opened', pageId: page.pageId, eventId: c.eventId, slug: c.slug, sport: c.sportId, sportRank: page.sportRank, globalRank: page.globalRank, reason: page.reason });
   try { await navigate(context, `${ORIGIN}/esports/match/${c.slug}`); await activateAll(page); } catch (e) { note('page', { event: 'open-failed', pageId: page.pageId, error: String(e.message).slice(0, 160) }); }
 }
@@ -150,7 +150,7 @@ async function recover(page) {
     rec.push(now); S.recreates.set(page.eventId, rec);
     note('page', { event: 'recreate', pageId: page.pageId, eventId: page.eventId }); await closePage(page, 'repeatedly stale'); await openPage({ ...page }); return;
   }
-  page.recoveries.push(now); page.recovering = true; page.recoveringSince = now; page.allRequestedAt = 0; page.allLoadedAt = 0; page.allSubIds.clear();
+  page.recoveries.push(now); page.recovering = true; page.recoveringSince = now; page.allRequestedAt = 0; page.allLoadedAt = 0; page.snapshotReceivedAt = 0; page.allSubIds.clear();
   store.events.delete(page.eventId);
   note('page', { event: 'reload', pageId: page.pageId, eventId: page.eventId, attempt: page.recoveries.length });
   try { await S.bidi.send('browsingContext.reload', { context: page.context, wait: 'complete' }, 60000); await activateAll(page); } catch (e) { note('page', { event: 'reload-failed', pageId: page.pageId, error: String(e.message).slice(0, 160) }); }
@@ -266,13 +266,13 @@ function matches() {
 function selected(now = Date.now(), retiring = false) {
   const pub = new Map(publish(store, [...S.pages.values()], { vpnState: S.vpnState, browserUp: !!S.bidi, cfg, now, refs: S.disc.refs }).map((p) => [p.pageId, p]));
   return [...S.pages.values()].filter((p) => !!p.retiring === retiring).map((p) => {
-    const e = store.events.get(p.eventId), raw = store.rawEvent(p.eventId), v = pub.get(p.pageId), identity = !!raw && raw.id === p.eventId && (!raw.slug || raw.slug === p.slug);
-    const complete = !!e?.catalog?.size && [...e.catalog].every((id) => e.rawMarkets.has(id));
+    const e = store.events.get(p.eventId), raw = store.rawEvent(p.eventId), v = pub.get(p.pageId);
+    const { identity, complete, ready, snapshotReceived } = browserReadiness(p, e, v, raw, now);
     const ref = S.disc.refs.get(p.eventId);
     const validatedAt = Math.max(e?.lastEventUpdateAt || 0, ref?.version === e?.version && now - ref.versionAt <= cfg.eventStaleMs ? ref.versionAt : 0);
     return { eventId: p.eventId, sportId: p.sportId, sport: SPORT_LABEL[p.sportId] || p.sportId, slug: p.slug, title: e?.meta?.eventName || p.title, league: e?.meta?.league || p.league, status: e?.meta?.status || null, score: e?.meta?.score ?? null,
       sportRank: p.sportRank, globalRank: p.globalRank, reason: p.reason, selectedAt: new Date(p.selectedAt).toISOString(), pageId: p.pageId, state: v?.state || 'UNAVAILABLE', fresh: !!v?.fresh, allLoaded: !!p.allLoadedAt, identity,
-      marketCount: raw?.markets?.length || 0, ready: !!v?.fresh && !!p.allLoadedAt && complete && identity && (raw?.markets?.length || 0) > 0,
+      marketCount: raw?.markets?.length || 0, ready, snapshotReceived,
       catalogComplete: complete, validatedAt: validatedAt ? new Date(validatedAt).toISOString() : null, dataFreshMs: cfg.eventStaleMs, retiring: p.retiring?.reason || null, version: e?.version || null, seq: e?.seq || 0,
       lastUpdateAt: e?.lastEventUpdateAt ? new Date(e.lastEventUpdateAt).toISOString() : null, lastPriceChangeAt: e?.lastPriceChangeAt ? new Date(e.lastPriceChangeAt).toISOString() : null };
   });
