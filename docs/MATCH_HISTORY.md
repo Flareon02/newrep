@@ -1,7 +1,7 @@
 # SQLite match history
 
 Server 4.15.1 and the updated extension 9.2.0 use the primary `monitor-v2.sqlite3` database.
-The match detail **История** button opens a newest-first UTC score/odds timeline with bookmaker filters,
+The match detail header **История** button opens a newest-first UTC score/odds timeline with bookmaker filters,
 100 visible changes per page, and **Показать ещё**. Latest-page refresh runs every five seconds; older pages stay in place. Existing score and odds snapshot views remain available.
 Updating/reloading the extension files is required to get the new button; a server deployment cannot install UI code on a user's device.
 
@@ -22,6 +22,7 @@ eventVersion when available, sport, marketId/typeId/status/period/specifiers, ou
 odds format, decimal odds, old/new values and baseline flag. Pinnacle raw American values and decimal values are
 stored separately. Astek/Fonbet factor-derived IDs are labeled as derived where native IDs do not exist.
 Score payloads include previous/new score and event state, map/period, clock, status, betStop, version and provenance.
+Score rows label provider team order, so reversed bookmaker fixtures do not mislabel stored raw scores.
 Version-only/clock metadata is attached to relevant changes; identical snapshots do not create journal rows.
 Map/period, event status and betStop changes are shown as event-state observations even if the score is unchanged.
 Browser `sourceReceivedAt` is server Unix IPC receipt; worker event-update time is separate. It is not claimed to be
