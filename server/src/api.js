@@ -1,3 +1,4 @@
+import { forensicSpan } from './collector-forensics.js';
 import { log } from "./logger.js";
 import {StatisticsService} from './statistics-service.js';
 import {teamLogos} from './team-logos.js';
@@ -268,7 +269,7 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
       status(){prune(Date.now());return {clients:rows.size,ids:new Set([...rows.values()].flatMap(r=>r.ids)).size,warming:false};}
     };})();
   const feedMeta=(mode,provider='ggbet')=>mode==='live'?feedMetaSnapshot('live',liveState,fonbetLiveState,pinnacleLiveState,liveOddsStates[provider]||ggbetLiveState):feedMetaSnapshot('prematch',prematchState,fonbetPrematchState,pinnaclePrematchState);
-  const writeSse=(res,wire)=>{safeWrite(res,wire);};
+  const writeSse=(res,wire)=>safeWrite(res,wire);
 
   // Thin-client views are revisioned separately from raw provider feeds. The
   // same SSE connection carries small invalidations so Results/History/Leagues
@@ -318,7 +319,7 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
         broadcastUi('leagues',`feed:${mode}:${provider}`);
       }
     }
-    if(!feedClients.size)return;
+    const forensicProvider=provider==='ggbet'?'ggbet-node':provider;const end=forensicSpan(forensicProvider,mode+':sse-enqueue','publish');let clients=0,backpressure=0;
     const wires=new Map();
     for(const client of feedClients){
       if(!client.modes.has(mode))continue;
@@ -329,8 +330,9 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
       if(client.principal&&!can(client.principal,'provider.'+provider))continue;
       const restricted=client.principal&&client.principal.role!=='admin'&&!client.principal.unrestricted,key=selected+(client.thin?':thin':':full')+(restricted?':'+client.principal.sig:'');
       if(!wires.has(key)){const meta=feedMeta(mode,selected),payload=client.thin?thinFeedPushPayload(mode,provider,change,meta):feedPushPayload(mode,provider,change,meta);if(restricted)payload.payload=filterSsePayload(client.principal,payload.payload,mode);wires.set(key,sseEventWire(payload.event,payload.payload));}
-      try{writeSse(client.res,wires.get(key));}catch{}
+      try{clients++;if(!writeSse(client.res,wires.get(key)))backpressure++;}catch{backpressure++;}
     }
+    end({clients,backpressure,delivery:'SSE enqueue only',result:backpressure?'degraded':'ok'});
   };
   const feedUnsub=[
     liveState.onChange?.(c=>broadcastFeed('live','astek',c)),fonbetLiveState.onChange?.(c=>broadcastFeed('live','fonbet',c)),pinnacleLiveState?.onChange?.(c=>broadcastFeed('live','pinnacle',c)),ggbetLiveState?.onChange?.(c=>broadcastFeed('live','ggbet',c)),databetLiveState?.onChange?.(c=>broadcastFeed('live','databet',c)),

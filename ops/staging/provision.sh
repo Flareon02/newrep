@@ -80,6 +80,8 @@ install -m 0755 "$HERE/ggbet-egress.sh" /usr/local/bin/esports-monitor-ggbet-egr
 install -m 0644 "$HERE/esports-monitor-ggbet-egressd.service" /etc/systemd/system/esports-monitor-ggbet-egressd.service
 printf '#!/bin/sh\nexec /usr/local/bin/node /opt/esports-monitor/current/tools/ggbet-cli.mjs "$@"\n' > /usr/local/bin/esports-monitor-ggbet && chmod 0755 /usr/local/bin/esports-monitor-ggbet
 install -m 0755 "$HERE/deploy.sh" /usr/local/bin/esports-monitor-deploy
+printf '#!/bin/sh\nexec /usr/local/bin/node /opt/esports-monitor/current/tools/esports-monitor.mjs "$@"\n' > /usr/local/bin/esports-monitor
+chmod 0755 /usr/local/bin/esports-monitor
 install -m 0755 "$HERE/rollback.sh" /usr/local/bin/esports-monitor-rollback
 install -m 0755 "$HERE/compose-env.py" /usr/local/lib/esports-monitor-compose-env.py
 /usr/local/bin/esports-monitor-profile "$PROFILE" --no-restart

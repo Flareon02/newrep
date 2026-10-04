@@ -40,3 +40,7 @@ python3 tools/package-release.py                # ZIP‑архивы server и e
 - `docs/PERFORMANCE-BUDGET.md` — измеренные значения и что ещё измерить
 - `docs/COMPATIBILITY-CHECKLIST.md` — сохранено / исправлено / протестировано
 - `docs/ORIGINAL-IMPORT.md` — как импортирован оригинал
+
+## Persistent collector forensics (server 4.14.0)
+
+AstekBet, Fonbet, Pinnacle, GGBET Node and Firefox IPC share a bounded private telemetry timeline. Read-only time-window queries and incident reports: [COLLECTOR_FORENSICS.md](COLLECTOR_FORENSICS.md). Existing GGBET forensic remains intact.

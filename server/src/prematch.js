@@ -1,3 +1,4 @@
+import { forensicSpan, eventCounts } from './collector-forensics.js';
 import { log } from "./logger.js";
 import {config,urls} from './config.js';
 import {parseLiveFeed,inferCategoryFromLeague} from './parsers.js';
@@ -31,7 +32,7 @@ export class PrematchCollector {
     if(!Array.isArray(result.payload?.Value))throw invalid('Некорректный список матчей');
     const capped=c.gameCount>=count&&result.payload.Value.length>=count;
     if(result.payload.Value.length>=count&&!capped)throw invalid('Ответ достиг лимита: предыдущая линия сохранена');
-    const events=parseLiveFeed(result.payload,origin).filter(e=>e.team1&&e.team2);
+    const parsed=forensicSpan('astek','prematch-league-normalize');const events=parseLiveFeed(result.payload,origin).filter(e=>e.team1&&e.team2);parsed(eventCounts(events));
     if(events.some(e=>e.leagueId!==c.champId))throw invalid('Ответ содержит незапрошенную лигу');
     if(capped)this.cacheCappedLeague(c,events);else this.cacheLeague(c,events);
     return result;
@@ -59,7 +60,7 @@ export class PrematchCollector {
     const count=config.prematchBulkCount;
     const result=await this.get(urls.prematchBulk(origin,count),origin);
     if(!Array.isArray(result.payload?.Value))throw new Error('AstekBet bulk: некорректный список матчей');
-    const raw=result.payload.Value,activeIds=new Set(active.map(c=>c.champId));let events=parseLiveFeed(result.payload,origin).filter(e=>activeIds.has(e.leagueId)&&e.team1&&e.team2);const parsedCounts=new Map();
+    const parsed=forensicSpan('astek','prematch-bulk-normalize');const raw=result.payload.Value,activeIds=new Set(active.map(c=>c.champId));let events=parseLiveFeed(result.payload,origin).filter(e=>activeIds.has(e.leagueId)&&e.team1&&e.team2);parsed(eventCounts(events));const parsedCounts=new Map();
     for(const event of events)parsedCounts.set(event.leagueId,(parsedCounts.get(event.leagueId)||0)+1);
     const limited=raw.length>=count,complete=[],missing=[];
     for(const c of active){

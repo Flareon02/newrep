@@ -18,6 +18,7 @@ import { loadMatcherAliases, flushMatcherAliases } from "./entity-resolver.js";
 import {teamLogos} from './team-logos.js';
 import {GgbetSupervisor} from './ggbet-supervisor.js';
 import { BrowserGgbetSource } from './ggbet-browser-source.js';
+import { startCollectorForensics } from './collector-forensic-runtime.js';
 
 import {PinnacleCollector} from './pinnacle.js';
 import {HltvService} from './hltv-service.js';
@@ -54,6 +55,7 @@ const ggbetBrowser = config.ggbetBrowserSource ? new BrowserGgbetSource({ socket
 const ggbetCollector = new GgbetLiveCollector(ggbetLiveState, { observer: ggbetSupervisor, browser: ggbetBrowser });
 ggbetSupervisor?.attach(ggbetCollector);
 const databetCollector = new DatabetLiveCollector(databetLiveState);
+const collectorForensics = startCollectorForensics({ config, liveState, prematchState, fonbetLiveState, fonbetPrematchState, pinnacleLiveState, pinnaclePrematchState, fonbetCollector, ggbetCollector, ggbetBrowser });
 // GGBET is LIVE-only until its ENDED/final-result transport is verified against production.
 const resultsService = new ResultsService(liveState, fonbetLiveState, prematchState, fonbetPrematchState);
 resultsService.setPriorityProbe(()=>{const gate=astekRequestStatus();return !!(liveCollector.running||prematchCollector.running||fonbetCollector.running||['live','prematch','detail'].includes(gate.activeKind));});
@@ -96,6 +98,7 @@ async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),databetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);
   try{ggbetSupervisor?.stop();}catch{}
   try{ggbetBrowser?.stop();}catch{}
+  await collectorForensics?.stop();
   await retention?.stop();
   await Promise.allSettled([server.stopStatistics(),oddsService.stop()]);
   if(persist){

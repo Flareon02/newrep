@@ -1,3 +1,4 @@
+import { forensic, forensicSpan, errorFields } from './collector-forensics.js';
 import { log } from "./logger.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -197,13 +198,14 @@ function drainAstekQueue(){
   let index=0;
   for(let i=1;i<astekQueue.length;i++)if((priority[astekQueue[i].kind]??9)<(priority[astekQueue[index].kind]??9))index=i;
   const job=astekQueue.splice(index,1)[0];
+  forensic('astek','queue_complete',{operation:job.kind+':gate-wait',durationMs:Date.now()-job.queuedAt,queued:astekQueue.length});
   astekActive=true;astekActiveKind=job.kind;astekActiveStartedAt=Date.now();
   runAstekJob(job).then(job.resolve,job.reject).finally(()=>{astekActive=false;astekActiveKind='';astekActiveStartedAt=0;drainAstekQueue();});
 }
 export function withAstekRequest(kind,task){
   return new Promise((resolve,reject)=>{
     if(kind==='detail'&&astekQueue.length>=ASTEK_QUEUE_LIMIT)return reject(Object.assign(new Error('Очередь AstekBet перегружена'),{status:503}));
-    astekQueue.push({kind,task,resolve,reject,queuedAt:Date.now()});
+    forensic('astek','queue_start',{operation:kind+':gate-wait',queued:astekQueue.length});astekQueue.push({kind,task,resolve,reject,queuedAt:Date.now()});
     drainAstekQueue();
   });
 }
@@ -222,6 +224,8 @@ export async function responseTextLimited(response,maxBytes){
 
 export async function fetchJson(url, referer, options = {}) {
   const group=options.metricGroup||(/result/i.test(url)?(/\/results\/v2\//i.test(url)?'fonbetResults':/\/champs(?:\?|$)/.test(url)?'astekResultsCatalog':'astekResultsGames'):/LiveFeed/i.test(url)?'astekLive':/LineFeed/i.test(url)?'astekPrematch':'fonbetFeed');
+  const provider=/^astek/i.test(group)?'astek':/^fonbet/i.test(group)?'fonbet':/^pinnacle/i.test(group)?'pinnacle':null;
+  const operation=options.forensicOperation||group, operationId=forensicSpan(provider,operation,'upstream_request'); let transportDone=false;
   const metric=upstreamMetrics.get(group)||{attempts:0,successes:0,failures:0,inFlight:0,recent:[],bytesTotal:0};upstreamMetrics.set(group,metric);
   metric.attempts++;metric.inFlight++;metric.recent=(metric.recent||[]).filter(x=>Date.now()-x.at<60000);metric.recent.push({at:Date.now(),bytes:0});
   const controller = new AbortController();
@@ -245,8 +249,11 @@ export async function fetchJson(url, referer, options = {}) {
       }
     });
 
+    forensic(provider,'upstream_response_received',{operation,httpStatus:response.status,durationMs:Date.now()-started});
     const text = await responseTextLimited(response, Number(options.maxBytes)||config.upstreamMaxBytes);
     const elapsedMs = Date.now() - started;
+    forensic(provider,'payload_received',{operation,httpStatus:response.status,payloadBytes:Buffer.byteLength(text),durationMs:elapsedMs});
+    operationId({result:response.ok?'ok':'error',httpStatus:response.status,payloadBytes:Buffer.byteLength(text)});transportDone=true;
 
     if (!response.ok) {
       const error = new Error(`HTTP ${response.status}`);
@@ -258,10 +265,12 @@ export async function fetchJson(url, referer, options = {}) {
       throw error;
     }
 
-    let payload;
+    let payload; const decode=forensicSpan(provider,operation+':json-decode');
     try {
       payload = JSON.parse(text);
+      decode({payloadBytes:Buffer.byteLength(text),providerVersion:payload?.packetVersion??payload?.version??null});
     } catch {
+      decode({result:'error',errorCategory:'parse'});
       const error = new Error("Ответ не является JSON");
       error.status = response.status;
       error.elapsedMs = elapsedMs;
@@ -279,7 +288,7 @@ export async function fetchJson(url, referer, options = {}) {
 
     const bytes=Buffer.byteLength(text);metric.successes++;metric.bytesTotal=(metric.bytesTotal||0)+bytes;if(metric.recent?.length)metric.recent[metric.recent.length-1].bytes=bytes;
     return { payload, status: response.status, elapsedMs:Date.now()-started, bytes, fingerprint:createHash("sha1").update(text).digest("hex") };
-  } catch(error){metric.failures++;error.elapsedMs=Date.now()-started;throw error;} finally {
+  } catch(error){if(!transportDone)operationId(errorFields(error));metric.failures++;error.elapsedMs=Date.now()-started;throw error;} finally {
     metric.inFlight--;metric.lastElapsedMs=Date.now()-started;
     clearTimeout(timer);
     externalSignal?.removeEventListener?.('abort',onExternalAbort);

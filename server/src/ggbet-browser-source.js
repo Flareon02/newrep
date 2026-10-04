@@ -1,3 +1,4 @@
+import { forensic, forensicSpan, errorFields, eventCounts } from './collector-forensics.js';
 // Hybrid GGBET source (4.13.0). At most three LIVE events are served by the GGBET Firefox browser worker
 // (esports-monitor-ggbet-browser: real headless Firefox in its own fail-closed Mullvad namespace); every other GGBET event
 // stays with the Node collector. This module reads ONLY the worker's parsed data over its local Unix socket
@@ -21,14 +22,16 @@ export const MODES = Object.freeze(['node', 'browser', 'browser-unavailable']);
 const uuidOf = (id) => String(id ?? '').replace(/^ggbet-/, '').replace(/^\d+:/, '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 100);
 
 export function ipcGet(socketPath, p, timeoutMs = 3000, body = null) {
+  const operation=p.split('?')[0],end=forensicSpan('ggbet-browser','ipc:'+operation,'upstream_request');
   return new Promise((resolve, reject) => {
+    const fail=e=>{end(errorFields(e));reject(e);};
     const payload = body == null ? null : JSON.stringify(body);
     const req = http.request({ socketPath, path: p, timeout: timeoutMs, method: payload ? 'POST' : 'GET', ...(payload ? { headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } } : {}) }, (res) => {
       const chunks = []; let size = 0;
       res.on('data', (c) => { size += c.length; if (size > 32 * 1024 * 1024) req.destroy(Error('browser IPC response too large')); else chunks.push(c); });
-      res.on('end', () => { if (res.statusCode !== 200) return reject(Error(`browser IPC HTTP ${res.statusCode}`)); try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { reject(Error('browser IPC invalid JSON')); } });
+      res.on('end', () => { forensic('ggbet-browser','payload_received',{operation:'ipc:'+operation,payloadBytes:size,httpStatus:res.statusCode,transport:'local-unix'});if(res.statusCode!==200)return fail(Object.assign(Error(`browser IPC HTTP ${res.statusCode}`),{status:res.statusCode}));end({payloadBytes:size,httpStatus:res.statusCode});const decoded=forensicSpan('ggbet-browser','ipc:'+operation+':json-decode');try{const data=JSON.parse(Buffer.concat(chunks).toString('utf8'));decoded();resolve(data);}catch{decoded({result:'error',errorCategory:'parse'});reject(Error('browser IPC invalid JSON'));} });
     });
-    req.on('timeout', () => req.destroy(Error('browser IPC timeout'))); req.on('error', reject); req.end(payload);
+    req.on('timeout', () => req.destroy(Error('browser IPC timeout'))); req.on('error', fail); req.end(payload);
   });
 }
 
@@ -61,7 +64,7 @@ export class BrowserGgbetSource {
     try {
       let f = await this.request(this.socketPath, `/feed?since=${this.seq}`);
       if (f.worker !== this.worker || f.sessionId !== this.sessionId || Number(f.seq) < this.seq) { this.worker = f.worker; this.seq = 0; this.raws.clear(); f = await this.request(this.socketPath, '/feed?since=0'); this.worker = f.worker; }
-      this.sessionId = f.sessionId; this.apply(f);
+      this.sessionId = f.sessionId;const applied=forensicSpan('ggbet-browser','ipc-feed-apply');try{this.apply(f);applied({workerSequence:f.seq,eventCount:this.selected.size});}catch(e){applied(errorFields(e));throw e;}
       this.ipc = { ...this.ipc, ok: true, lastOkAt: this.now(), lastError: '', failures: 0 };
     } catch (e) { this.ipc = { ...this.ipc, ok: false, lastError: String(e?.message || e).slice(0, 200), failures: this.ipc.failures + 1 }; }
     finally { this.polling = false; }
@@ -75,7 +78,8 @@ export class BrowserGgbetSource {
     this.selected = new Map((f.selected || []).map((s) => [String(s.eventId), s]));
     this.retiring = new Map((f.retiring || []).map((s) => [String(s.eventId), s]));
     for (const [id, raw] of Object.entries(f.events || {})) { const s = this.selected.get(id) || this.retiring.get(id); if (raw?.id === id && s) this.raws.set(id, { raw, at: now, seq: s.seq, pageId: s.pageId }); }
-    this.seq = Number(f.seq) || this.seq;
+    for(const [eventId,raw] of Object.entries(f.events||{}))if(raw?.id===eventId)forensic('ggbet-browser','state_update',{operation:'ipc-event-materialize',eventId,providerVersion:raw.version??null,workerSequence:f.seq,...eventCounts([raw]),measurement:'worker-parsed event delivered over local IPC'});
+    this.seq = Number(f.seq) || this.seq;forensic('ggbet-browser','state_update',{operation:'ipc-feed-materialize',workerSequence:this.seq,eventCount:this.selected.size,marketCount:[...this.raws.values()].reduce((n,x)=>n+(x.raw.markets?.length||0),0),changed:Object.keys(f.events||{}).length>0,measurement:'server materialization of worker-parsed tree'});
     // Keep raw state only for events the browser selects or still owns.
     for (const id of [...this.raws.keys()]) if (!this.selected.has(id) && !this.retiring.has(id) && !this.modes.has(id)) this.raws.delete(id);
   }

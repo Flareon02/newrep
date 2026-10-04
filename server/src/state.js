@@ -1,3 +1,4 @@
+import { forensic, forensicSpan, errorFields, eventCounts } from './collector-forensics.js';
 import { log } from "./logger.js";
 import { createHash } from "node:crypto";
 import {teamLogos} from './team-logos.js';
@@ -82,7 +83,8 @@ export class SnapshotState {
   }
 
   onChange(fn){if(typeof fn==='function')this.listeners.add(fn);return()=>this.listeners.delete(fn);}
-  emitChange(change){for(const fn of this.listeners)try{fn(change);}catch(error){log.error('[state-listener]',error.message);}}
+  emitChange(change){const provider=this.forensicProvider(),counts=eventCounts(this.events);forensic(provider,'state_update',{operation:this.name,changeType:change.type,changed:change.type==='snapshot',revision:this.revision,deletedCount:this.forensicDeletedCount||0,...counts});const end=forensicSpan(provider,this.name+':listeners','publish');for(const fn of this.listeners)try{fn(change);}catch(error){log.error('[state-listener]',error.message);forensic(provider,'publish_error',{operation:this.name,...errorFields(error)});}end({listenerCount:this.listeners.size,delivery:'server listeners completed; no client acknowledgement',...counts});}
+  forensicProvider(){return this.name.startsWith('fonbet')?'fonbet':this.name.startsWith('pinnacle')?'pinnacle':this.name.startsWith('ggbet')?'ggbet-node':['live','prematch'].includes(this.name)?'astek':null;}
 
   async load() {
     const hotSince = this.hotCutoff();
@@ -202,6 +204,7 @@ export class SnapshotState {
   }
 
   async success(events, meta = {}) {
+    const stateDone=forensicSpan(this.forensicProvider(),this.name+':reconcile','state');
     const now = Date.now();
     this.lastAttemptAt = now;
     this.lastSuccessfulUpdateAt = now;
@@ -319,7 +322,8 @@ export class SnapshotState {
         if(patch.fields.length)patches.push(patch);
       }
     }
-    this.events = incoming;
+    this.forensicDeletedCount=[...previousCurrent.keys()].filter(id=>!incomingIds.has(id)).length;
+    this.events = incoming;stateDone({...eventCounts(incoming),deletedCount:this.forensicDeletedCount});
     // Feed listeners are latency-sensitive. Publish the already-normalized in-
     // memory change before durable odds/score journals are flushed. Persistence
     // still completes in-order below, but an open extension receives score and
@@ -336,6 +340,7 @@ export class SnapshotState {
   }
 
   async failure(error) {
+    forensic(this.forensicProvider(),'collector_error',{operation:this.name,...errorFields(error)});
     this.updating = false;
     this.partial = false;
     this.lastAttemptAt = Date.now();

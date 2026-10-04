@@ -26,12 +26,17 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.13.0",
+  version: "4.14.0",
   port: intEnv("PORT", 8080),
   // Listen address. Unset: 0.0.0.0 (Docker). 127.0.0.1 / localhost when only a local reverse proxy or tunnel may reach
   // the API. Any other value that is not an IP literal binds 127.0.0.1 (fails closed, never public) and is logged.
   host: bindHost(process.env.HOST),
   dataDir: process.env.DATA_DIR || "/data",
+  collectorForensicsEnabled: !/^(?:0|false|off|no)$/i.test(String(process.env.COLLECTOR_FORENSICS_ENABLED || "1")),
+  collectorForensicsDir: process.env.COLLECTOR_FORENSICS_DIR || "",
+  collectorForensicsHours: intEnv("COLLECTOR_FORENSICS_HOURS", 72, 24),
+  collectorForensicsMaxMiB: intEnv("COLLECTOR_FORENSICS_MAX_MIB", 1024, 64),
+  collectorForensicsMinFreeMiB: intEnv("COLLECTOR_FORENSICS_MIN_FREE_MIB", 4096, 256),
   // Optional shared secret for write/compute endpoints (see src/auth.js). Empty = unauthenticated (legacy behaviour).
   apiToken: String(process.env.API_TOKEN || "").trim(),
   apiSseLimitTotal: intEnv("API_SSE_LIMIT_TOTAL", 64, 4),

@@ -1,3 +1,4 @@
+import { forensic, forensicSpan, errorFields, eventCounts } from './collector-forensics.js';
 import { log } from "./logger.js";
 import { config, urls } from "./config.js";
 import { fetchJson, withAstekRequest } from "./utils.js";
@@ -32,7 +33,8 @@ export class LiveCollector {
         log.enabled('debug')&&log.debug(`[live] unchanged, HTTP ${result.status}, ${result.elapsedMs} ms, ${usedOrigin}`);
         return true;
       }
-      let events = parseLiveFeed(result.payload, usedOrigin);
+      const parsed=forensicSpan('astek','live-normalize');
+      let events;try{events=parseLiveFeed(result.payload,usedOrigin);parsed(eventCounts(events));}catch(e){parsed(errorFields(e));throw e;}
       await this.state.success(events, result);
       this.lastFingerprint=result.fingerprint||"";
       this.failures=0;
@@ -51,7 +53,7 @@ export class LiveCollector {
   nextDelay(success){
     if(success)return jitter(config.liveIntervalMs);
     const n=Math.min(6,Math.max(1,this.failures));
-    return jitter(Math.min(config.astekMaxBackoffMs,config.liveIntervalMs*(2**n)));
+    const delay=jitter(Math.min(config.astekMaxBackoffMs,config.liveIntervalMs*(2**n)));forensic('astek','retry',{operation:'live',retryCount:this.failures,backoffMs:delay});return delay;
   }
 
   schedule(delay=0){

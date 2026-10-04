@@ -1,3 +1,4 @@
+import { forensic, forensicSpan, errorFields, eventCounts } from './collector-forensics.js';
 import { log } from "./logger.js";
 import { config } from "./config.js";
 import { fetchJson } from "./utils.js";
@@ -95,7 +96,8 @@ export class FonbetCollector {
         const result=await fetchJson(usedUrl,'https://fon.bet/live/esports',{requireSuccess:false,timeoutMs:10000,metricGroup:'fonbetDelta'});
         const next=Number(result.payload?.packetVersion);
         if(!next||next<=this.packetVersion)throw Error('Fonbet delta: версия не продвинулась');
-        this.payload=mergeFonbetPayload(this.payload,result.payload);this.packetVersion=next;this.deltaUrlIndex=index;this.lastUrl=usedUrl;this.deltaRequests++;this.lastBytes=result.bytes;this.lastTransport='delta';return result;
+        const reconcile=forensicSpan('fonbet','delta-reconcile');
+        this.payload=mergeFonbetPayload(this.payload,result.payload);reconcile({providerVersion:next,deltaCount:result.payload.events?.length||0,deltaFactors:result.payload.customFactors?.length||0,deletionSemantics:'materialized delta rows; periodic full snapshot replaces absent rows'});this.packetVersion=next;this.deltaUrlIndex=index;this.lastUrl=usedUrl;this.deltaRequests++;this.lastBytes=result.bytes;this.lastTransport='delta';return result;
       }catch(e){error=e;}
     }
     throw error||Error('Fonbet delta недоступен');
@@ -103,9 +105,10 @@ export class FonbetCollector {
 
   async updateFeed(){
     const fullDue=!this.payload||!this.packetVersion||Date.now()-this.lastFullAt>=config.fonbetFullResyncMs;
-    if(fullDue)return this.fetchFull();
+    if(fullDue){forensic('fonbet','full_resync',{operation:'full-snapshot',reason:this.payload?'periodic full resync':'initial snapshot'});return this.fetchFull();}
     try{return await this.fetchDelta();}
     catch(error){
+      forensic('fonbet','full_resync',{operation:'full-snapshot',reason:'delta failure',...errorFields(error)});
       this.deltaFallbacks++;log.warn(`[fonbet] delta failed, full resync: ${error.message}`);
       // Discard materialized state only after a full snapshot succeeds; until
       // then callers keep the last-known-good public SnapshotState.
@@ -120,7 +123,8 @@ export class FonbetCollector {
     const prematchDueAtStart = !this.nextPrematchAt || started >= this.nextPrematchAt;
     try {
       const result=await this.updateFeed(),payload=this.payload;
-      const live = parseFonbetLive(payload);
+      const parsed=forensicSpan('fonbet',this.lastTransport+':live-normalize');let live;
+      try{live=parseFonbetLive(payload);parsed({...eventCounts(live.events),providerVersion:this.packetVersion,rawEventCount:live.rawEventCount});}catch(e){parsed(errorFields(e));throw e;}
       this.rawEventCount = live.rawEventCount;
       this.sportsCount = live.sportsCount;
       await this.liveState.success(live.events, { status: result.status, elapsedMs: result.elapsedMs });
@@ -128,7 +132,8 @@ export class FonbetCollector {
       let prematchCount = this.prematchState.events.length;
       if (prematchDueAtStart) {
         try{
-          const prematch = parseFonbetPrematch(payload);
+          const parsedLine=forensicSpan('fonbet',this.lastTransport+':prematch-normalize');let prematch;
+          try{prematch=parseFonbetPrematch(payload);parsedLine({...eventCounts(prematch.events),providerVersion:this.packetVersion});}catch(e){parsedLine(errorFields(e));throw e;}
           prematchCount = prematch.events.length;
           await this.prematchState.success(prematch.events, { status: result.status, elapsedMs: result.elapsedMs });
           this.lastPrematchUpdateAt = started;
@@ -155,7 +160,7 @@ export class FonbetCollector {
 
   nextDelay(ok){
     if(ok)return jitter(this.packetVersion&&config.fonbetDeltaUrls.length?config.fonbetDeltaIntervalMs:Math.max(config.fonbetLiveIntervalMs,config.fonbetFullFallbackIntervalMs));
-    return jitter(Math.min(config.fonbetMaxBackoffMs,Math.max(config.fonbetDeltaIntervalMs,5000)*(2**Math.min(6,Math.max(1,this.failures)))));
+    const delay=jitter(Math.min(config.fonbetMaxBackoffMs,Math.max(config.fonbetDeltaIntervalMs,5000)*(2**Math.min(6,Math.max(1,this.failures)))));forensic('fonbet','retry',{operation:'feed',retryCount:this.failures,backoffMs:delay});return delay;
   }
   schedule(delay=0){
     if(this.stopped)return;clearTimeout(this.timer);
