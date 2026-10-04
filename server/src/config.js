@@ -2,7 +2,7 @@ import net from "node:net";
 import { explicitNetworkMode } from "./egress.js";
 
 const intEnv = (name, fallback, min = 1) => {
-  const value = Number(process.env[name]);
+  const value = String(process.env[name]??'').trim()===''?NaN:Number(process.env[name]);
   return Number.isFinite(value) && value >= min ? Math.floor(value) : fallback;
 };
 
@@ -26,7 +26,7 @@ const originList = listEnv("ASTEK_ORIGINS", "https://astekbet.com,https://astekb
   .map((value) => value.replace(/\/+$/, ""));
 
 export const config = {
-  version: "4.14.0",
+  version: "4.15.0",
   port: intEnv("PORT", 8080),
   // Listen address. Unset: 0.0.0.0 (Docker). 127.0.0.1 / localhost when only a local reverse proxy or tunnel may reach
   // the API. Any other value that is not an IP literal binds 127.0.0.1 (fails closed, never public) and is logged.
@@ -144,6 +144,9 @@ export const config = {
   // ODDS_HISTORY_ENABLED=0: no odds journal (odds_entries_v3/odds_state) and no current-snapshot rows with market
   // trees (snapshot_current) are written, and LIVE is not restored from SQLite at startup. Current odds live in RAM.
   oddsHistoryEnabled,
+  sqliteHistoryEnabled: /^(?:1|true|on)$/i.test(String(process.env.SQLITE_HISTORY_ENABLED||'0')),
+  historyMinFreeMiB: intEnv('HISTORY_MIN_FREE_MIB',4096,256),
+  get snapshotCurrentEnabled(){return !String(process.env.SNAPSHOT_CURRENT_ENABLED??'').trim()?this.oddsHistoryEnabled:!/^(?:0|false|off)$/i.test(String(process.env.SNAPSHOT_CURRENT_ENABLED));},
   // A History row whose only change is lastSeenAt (the fixture is simply still listed) is rewritten at most this often;
   // new, changed and removed rows are saved as before, and a clean shutdown saves every current row. 0 = every save
   // (default); 15 min by default when odds history is disabled.

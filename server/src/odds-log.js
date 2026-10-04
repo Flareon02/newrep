@@ -1,3 +1,4 @@
+import {historyObserve} from './match-history.js';
 import { log } from "./logger.js";
 import {scoreLog} from './score-log.js';
 import {readJson} from './utils.js';
@@ -49,6 +50,7 @@ export class OddsLog{
   // ODDS_HISTORY_ENABLED=0: nothing is journaled (neither odds_entries_v3 nor odds_state); current odds stay in the
   // in-memory snapshots. Already stored history remains readable through get()/timeline().
   record(ref,odds=ref?.odds){
+    if(config.sqliteHistoryEnabled){if(ref?.source!=='ggbet')historyObserve(ref?.source,[{...ref,odds}],{phase:odds?.mode||'live',oddsOnly:true});return Promise.resolve();}
     if(!config.oddsHistoryEnabled){this.skipped++;return Promise.resolve();}
     const source=ref?.source,id=safeId(ref?.sourceEventId||ref?.id);
     if(!['astek','fonbet','pinnacle','ggbet'].includes(source)||!id||!odds||odds.stale||!Array.isArray(odds.markets)||!odds.markets.length)return Promise.resolve();

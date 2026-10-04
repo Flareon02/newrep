@@ -192,7 +192,7 @@ const DetailPanel=(()=>{
   const e=st.event,rows=refs(e).filter(r=>ctx.bookVisible(r.source));
   const live=st.view==='live';
   const html=`<div class="detail-section" data-market-key="sources"><h3>Конторы</h3><table class="src-table"><thead><tr><th>Контора</th><th>Начало</th><th>${live?'В LIVE':st.view==='results'?'Окончание':'В линии'}</th><th class="num">Счёт</th></tr></thead><tbody>${rows.map(r=>{const url=ctx.eventUrl(r);return `<tr data-market-key="src:${esc(r.source)}"><td><span class="book-mark ${esc(r.source)}" aria-hidden="true"></span> <button class="link-btn" data-open-url="${esc(url)}" ${url?'':'disabled'} title="${url?'Открыть у букмекера':''}">${esc(ctx.providerName(r.source))}</button></td><td>${esc(ctx.stamp(r.startAt,true))}</td><td>${esc(ctx.stamp(live?r.enteredLiveAt:st.view==='results'?(r.endedAt||r.removedAt):r.firstPrematchAt,true,live))}</td><td class="num">${esc(r.scoreText||'—')}${st.view==='results'&&r.resultVerified?' <span class="verified">✓</span>':''}</td></tr>`;}).join('')}</tbody></table></div>
-  <div class="detail-section" data-market-key="actions"><h3>Действия</h3><div class="row-actions">${['live','results','prematch'].includes(st.view)&&ctx.can('scores.history')?'<button class="btn" data-dp="scores">История счёта</button>':''}${['live','prematch','results'].includes(st.view)&&ctx.can('odds.history')&&!ctx.oddsHidden(st.view==='results'?'live':st.view)?'<button class="btn" data-dp="timeline">История коэффициентов</button>':''}${ctx.generatorAvailable(e,st.view)?'<button class="btn" data-dp="generator">Генератор CS2</button>':''}<button class="btn" data-dp="copy">Копировать матч</button></div></div>
+  <div class="detail-section" data-market-key="actions"><h3>Действия</h3><div class="row-actions">${ctx.can('scores.history')||ctx.can('odds.history')?'<button class="btn" data-dp="history">История</button>':''}${['live','results','prematch'].includes(st.view)&&ctx.can('scores.history')?'<button class="btn" data-dp="scores">История счёта</button>':''}${['live','prematch','results'].includes(st.view)&&ctx.can('odds.history')&&!ctx.oddsHidden(st.view==='results'?'live':st.view)?'<button class="btn" data-dp="timeline">История коэффициентов</button>':''}${ctx.generatorAvailable(e,st.view)?'<button class="btn" data-dp="generator">Генератор CS2</button>':''}<button class="btn" data-dp="copy">Копировать матч</button></div></div>
   ${firstSeenSection(e)}${ctx.isAdmin?.()?scoreDiagnostics(e):''}${timeline(e)}`;
   if(body.dataset.kind!=='info'){body.dataset.kind='info';body.innerHTML='';}
   StableDOM.patch(body,html);
@@ -239,6 +239,7 @@ const DetailPanel=(()=>{
   if(action==='close'){hide();return;}
   if(action==='fav'){ctx.toggleFavorite(st.event);render();return;}
   if(action==='copy'){ctx.copyMatch(st.event);return;}
+  if(action==='history'){ctx.openMatchHistory(st.event,st.view);return;}
   if(action==='scores'){ctx.openScoreHistory(st.event,st.view);return;}
   if(action==='timeline'){ctx.openOddsTimeline(st.event);return;}
   if(action==='generator'){ctx.openGenerator(st.event);return;}

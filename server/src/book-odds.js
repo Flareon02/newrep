@@ -1,3 +1,4 @@
+import {historyPrice} from './history-model.js';
 import {readFileSync} from 'node:fs';
 const names=JSON.parse(readFileSync(new URL('./astek-market-names.json',import.meta.url),'utf8'));
 const official=JSON.parse(readFileSync(new URL('./astek-market-official.json',import.meta.url),'utf8'));
@@ -87,11 +88,11 @@ export function astekOdds(raw,all=[],mode='live',context={}){
       const blocked=raw.B===true||raw.B===1||r.B===true||r.B===1||e.B===true||e.B===1||e.BL===true||!v;
       let label=templateLabel;
       if(e.P!==undefined)label=label.replace(/\(\)/g,String(e.P));
-      market.prices.push({designation,label,points:e.P,decimal:blocked?null:v,rawType:t});
+      market.prices.push(historyPrice({designation,label,points:e.P,decimal:blocked?null:v,rawType:t},e.C));
       if(blocked)market.status='suspended'; groups.set(key,market);
     }
   }
-  const markets=[...groups.values()].map(m=>{const prices=[...m.prices].sort((a,b)=>(sideOrder[a.designation]??9)-(sideOrder[b.designation]??9)||Number(a.points??0)-Number(b.points??0));return m.status==='open'?{...m,prices}:{...m,prices:prices.map(p=>({...p,decimal:null}))};});
+  const markets=[...groups.values()].map(m=>{const prices=[...m.prices].sort((a,b)=>(sideOrder[a.designation]??9)-(sideOrder[b.designation]??9)||Number(a.points??0)-Number(b.points??0));return m.status==='open'?{...m,prices}:{...m,prices:prices.map(p=>historyPrice({...p,decimal:null},p.__historyRaw?.rawOdds??p.decimal))};});
   markets.sort((a,b)=>a.period-b.period||marketOrder(a.title)-marketOrder(b.title)||a.title.localeCompare(b.title,'ru')||a.key.localeCompare(b.key));
   return markets.length?{provider:'AstekBet',team1:clean(raw?.O1E||raw?.O1),team2:clean(raw?.O2E||raw?.O2),mode,updatedAt:explicitAt,stale:false,transport:'existing-feed',markets}:null;
 }
@@ -137,7 +138,7 @@ function addFonbetEventMarkets(groups,e,containers,blockInfo,period){
     const title=fonbetTitle(spec.family)||`Рынок ${id}`;
     const market=groups.get(key)||{key,type:spec.family,title,period,status:'open',prices:[]};
     const eventBlocked=blockInfo.events.has(String(e.id)),factorBlocked=blockInfo.factors.get(String(e.id))?.has(Number(id))||f.blocked===true||f.b===true;
-    market.prices.push({designation:spec.side,label:fonbetLabel(spec.side,id),points:f.pt??f.p,decimal:eventBlocked||factorBlocked?null:v,rawType:id});
+    market.prices.push(historyPrice({designation:spec.side,label:fonbetLabel(spec.side,id),points:f.pt??f.p,decimal:eventBlocked||factorBlocked?null:v,rawType:id},f.v));
     if(eventBlocked)market.status='suspended'; groups.set(key,market);
   }
 }
@@ -159,7 +160,7 @@ export function fonbetOdds(arg1,arg2,arg3='live',arg4){
     const containers=index?.factors?.get(String(e.id))||(payload.customFactors||[]).filter(c=>String(c.e??c.eventId)===String(e.id));
     addFonbetEventMarkets(groups,e,containers,index?.blocked||{events:new Set(),factors:new Map()},period);
   }
-  const markets=[...groups.values()].map(m=>m.status==='open'?m:{...m,prices:m.prices.map(p=>({...p,decimal:null}))});
+  const markets=[...groups.values()].map(m=>m.status==='open'?m:{...m,prices:m.prices.map(p=>historyPrice({...p,decimal:null},p.__historyRaw?.rawOdds??p.decimal))});
   markets.sort((a,b)=>a.period-b.period||marketOrder(a.title)-marketOrder(b.title)||a.title.localeCompare(b.title,'ru')||a.key.localeCompare(b.key));
   return markets.length?{provider:'Fonbet',team1:clean(raw.team1),team2:clean(raw.team2),mode,updatedAt,stale:false,transport:'existing-feed',markets}:null;
 }

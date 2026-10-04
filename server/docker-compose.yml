@@ -94,6 +94,11 @@ services:
       RESULTS_WARMUP_DELAY_MS: "180000"
       # Optional retention in days (0 = keep forever, the default). Only whole events whose newest
       # record is older than the limit are removed. See docs/DEPLOYMENT.md before enabling.
+      ODDS_HISTORY_ENABLED: "${ODDS_HISTORY_ENABLED:-1}"
+      SQLITE_HISTORY_ENABLED: "${SQLITE_HISTORY_ENABLED:-0}"
+      SNAPSHOT_CURRENT_ENABLED: "${SNAPSHOT_CURRENT_ENABLED:-}"
+      HISTORY_TOUCH_PERSIST_MS: "${HISTORY_TOUCH_PERSIST_MS:-}"
+      HISTORY_MIN_FREE_MIB: "${HISTORY_MIN_FREE_MIB:-4096}"
       ODDS_RETENTION_DAYS: "${ODDS_RETENTION_DAYS:-0}"
       SCORE_RETENTION_DAYS: "${SCORE_RETENTION_DAYS:-0}"
       STATISTICS_RETENTION_DAYS: "${STATISTICS_RETENTION_DAYS:-0}"

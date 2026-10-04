@@ -125,6 +125,7 @@ export function routeRequirement(method, pathname, params = new URLSearchParams(
   if (p === '/api/ui/full-markets') return ['odds.fullMarkets'];
   if (p === '/api/astek/markets' || p === '/api/pinnacle/live-markets' || p === '/api/pinnacle/live-stream') return ['odds.fullMarkets'];
   if (p === '/api/odds/timeline' || p === '/api/odds/history') return ['odds.history'];
+  if (/^\/api\/events\/[^/]+\/history$/.test(p)) return ['odds.history','scores.history'];
   if (p === '/api/score-history') return ['scores.history'];
   if (p.startsWith('/api/statistics/') || p === '/api/cs2/match' || p.startsWith('/api/hltv/')) return ['statistics.view', 'tools.generator'];
   if (p === '/api/odds/generate' || p === '/api/odds/job' || p === '/api/odds/manual' || p === '/api/live-generator') return ['tools.generator'];

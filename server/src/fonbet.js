@@ -127,7 +127,7 @@ export class FonbetCollector {
       try{live=parseFonbetLive(payload);parsed({...eventCounts(live.events),providerVersion:this.packetVersion,rawEventCount:live.rawEventCount});}catch(e){parsed(errorFields(e));throw e;}
       this.rawEventCount = live.rawEventCount;
       this.sportsCount = live.sportsCount;
-      await this.liveState.success(live.events, { status: result.status, elapsedMs: result.elapsedMs });
+      await this.liveState.success(live.events, { status: result.status, elapsedMs: result.elapsedMs,receivedAt:result.receivedAt,providerVersion:this.packetVersion });
 
       let prematchCount = this.prematchState.events.length;
       if (prematchDueAtStart) {
@@ -135,7 +135,7 @@ export class FonbetCollector {
           const parsedLine=forensicSpan('fonbet',this.lastTransport+':prematch-normalize');let prematch;
           try{prematch=parseFonbetPrematch(payload);parsedLine({...eventCounts(prematch.events),providerVersion:this.packetVersion});}catch(e){parsedLine(errorFields(e));throw e;}
           prematchCount = prematch.events.length;
-          await this.prematchState.success(prematch.events, { status: result.status, elapsedMs: result.elapsedMs });
+          await this.prematchState.success(prematch.events, { status: result.status, elapsedMs: result.elapsedMs,receivedAt:result.receivedAt,providerVersion:this.packetVersion });
           this.lastPrematchUpdateAt = started;
           this.nextPrematchAt ||= started;
           do {this.nextPrematchAt += config.fonbetPrematchIntervalMs;} while(this.nextPrematchAt<=started);

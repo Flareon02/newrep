@@ -1,3 +1,4 @@
+import {config} from './config.js';
 import {readJson,writeJson} from './utils.js';
 import {identity} from './identity.js';
 import {scoreAppend,scoreImport,scoreLoad,scoreReplaceLast} from './sqlite-storage.js';
@@ -9,6 +10,7 @@ export class ScoreLog {
   }
   filename(key){return `scores/${Buffer.from(key).toString('base64url')}.json`;}
   async load(key){
+    if(this.sqlite&&config.sqliteHistoryEnabled){const saved=scoreLoad(key);if(saved)return saved;}
     if(this.cache.has(key))return this.cache.get(key);
     if(!this.loading.has(key))this.loading.set(key,(async()=>{
       let saved;

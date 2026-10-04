@@ -1,3 +1,4 @@
+import {historyEventMeta} from './history-model.js';
 import { forensic, forensicSpan, errorFields, eventCounts } from './collector-forensics.js';
 // Hybrid GGBET source (4.13.0). At most three LIVE events are served by the GGBET Firefox browser worker
 // (esports-monitor-ggbet-browser: real headless Firefox in its own fail-closed Mullvad namespace); every other GGBET event
@@ -125,6 +126,7 @@ export class BrowserGgbetSource {
       owned.add(id);
       const src = this.raws.get(id), sAt = Date.parse((sel || this.retiring.get(id))?.lastUpdateAt || '') || src?.at || at;
       const built = src ? parse(src.raw, sAt) : null;
+      if(built)historyEventMeta(built,{rawEvent:src.raw,publicationSource:'ggbet-browser',sourceReceivedAt:src.at,updatedAt:sAt,receivedTimeSemantics:'server Unix IPC receive; worker update timestamp separately preserved'});
       if (built) this.lastRows.set(id, built); // last priced browser state (never published once unavailable)
       // Unavailable: the last browser state without any price; with no browser state at all (e.g. after a server restart)
       // the event card without any price - never Node odds.

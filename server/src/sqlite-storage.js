@@ -1,3 +1,4 @@
+import {historySchema} from './history-schema.js';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import {deflateRawSync,inflateRawSync} from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import { config } from './config.js';
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const handles = new Map();
 const json = value => JSON.stringify(value);
 const parse = (value, fallback = null) => {
@@ -96,6 +97,7 @@ function schema(db){
       updated_at INTEGER NOT NULL
     ) STRICT;
   `);
+  historySchema(db);
   db.prepare(`INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(String(SCHEMA_VERSION));
 }
 

@@ -1,3 +1,4 @@
+import {historyEventMeta} from './history-model.js';
 import {fonbetOdds,fonbetOddsIndex} from './book-odds.js';
 import GameCategories from "./game-categories.cjs";
 import { clean, epochMs, slug } from "./utils.js";
@@ -173,6 +174,8 @@ function parseEsportsFeed(payload, place, mode) {
       ...parseFonbetScore(raw, names, mode === "live" ? liveInfoByEventId.get(sourceId) : null, mode === "live" ? eventMiscByEventId.get(sourceId) : null, category),
       url: buildFonbetEventUrl(raw, category, mode, categoryAlias)
     });
+    const info=liveInfoByEventId.get(sourceId),misc=eventMiscByEventId.get(sourceId);
+    historyEventMeta(events.at(-1),{eventVersion:payload.packetVersion??null,clock:info?.clock??info?.timer??info?.timerSeconds??null,period:info?.period??null,map:info?.map??misc?.map??null,gameState:raw.status??info?.status??null,betStop:oddsIndex?.blocked?.events?.has(sourceId)??null,providerState:{scores:info?.scores??null,subScores:misc?.subScores??null}});
     seenIds.add(sourceId);
   }
   return { events, rawEventCount: rawEvents.length, rawPlacedCount: rawPlaced.length, esportsEventCount: events.length, sportsCount: sports.length, esportsRootId };

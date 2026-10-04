@@ -594,3 +594,5 @@ html.team-logos-off .hawk-team-logo,html.team-logos-off .cs2-logo{display:none!i
 .hawk-board-score{white-space:nowrap}
 .hawk-board-main{grid-template-columns:minmax(0,1fr) minmax(112px,auto) minmax(0,1fr)}
 .hawk-hero small,.hawk-hero-row small{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:normal;word-break:normal}
+
+.history-table-wrap{overflow:auto;max-height:65vh}.history-table-wrap td{vertical-align:top}.history-table-wrap td:last-child{white-space:nowrap}

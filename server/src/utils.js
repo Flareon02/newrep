@@ -251,6 +251,7 @@ export async function fetchJson(url, referer, options = {}) {
 
     forensic(provider,'upstream_response_received',{operation,httpStatus:response.status,durationMs:Date.now()-started});
     const text = await responseTextLimited(response, Number(options.maxBytes)||config.upstreamMaxBytes);
+    const receivedAt=Date.now();
     const elapsedMs = Date.now() - started;
     forensic(provider,'payload_received',{operation,httpStatus:response.status,payloadBytes:Buffer.byteLength(text),durationMs:elapsedMs});
     operationId({result:response.ok?'ok':'error',httpStatus:response.status,payloadBytes:Buffer.byteLength(text)});transportDone=true;
@@ -287,7 +288,7 @@ export async function fetchJson(url, referer, options = {}) {
     }
 
     const bytes=Buffer.byteLength(text);metric.successes++;metric.bytesTotal=(metric.bytesTotal||0)+bytes;if(metric.recent?.length)metric.recent[metric.recent.length-1].bytes=bytes;
-    return { payload, status: response.status, elapsedMs:Date.now()-started, bytes, fingerprint:createHash("sha1").update(text).digest("hex") };
+    return { payload, status: response.status, receivedAt, elapsedMs:Date.now()-started, bytes, fingerprint:createHash("sha1").update(text).digest("hex") };
   } catch(error){if(!transportDone)operationId(errorFields(error));metric.failures++;error.elapsedMs=Date.now()-started;throw error;} finally {
     metric.inFlight--;metric.lastElapsedMs=Date.now()-started;
     clearTimeout(timer);

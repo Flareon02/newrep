@@ -1,3 +1,4 @@
+import {historyObserve} from './match-history.js';
 import { forensic, forensicSpan, errorFields, eventCounts } from './collector-forensics.js';
 import { log } from "./logger.js";
 import { createHash } from "node:crypto";
@@ -116,7 +117,7 @@ export class SnapshotState {
     this.matchSignature = stableMatchEventSignature(this.events);
     this.matchRevision = Number(saved.matchRevision || 0);
     this.lastPersistAt = Date.now();
-    if (!config.oddsHistoryEnabled) this.dropRestoredCurrent(saved);
+    if (!config.snapshotCurrentEnabled) this.dropRestoredCurrent(saved);
   }
 
   // Odds history off: start with an empty, stale current snapshot that fresh upstream data fills within seconds, instead
@@ -148,8 +149,8 @@ export class SnapshotState {
       events: this.events,
       history: this.history,
       seen: this.seen,
-      ...(config.oddsHistoryEnabled ? {} : { currentIds: this.restoredCurrentIds ? [...this.restoredCurrentIds] : this.events.map((event) => String(event?.id || "")).filter(Boolean) })
-    }, {dirtyIds:this.dirtyHistoryIds,pruneBefore:this.historyPruneBefore,current:config.oddsHistoryEnabled});
+      ...(config.snapshotCurrentEnabled ? {} : { currentIds: this.restoredCurrentIds ? [...this.restoredCurrentIds] : this.events.map((event) => String(event?.id || "")).filter(Boolean) })
+    }, {dirtyIds:this.dirtyHistoryIds,pruneBefore:this.historyPruneBefore,current:config.snapshotCurrentEnabled});
     if (result?.pruned) this.historyTotal = Math.max(0, this.historyTotal - result.pruned);
     this.dirtyHistoryIds.clear();
     this.historyPruneBefore = 0;
@@ -323,6 +324,7 @@ export class SnapshotState {
       }
     }
     this.forensicDeletedCount=[...previousCurrent.keys()].filter(id=>!incomingIds.has(id)).length;
+    historyObserve(this.forensicProvider(),(Array.isArray(events)?events:[]).filter(e=>incomingIds.has(String(e?.id||''))),{phase:this.name.includes('prematch')?'prematch':'live',sourceReceivedAt:meta.receivedAt||now,receivedTimeSemantics:meta.receivedAt?'HTTP-response-received':'collector-state-entry',eventVersion:meta.providerVersion??null});
     this.events = incoming;stateDone({...eventCounts(incoming),deletedCount:this.forensicDeletedCount});
     // Feed listeners are latency-sensitive. Publish the already-normalized in-
     // memory change before durable odds/score journals are flushed. Persistence
@@ -330,8 +332,8 @@ export class SnapshotState {
     // market changes without waiting for disk I/O.
     if(changed||structuralChanged)this.emitChange({type:'snapshot',name:this.name,revision:this.revision,matchRevision:this.matchRevision,structuralChanged,patches,at:now});
     else this.emitChange({type:'status',name:this.name,at:now});
-    try{await Promise.all(incoming.filter(e=>e.odds?.markets?.length).map(e=>oddsLog.record(e)));}catch(error){log.error('[odds-log]',error.message);}
-    if(!this.name.includes('prematch'))try{
+    if(!config.sqliteHistoryEnabled)try{await Promise.all(incoming.filter(e=>e.odds?.markets?.length).map(e=>oddsLog.record(e)));}catch(error){log.error('[odds-log]',error.message);}
+    if(!config.sqliteHistoryEnabled&&!this.name.includes('prematch'))try{
       await scoreLog.record(incoming.filter(e=>!previousCurrent.has(e.id)),{phase:'live',at:now,event:'entered'});
       await scoreLog.record(incoming,{phase:'live',at:now});
       await scoreLog.record([...previousCurrent.values()].filter(e=>!incomingIds.has(e.id)),{phase:'live',at:now,event:'removed'});

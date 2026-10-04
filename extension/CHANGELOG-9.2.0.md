@@ -41,3 +41,8 @@ administration, as before).
 - Error texts for users are plain («Сервер недоступен», «Нет доступа к этому разделу» …) — no addresses, proxies or internal reasons;
   administrators keep the technical detail.
 - Notifications only for sections the user may see and with the `notifications` capability.
+
+## Combined SQLite match history (server 4.15.0)
+- Match detail **История**: score, market state and odds changes, exact old/new values, UTC timestamps.
+- All/AstekBet/Fonbet/Pinnacle/GGBET filters; 100 changes per API page, **Показать ещё**.
+- GGBET Browser/Node publication provenance is displayed separately; no diagnostic shadow prices.

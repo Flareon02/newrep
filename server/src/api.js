@@ -1,3 +1,5 @@
+import {sqliteHistoryStatus} from './match-history.js';
+import {eventHistoryQuery,historyOptions} from './match-history-query.js';
 import { forensicSpan } from './collector-forensics.js';
 import { log } from "./logger.js";
 import {StatisticsService} from './statistics-service.js';
@@ -29,7 +31,7 @@ import {writeCounters} from './sqlite-storage.js';
 import {proxyDiagnostics} from './egress.js';
 
 // What this process writes to SQLite (odds history on/off, rows per category since start). No secrets.
-function persistenceStatus(){const w=writeCounters();return {oddsHistoryEnabled:config.oddsHistoryEnabled,dbWritesSinceStart:w.dbWritesSinceStart,dbOddsWritesSinceStart:w.dbOddsWritesSinceStart,oddsRecordsSkipped:oddsLog.skipped||0,writesByCategory:w.byCategory};}
+function persistenceStatus(){const w=writeCounters();return {sqliteHistory:sqliteHistoryStatus(),oddsHistoryEnabled:config.oddsHistoryEnabled,dbWritesSinceStart:w.dbWritesSinceStart,dbOddsWritesSinceStart:w.dbOddsWritesSinceStart,oddsRecordsSkipped:oddsLog.skipped||0,writesByCategory:w.byCategory};}
 // Outbound path of the LIVE odds platform collectors. Proxy host/port only; credentials are never exposed.
 function networkStatus(){const proxyUsed=[config.ggbetNetworkMode,config.databetNetworkMode].includes('proxy');return {ggbet:{networkMode:config.ggbetNetworkMode,relayInUse:config.ggbetNetworkMode==='relay'},databet:{networkMode:config.databetNetworkMode},...(proxyUsed?{proxy:proxyDiagnostics()}:{})};}
 
@@ -753,6 +755,23 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
     if (url.pathname === "/api/live/databet" && databetLiveState) return snapshotResponse(req,res,{...singleProviderSnapshot(databetLiveState,'live'),providers:{databet:singleProviderSnapshot(databetLiveState,'live')}});
     if(req.method==='GET'&&url.pathname==='/api/ui/odds-providers')return sendJson(req,res,200,{defaultProvider:'ggbet',providers:oddsProvidersStatus(),serverVersion:config.version});
 
+    if(req.method==='GET'&&/^\/api\/events\/[^/]+\/history$/.test(url.pathname)){
+      try{
+        const eventId=decodeURIComponent(url.pathname.split('/')[3]);if(eventId.length>300)throw Object.assign(Error('Неверный eventId'),{status:400});
+        let keys=[];
+        if(/^(astek|fonbet|pinnacle|ggbet):[\w-]{1,80}$/.test(eventId))keys=[eventId];
+        else {
+          const live=await liveSnapshot('ggbet'),prematch=await uiPrematchSnapshot();
+          const event=[...(live.events||[]),...(prematch.events||[])].find(e=>String(e.id)===eventId);
+          if(event)keys=(event.sourceRefs?.length?event.sourceRefs:[event]).flatMap(r=>[identity(r),...(r.aliases||[])]);
+          // Archived cards carry the provider identities already returned by the server ledger.
+          else keys=String(url.searchParams.get('ids')||'').split(',').slice(0,32);
+        }
+        keys=keys.filter(k=>/^(astek|fonbet|pinnacle|ggbet):[\w-]{1,80}$/.test(k)&&can(req.principal,'provider.'+k.split(':')[0]));
+        const options=historyOptions(url.searchParams);options.includeOdds=can(req.principal,'odds.history');options.includeScores=can(req.principal,'scores.history');
+        return sendJson(req,res,200,{eventId,...eventHistoryQuery(keys,options)});
+      }catch(error){return sendJson(req,res,error.status||500,{error:error.message});}
+    }
     if(url.pathname==='/api/score-history'){
       const keys=(url.searchParams.get('ids')||'').split(',').filter(Boolean);
       if(!keys.length||keys.length>200||keys.some(k=>!(/^(astek|fonbet|pinnacle|ggbet):[a-zA-Z0-9_-]{1,100}$/).test(k)))return sendJson(req,res,400,{error:'Неверные ID матчей'});

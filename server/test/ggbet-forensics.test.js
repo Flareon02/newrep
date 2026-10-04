@@ -184,6 +184,6 @@ test('egress proxy starts as a program when launched through a symlinked release
   fs.mkdirSync(rel, { recursive: true }); fs.copyFileSync(new URL('../../tools/ggbet-egress-proxy.mjs', import.meta.url), path.join(rel, 'ggbet-egress-proxy.mjs'));
   fs.symlinkSync(path.join(dir, 'releases', 'x'), path.join(dir, 'current'));
   const { spawn } = await import('node:child_process'); const child = spawn(process.execPath, [path.join(dir, 'current', 'tools', 'ggbet-egress-proxy.mjs'), '--socket', sock], { stdio: 'ignore' });
-  try { for (let i = 0; i < 50 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 100)); assert.ok(fs.existsSync(sock), 'listening on the socket'); assert.equal(fs.statSync(sock).mode & 0o777, 0o600); }
+  try { for (let i = 0; i < 50 && (!fs.existsSync(sock)||(fs.statSync(sock).mode & 0o777)!==0o600); i++) await new Promise((r) => setTimeout(r, 100)); assert.ok(fs.existsSync(sock), 'listening on the socket'); assert.equal(fs.statSync(sock).mode & 0o777, 0o600); }
   finally { child.kill(); }
 });

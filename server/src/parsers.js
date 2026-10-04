@@ -1,3 +1,4 @@
+import {historyEventMeta} from './history-model.js';
 import {astekOdds} from './book-odds.js';
 import GameCategories from "./game-categories.cjs";
 import { clean, epochMs, normalizeKey, slug } from "./utils.js";
@@ -99,6 +100,7 @@ export function parseLiveFeed(payload, origin) {
         ? `${origin}/live/esports/${leagueId}-${slug(league)}/${id}-${slug(team1)}-${slug(team2)}`
         : `${origin}/live/esports`
     };
+    historyEventMeta(event,{eventVersion:raw.version??null,clock:raw.SC?.TS??raw.SC?.clock??null,map:raw.SC?.CP??null,providerState:raw.SC??null,betStop:raw.B??null,providerTimestamp:epochMs(raw.U)});
     map.set(id, event);
   }
   return [...map.values()];

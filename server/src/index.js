@@ -1,3 +1,4 @@
+import {startSqliteHistory} from './match-history.js';
 import { log } from "./logger.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -31,6 +32,7 @@ const pinnaclePrematchState=new SnapshotState('pinnacle-prematch',300000);
 const startedAt = Date.now();
 await ensureDataDir();
 log.info(`[storage] ${JSON.stringify(storageMetrics({checkIntegrity:false}))}`);
+const eventHistory=startSqliteHistory({enabled:config.sqliteHistoryEnabled,dataDir:config.dataDir,retentionDays:Math.max(config.oddsRetentionDays,config.scoreRetentionDays)||7,minFreeMiB:config.historyMinFreeMiB});
 await loadMatcherAliases();
 
 const liveState = new SnapshotState("live", Math.max(config.liveIntervalMs * 4, 60000));
@@ -80,7 +82,7 @@ server.listen(config.port, config.host, () => {
   prematchCollector.start();
   fonbetCollector.start();ggbetSupervisor?.start();ggbetBrowser?.start();ggbetCollector.start();databetCollector.start();pinnacleCollector.start();
   resultsService.start();
-  retention=startRetention({statistics:server.statistics,activeKeys:server.activeEventKeys});
+  retention=startRetention({statistics:server.statistics,activeKeys:server.activeEventKeys,settings:config.sqliteHistoryEnabled?{...config,oddsRetentionDays:0,scoreRetentionDays:0}:config});
 });
 
 // Diagnostics only: which public IP/country/ASN the proxy presents (never the credentials). Collectors do not depend on it.
@@ -98,6 +100,7 @@ async function shutdown(exitCode=0,reason='signal',{persist=true}={}) {
   await Promise.allSettled([liveCollector.stop(),prematchCollector.stop(),fonbetCollector.stop(),ggbetCollector.stop(),databetCollector.stop(),resultsService.stop(),pinnacleCollector.stop()]);
   try{ggbetSupervisor?.stop();}catch{}
   try{ggbetBrowser?.stop();}catch{}
+  await eventHistory?.stop();
   await collectorForensics?.stop();
   await retention?.stop();
   await Promise.allSettled([server.stopStatistics(),oddsService.stop()]);

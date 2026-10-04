@@ -10,8 +10,8 @@
 
 | Каталог | Что внутри |
 |---|---|
-| `server/` | Сервер 4.7.0: `src/`, тесты `test/`, `Dockerfile`, `docker-compose.yml`, скрипты установки/обновления/отката/резервной копии/очистки |
-| `extension/` | Расширение 9.0.0 (без сборки) + `test/` + `browser-host/` (помощник для Windows) |
+| `server/` | Сервер 4.15.0: `src/`, тесты `test/`, `Dockerfile`, `docker-compose.yml`, скрипты установки/обновления/отката/резервной копии/очистки |
+| `extension/` | Расширение 9.2.0 (без сборки) + `test/` + `browser-host/` (помощник для Windows) |
 | `docs/` | Аудит, карта функциональности, контракт API, развёртывание, бюджет ресурсов, чек‑лист совместимости |
 | `tools/` | Проверки и замеры: сравнение с оригиналом, e2e‑тест в Chromium, бенчмарки, сборка архивов релиза |
 
@@ -44,3 +44,7 @@ python3 tools/package-release.py                # ZIP‑архивы server и e
 ## Persistent collector forensics (server 4.14.0)
 
 AstekBet, Fonbet, Pinnacle, GGBET Node and Firefox IPC share a bounded private telemetry timeline. Read-only time-window queries and incident reports: [COLLECTOR_FORENSICS.md](COLLECTOR_FORENSICS.md). Existing GGBET forensic remains intact.
+
+## SQLite match history (server 4.15.0, extension 9.2.0)
+
+The match card **История** opens a combined score/odds change timeline from the primary SQLite database. See [MATCH_HISTORY.md](docs/MATCH_HISTORY.md) for provenance, retention, API pagination and safe enablement.

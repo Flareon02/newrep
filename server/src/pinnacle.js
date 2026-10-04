@@ -1,3 +1,4 @@
+import {historyEventMeta} from './history-model.js';
 import { forensic, forensicSpan, errorFields, eventCounts } from './collector-forensics.js';
 import {randomUUID} from 'node:crypto';
 import Games from './game-categories.cjs';
@@ -30,7 +31,7 @@ function normalizeMarkets(markets,{includeClosed=false}={}){
  return byMatch;
 }
 export function parsePinnacle(matchups,markets,at=Date.now(),mode='prematch',options={}){
- const byMatch=normalizeMarkets(markets,options);
+ const byMatch=normalizeMarkets(markets,options),historyByMatch=normalizeMarkets(markets,{includeClosed:true});
  return (matchups||[]).filter(m=>m.type==='matchup'&&(mode==='live'?m.isLive:!m.parentId&&!m.isLive)&&!['closed','settled','cancelled','deleted'].includes(m.status)).flatMap(m=>{
   const home=m.participants?.find(p=>p.alignment==='home'),away=m.participants?.find(p=>p.alignment==='away'),startAt=Date.parse(m.startTime);if(!home?.name||!away?.name||!Number.isFinite(startAt)||!m.league?.id)return [];
   // Pinnacle period numbers are internal IDs, not map numbers. Also, a
@@ -44,7 +45,9 @@ export function parsePinnacle(matchups,markets,at=Date.now(),mode='prematch',opt
   }).filter(market=>options.includeClosed||market.status==='open');
   // The LIVE incarnation has a new ID; its parent is the original line fixture.
   const id=mode==='live'?(m.parentId||m.id):m.id;
-  return [{id:'pinnacle-'+id,sourceEventId:String(id),upstreamEventId:String(m.id),source:'pinnacle',provider:'Pinnacle',category:Games.resolve('Esports',m.league.name),league:pinnacleLeague(m.league.name),rawLeague:m.league.name,leagueId:String(m.league.id),team1:home.name,team2:away.name,startAt,bestOf:Number(m.bestOfX)||0,marketKind:'main',url:'https://www.pinnacle.com/en/esports/'+slug(m.league.name)+'/'+slug(home.name+' vs '+away.name)+'/'+m.id+'/',odds:{team1:home.name,team2:away.name,updatedAt:at,stale:false,transport:mode==='live'?'sport-live':'sport-prematch',markets:normalized}}];
+  const statScore=p=>p.stats?.find(x=>Number(x.period)===0&&x.score!=null&&Number.isFinite(Number(x.score)))?.score;
+  const hs=statScore(home),as=statScore(away),observedScore=hs!=null&&as!=null?String(hs)+':'+String(as):null;
+  return [historyEventMeta({id:'pinnacle-'+id,sourceEventId:String(id),upstreamEventId:String(m.id),source:'pinnacle',provider:'Pinnacle',category:Games.resolve('Esports',m.league.name),league:pinnacleLeague(m.league.name),rawLeague:m.league.name,leagueId:String(m.league.id),team1:home.name,team2:away.name,startAt,bestOf:Number(m.bestOfX)||0,marketKind:'main',url:'https://www.pinnacle.com/en/esports/'+slug(m.league.name)+'/'+slug(home.name+' vs '+away.name)+'/'+m.id+'/',odds:{team1:home.name,team2:away.name,updatedAt:at,stale:false,transport:mode==='live'?'sport-live':'sport-prematch',markets:normalized}},{eventVersion:m.version??null,score:m.score??m.state?.score??observedScore,clock:m.clock??m.state?.clock??null,gameState:m.status??null,providerState:{state:m.state??null,periods:m.periods??null},markets:(historyByMatch.get(m.id)||[]).map(mm=>({...mm,status:(periodStates.get(Number(mm.period)||0)||'open')==='open'?mm.status:periodStates.get(Number(mm.period)||0)}))})];
  });
 }
 
