@@ -1,4 +1,4 @@
-/* global chrome, MatchHistory, modal, request, document */
+/* global chrome, DetailPanel, layoutDetail, request, document */
 // Real extension UI against a local API. Credentials remain in the disposable browser profile only.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
@@ -11,11 +11,11 @@ try{
  let [worker]=context.serviceWorkers();worker||=await context.waitForEvent('serviceworker',{timeout:15000});const id=new URL(worker.url()).host;
  await worker.evaluate(async ({base,token})=>{await chrome.storage.local.set({server:{base,token}});},{base,token});
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(`chrome-extension://${id}/app.html`);await page.waitForFunction(()=>typeof MatchHistory!=='undefined'&&typeof modal==='function');await page.waitForTimeout(1000);
- for(const sample of samples){await page.evaluate(e=>MatchHistory.open(e,{modal,request}),sample.event);await page.waitForFunction(()=>document.getElementById('historyEntries')?.children.length>0,{timeout:15000});
+ for(const sample of samples){await page.evaluate(async e=>{const feed=await request('/api/ui/live');const current=feed.events.find(r=>r.id===e.id);if(!current)throw Error('Real acceptance event no longer live');DetailPanel.show(current,'live');layoutDetail();},sample.event);await page.locator('[data-dp="history"]').click();await page.waitForFunction(()=>document.getElementById('historyEntries')?.children.length>0,{timeout:15000});
    const selector=`[data-history-id="${sample.entry.id}"]`;let row=page.locator(selector);for(let n=0;n<5&&!(await row.count());n++){const more=page.locator('#historyMore');if(!await more.isVisible())break;await more.click();await page.waitForTimeout(500);row=page.locator(selector);}
    const text=await row.innerText();if(!text.includes(String(sample.entry.oldValue))||!text.includes(String(sample.entry.newValue))||!text.includes('→'))throw Error('Old/new values absent from rendered row');
-   const requests=[];page.on('request',r=>{if(r.url().includes('/history?'))requests.push(new URL(r.url()).searchParams.get('provider'));});await page.locator(`[data-history-provider="${sample.entry.provider}"]`).click();await page.waitForFunction(()=>document.getElementById('historyStatus')?.textContent.includes('изменений'));await page.screenshot({path:path.join(out,'ui-'+sample.entry.kind+'.png'),fullPage:true});
-   results.push({kind:sample.entry.kind,entryId:sample.entry.id,provider:sample.entry.provider,publicationSource:sample.entry.publicationSource,renderedText:text,providerFilterRequested:requests.includes(sample.entry.provider)});await page.locator('#historyClose').click();
+   const requests=[];page.on('request',r=>{if(r.url().includes('/history?'))requests.push(new URL(r.url()).searchParams.get('provider'));});await page.locator(`[data-history-provider="${sample.entry.provider}"]`).click();await page.waitForFunction(()=>document.getElementById('historyStatus')?.textContent.includes('изменений'));await page.screenshot({path:path.join(out,'ui-'+sample.entry.kind+'.png'),fullPage:true});const before=requests.length;await page.waitForTimeout(5500);const autoRefreshRequested=requests.length>before;
+   results.push({kind:sample.entry.kind,entryId:sample.entry.id,provider:sample.entry.provider,publicationSource:sample.entry.publicationSource,renderedText:text,providerFilterRequested:requests.includes(sample.entry.provider),historyButtonClicked:true,autoRefreshRequested});await page.locator('#historyClose').click();
  }
  if(errors.length)throw Error('Page errors: '+errors.join('; '));
  fs.writeFileSync(path.join(out,'extension-proof.json'),JSON.stringify({at:new Date().toISOString(),runtime:'Chromium unpacked extension 9.2.0',apiBase:base,results,pageErrors:errors},null,2),{mode:0o600});console.log(JSON.stringify({results,pageErrors:errors}));

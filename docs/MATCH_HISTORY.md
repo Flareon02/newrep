@@ -1,8 +1,8 @@
 # SQLite match history
 
-Server 4.15.0 and the updated extension 9.2.0 use the primary `monitor-v2.sqlite3` database.
+Server 4.15.1 and the updated extension 9.2.0 use the primary `monitor-v2.sqlite3` database.
 The match detail **История** button opens a newest-first UTC score/odds timeline with bookmaker filters,
-100 visible changes per page, and **Показать ещё**. Existing score and odds snapshot views remain available.
+100 visible changes per page, and **Показать ещё**. Latest-page refresh runs every five seconds; older pages stay in place. Existing score and odds snapshot views remain available.
 Updating/reloading the extension files is required to get the new button; a server deployment cannot install UI code on a user's device.
 
 ## Storage and publication
@@ -34,7 +34,8 @@ Firefox's actual network timestamp, which the production IPC does not expose.
 `HISTORY_TOUCH_PERSIST_MS=900000` to avoid re-enabling large current-snapshot writes.
 Set `ODDS_RETENTION_DAYS=7`, `SCORE_RETENTION_DAYS=7`, `HISTORY_MIN_FREE_MIB=4096`.
 The SQLite worker uses bounded observation credits, 250 ms buffered transactions, a 150 ms busy timeout,
-and independent error/drop counters. Disk failure must not reject a collector update.
+and independent error/drop counters. SQLITE_BUSY/LOCKED batches retry for up to five seconds,
+with at most 4,096 queued change records and an 8 MiB queue; permanent errors fail open. Disk failure must not reject a collector update.
 Every 30 seconds, up to 500 old odds rows and 500 old score rows are deleted using time indexes,
 including rows belonging to active events. Market reference rows cascade on deletion; old dedup metadata is pruned.
 Free SQLite pages are reused; no production VACUUM or separate raw/file journal is needed.
@@ -62,8 +63,8 @@ No source fetch, full-market lease or public SSE change is required by a history
 Use `tools/history-loadtest.mjs` on an isolated SQLite backup for local API/Unix IPC capture, then
 `tools/history-replay.mjs` to separate migration/baseline growth from steady updates.
 The initial two-minute all-provider capture had 5,391 observations, no API/capture errors;
-corrected replay estimated 179,552 rows/day, 368 MiB/day DB growth, 0.41 transactions/second,
-0.51% of one CPU and 4.1 MiB peak WAL. Threefold seven-day planning estimate: 7.5 GiB.
+corrected replay estimated 185,774 rows/day, 437 MiB/day DB growth, 0.41 transactions/second,
+0.43% of one CPU and 4.1 MiB peak WAL. Threefold seven-day planning estimate: 9.0 GiB.
 These are short-window estimates; polling can miss fast intermediate updates, and production metadata may add rows.
 Monitor actual writer counters, DB/WAL size, event loop and source freshness after enabling.
 
