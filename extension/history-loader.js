@@ -1,5 +1,5 @@
 'use strict';
-/* History, loaded progressively (9.2 UX).
+/* History, loaded progressively (9.3).
 
    The History tab never asks for the whole archive. It is a list of sections, each one a small server query:
      1. «Сейчас в LIVE»   phase=live
@@ -67,7 +67,11 @@
      const events=Array.isArray(page?.events)?page.events:[];
      if(offset>0){const seen=new Set(s.rows.map(e=>String(e.id)));s.rows=s.rows.concat(events.filter(e=>!seen.has(String(e.id))));}
      else s.rows=events;
-     s.total=Math.max(Number(page?.total)||0,s.rows.length);s.hasMore=s.rows.length<s.total;s.facets=page?.facets?.categories||null;
+     // A server page that scanned only the recent part of the archive reports totalExact:false and a lower-bound total;
+     // an empty answer then means "nothing found here", never "one more page".
+     s.exact=page?.totalExact!==false;
+     if(!events.length&&(offset>0||!s.exact)){s.total=s.rows.length;s.hasMore=false;}
+     else{s.total=Math.max(Number(page?.total)||0,s.rows.length);s.hasMore=s.rows.length<s.total;}s.facets=page?.facets?.categories||null;
      s.at=clock();s.stale=false;s.state='ready';
      if(s.kind==='day'){if(s.total===0)q.emptyRun++;else q.emptyRun=0;}
     }catch(error){
@@ -83,7 +87,7 @@
    const sm=q.summary;if(sm.state==='loading'||(sm.state==='ready'&&!sm.stale))return;
    sm.state='loading';changed();const signal=q.controller.signal;
    const p=new URLSearchParams(q.base);p.delete('phase');p.delete('offset');p.set('phase','removed');p.set('limit','1');if(q.hours)p.set('hours',String(q.hours));else p.delete('hours');
-   try{const page=await fetchPage(p.toString(),{signal});if(signal.aborted)return;sm.total=Number(page?.total)||0;sm.facets=page?.facets?.categories||[];sm.at=clock();sm.stale=false;sm.state='ready';}
+   try{const page=await fetchPage(p.toString(),{signal});if(signal.aborted)return;sm.total=Number(page?.total)||0;sm.exact=page?.totalExact!==false;sm.facets=page?.facets?.categories||[];sm.at=clock();sm.stale=false;sm.state='ready';}
    catch(error){if(error?.name==='AbortError'||signal.aborted){sm.state=sm.total==null?'idle':'ready';return;}sm.state='error';sm.error=error?.message||String(error);}
    finally{changed();}
   }
@@ -109,7 +113,8 @@
   function nextDay(q){const last=q.sections.get(q.days.at(-1));return last?shiftDay(last.day,-1):dayKey(clock());}
   function canLoadOlder(q=current){
    if(!q||!wantsDays(q)||q.exhausted)return false;
-   const rest=remaining(q);if(rest===0)return false;
+   // Only an exact summary can end the archive; a lower bound never does (the empty-day pause ends it then).
+   const rest=remaining(q);if(rest===0&&q.summary.exact!==false)return false;
    const day=nextDay(q),startMs=windowStart(q);if(startMs&&dayStart(day)+DAY-1<startMs)return false;
    if(q.days.length>=maxDaysBack)return false;
    return true;
@@ -121,7 +126,7 @@
    const last=q.sections.get(q.days.at(-1));if(last?.state==='loading')return null;if(last?.state==='error')return run(q,last);
    if(user){q.paused=false;q.emptyRun=0;}
    if(q.paused)return null;
-   if(!canLoadOlder(q)){if(q.summary.state==='ready'||q.days.length>=maxDaysBack)q.exhausted=remaining(q)===0||q.days.length>=maxDaysBack;changed();return null;}
+   if(!canLoadOlder(q)){if(q.summary.state==='ready'||q.days.length>=maxDaysBack)q.exhausted=(remaining(q)===0&&q.summary.exact!==false)||q.days.length>=maxDaysBack;changed();return null;}
    if(q.emptyRun>=maxEmptySkip){q.paused=true;changed();return null;}
    return run(q,addDay(q,nextDay(q)));
   }
@@ -141,14 +146,14 @@
   // covers LIVE, line and the archive: the summary's when it is there, else the LIVE or line section's.
   function facets(){const q=current;if(!q)return null;return q.summary.facets||q.sections.get('live')?.facets||q.sections.get('line')?.facets||q.sections.get(q.days[0])?.facets||null;}
   function total(){const q=current;if(!q)return 0;let n=0;for(const kind of ['live','line'])n+=q.sections.get(kind)?.total||0;if(wantsDays(q))n+=q.summary.total??sections().filter(s=>s.kind==='day').reduce((a,s)=>a+s.total,0);return n;}
-  function status(){const q=current;if(!q)return null;return {key:q.key,loading:[...q.sections.values()].some(s=>s.state==='loading'),loadingOlder:q.sections.get(q.days.at(-1))?.state==='loading',remaining:remaining(q),canLoadOlder:canLoadOlder(q),paused:q.paused,exhausted:q.exhausted||(q.summary.state==='ready'&&remaining(q)===0),summary:q.summary.state,next:wantsDays(q)?nextDay(q):'',total:total()};}
+  function status(){const q=current;if(!q)return null;return {key:q.key,loading:[...q.sections.values()].some(s=>s.state==='loading'),loadingOlder:q.sections.get(q.days.at(-1))?.state==='loading',remaining:remaining(q),remainingExact:q.summary.exact!==false,canLoadOlder:canLoadOlder(q),paused:q.paused,exhausted:q.exhausted||(q.summary.state==='ready'&&q.summary.exact!==false&&remaining(q)===0),summary:q.summary.state,next:wantsDays(q)?nextDay(q):'',total:total()};}
   function find(id){const q=current;if(!q)return null;for(const s of q.sections.values()){const e=s.rows.find(x=>String(x.id)===String(id));if(e)return e;}return null;}
   // A small copy for an instant first paint after a restart (shown as stale, refreshed at once).
-  function snapshot(maxRows=300){const q=current;if(!q)return null;let budget=maxRows;const take=s=>{const rows=s.rows.slice(0,Math.max(0,budget));budget-=rows.length;return {id:s.id,kind:s.kind,day:s.day,rows,total:s.total};};return {key:q.key,base:q.base,phase:q.phase,hours:q.hours,at:clock(),sections:sections().filter(s=>s.state==='ready').slice(0,3).map(take),summary:{total:q.summary.total,facets:q.summary.facets}};}
+  function snapshot(maxRows=300){const q=current;if(!q)return null;let budget=maxRows;const take=s=>{const rows=s.rows.slice(0,Math.max(0,budget));budget-=rows.length;return {id:s.id,kind:s.kind,day:s.day,rows,total:s.total};};return {key:q.key,base:q.base,phase:q.phase,hours:q.hours,at:clock(),sections:sections().filter(s=>s.state==='ready').slice(0,3).map(take),summary:{total:q.summary.total,exact:q.summary.exact,facets:q.summary.facets}};}
   function restore(snap){
    if(!snap?.key||!Array.isArray(snap.sections)||cache.has(snap.key))return false;
    const q=newQuery(snap.key,snap);for(const x of snap.sections){if(x.kind==='day'&&x.day!==dayKey(clock())&&!q.days.length)continue;const s=section(q,x.id,{kind:x.kind,day:x.day});s.rows=x.rows||[];s.total=Math.max(Number(x.total)||0,s.rows.length);s.hasMore=s.rows.length<s.total;s.state='ready';s.at=Number(snap.at)||1;s.stale=true;if(x.kind==='day')q.days.push(x.id);}
-   if(snap.summary?.total!=null){q.summary={state:'ready',total:snap.summary.total,facets:snap.summary.facets||null,at:Number(snap.at)||1,stale:true};}
+   if(snap.summary?.total!=null){q.summary={state:'ready',total:snap.summary.total,exact:snap.summary.exact,facets:snap.summary.facets||null,at:Number(snap.at)||1,stale:true};}
    cache.set(snap.key,q);return true;
   }
   function abort(){current?.controller.abort(abortError());if(current){for(const s of current.sections.values())if(s.state==='loading')s.state=s.rows.length?'ready':'idle';if(current.summary.state==='loading')current.summary.state='idle';current.controller=new AbortController();}}

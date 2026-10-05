@@ -14,7 +14,7 @@ const timeFmt=new Intl.DateTimeFormat('ru-RU',{timeZone:ZONE,hour:'2-digit',minu
 const stamp=(ms,full=false,seconds=false)=>Number(ms)>0?`${full?dateFmt.format(ms)+' ':''}${(seconds?secondFmt:timeFmt).format(ms)}`:'—';
 const dayKey=(ms=Date.now())=>new Date(ms+14400000).toISOString().slice(0,10),shiftDay=(d,n)=>new Date(Date.parse(d+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
 const VIEWS=['live','prematch','results','compare','history'];
-// DataBet is not part of the active source set (9.2): it is not shown anywhere.
+// DataBet is not part of the active source set (9.3): it is not shown anywhere.
 const BOOKS=['astek','fonbet','pinnacle','ggbet'];
 const providerName=source=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET'})[source]||source;
 const providerShort=source=>({astek:'Astek',fonbet:'Fonbet',pinnacle:'Pinn',ggbet:'GG'})[source]||source;
@@ -59,10 +59,10 @@ function migratePrefs(){
  if(!['time','arb-desc','arb-asc'].includes(prefs.compareSort))prefs.compareSort='time';
  for(const key of ['favorites','hiddenLeagues'])if(!Array.isArray(prefs[key]))prefs[key]=[];
  prefs.notifications={...DEFAULT_PREFS.notifications,...prefs.notifications};
- // 9.2: DataBet retired, GGBET is a bookmaker like the others (its own show/hide switch).
+ // 9.3: DataBet retired, GGBET is a bookmaker like the others (its own show/hide switch).
  delete prefs.databet;delete prefs.liveOddsMode;prefs.liveOddsProvider='ggbet';if(prefs.detailBook==='databet')prefs.detailBook='';
  if(!['dark','light','system'].includes(prefs.theme))prefs.theme='dark';
- if(!prefs.ux920){if(prefs.viewFilters?.live?.availability==='databet')prefs.viewFilters.live.availability='all';delete prefs.lineCollapsed;prefs.ux920=true;}
+ if(!prefs.ux930){if(prefs.viewFilters?.live?.availability==='databet')prefs.viewFilters.live.availability='all';delete prefs.lineCollapsed;prefs.ux930=true;}
 }
 const bookVisible=source=>prefs[source]!==false&&OddsProvider.visible(source,prefs)&&Ent.canProvider(source);
 const viewBooks=view=>(view==='live'?['astek','fonbet','pinnacle',OddsProvider.selected(prefs)]:view==='results'?['astek','fonbet']:view==='history'?['astek','fonbet','pinnacle']:['astek','fonbet','pinnacle']).filter(s=>prefs[s]!==false&&Ent.canProvider(s));
@@ -402,7 +402,7 @@ function renderLive(force){
 }
 
 // Line: grouped by game > league (lazy league bodies) or a flat schedule rendered in pages.
-// Collapse model (9.2): closed games are remembered; open leagues live only in this session and are forgotten whenever
+// Collapse model (9.3): closed games are remembered; open leagues live only in this session and are forgotten whenever
 // their game (or everything) is collapsed. So every reopen is deterministic: games expanded, leagues collapsed.
 // (line-collapse.js)
 let lineFold=LineCollapse.create();let lineSchedulePages=1,lineFullRender=false;
@@ -496,9 +496,12 @@ function renderResults(force){
 function lastRemoval(r){const t=(r.timeline||[]).filter(c=>c.type==='removed'&&c.phase==='live').map(c=>Number(c.at)||0),l=t.length?[]:(r.lifecycle||[]).filter(c=>c.type==='removed').map(c=>Number(c.at)||0);return Math.max(0,...t,...l,Number(r.removedAt||0))||Number(r.endedAt||0);}
 function resultRow(e){
  const sel=selectedId('results')===String(e.id),fav=matchFavorite(e),d=MatchFormat.canonicalScore(refs(e)).best||MatchFormat.displayScore(refs(e)[0]||e,e),verified=refs(e).some(r=>r.resultVerified),ended=Math.max(0,...refs(e).map(lastRemoval));
- const score=d.series?`<span class="fs num">${d.series[0]} : ${d.series[1]}</span>`:`<span class="fs num">${esc(d.text||'—')}</span>`;
+ // Same score style as LIVE (series + maps); verification is a compact mark with a tooltip, not a sentence per row.
+ const score=d.series?`<span class="series num">${d.series[0]}:${d.series[1]}</span>`:`<span class="score-text">${esc(d.text||'—')}</span>`;
  const maps=d.series?mapsLine(d,false):'';
- return `<article class="match cols results" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}">${favButton(fav)}${teamsCell(e)}<div class="final">${score}${maps}<span class="${verified?'verified':'unverified'}">${verified?'✓ подтверждён':'не подтверждён'}</span></div><div class="when"><b>${esc(stamp(ended,false))}</b>${esc(stamp(e.startAt,true))} начало</div>${sourcesCell(e,'results')}<span class="go" aria-hidden="true">›</span></article>`;
+ const mark=verified?'<span class="res-mark ok" title="Результат подтверждён конторой" aria-label="подтверждён">✓</span>':'<span class="res-mark" title="Счёт ещё не подтверждён конторой" aria-label="не подтверждён">?</span>';
+ const sameDay=ended&&e.startAt&&dateFmt.format(ended)===dateFmt.format(e.startAt);
+ return `<article class="match cols results" data-id="${esc(e.id)}" tabindex="0" aria-selected="${sel}" aria-label="${esc(e.team1)} — ${esc(e.team2)}">${favButton(fav)}${teamsCell(e)}<div class="score-col final"><span class="final-line">${mark}${score}</span>${maps}</div><div class="when"><span class="strong" title="Окончание">${esc(stamp(ended,false))}</span><small title="Начало матча">начало ${esc(stamp(e.startAt,!sameDay))}</small></div>${sourcesCell(e,'results')}<span class="go" aria-hidden="true">›</span></article>`;
 }
 
 // History: progressive sections (history-loader.js) - LIVE, line, then the archive day by day, newest first. Only the
@@ -512,8 +515,16 @@ let historyPersistTimer=0;
 function scheduleHistoryPersist(){if(historyPersistTimer)return;historyPersistTimer=setTimeout(()=>{historyPersistTimer=0;const snap=History.snapshot(300);if(snap)persist.save('history',{v:2,snap});},5000);}
 const dayTitle=day=>{const today=dayKey(),label=weekdayFmt.format(Date.parse(day+'T12:00:00Z'));return day===today?'Сегодня · '+label:day===shiftDay(today,-1)?'Вчера · '+label:label;};
 function historySectionTitle(s){return s.kind==='live'?'Сейчас в LIVE':s.kind==='line'?'Сейчас в линии':dayTitle(s.day);}
-function historySectionHead(s){
- const n=s.rows.length,count=s.state==='ready'||n?plural(s.total,['матч','матча','матчей']):'',mark=s.kind==='live'?'<span class="dot bad" aria-hidden="true"></span>':s.kind==='line'?'<span class="dot accent" aria-hidden="true"></span>':'';
+// While the server's LIVE / line History query is still running (it can take seconds on a busy server), the section is
+// shown from the extension's own LIVE / line feed with the same History filters and projection; the server's answer
+// replaces it. Nothing extra is requested.
+function historyFeedRows(kind){const rows=visible(feedRows(kind==='live'?'live':'prematch'),'history');return (kind==='line'?rows.filter(e=>!refs(e).some(r=>r.inLive)):rows).sort((a,b)=>MatchView.appearance(b)-MatchView.appearance(a)||alphabet.compare(String(a.id),String(b.id)));}
+const historyProvisional=s=>s.kind!=='day'&&!s.rows.length&&['loading','idle'].includes(s.state)?historyFeedRows(s.kind):null;
+function historySectionHead(s,provisional=null,shown=null){
+ if(provisional)return `<div class="group-head history-head">${s.kind==='live'?'<span class="dot bad" aria-hidden="true"></span>':'<span class="dot accent" aria-hidden="true"></span>'}<span class="title">${esc(historySectionTitle(s))}</span><span class="n">${plural(provisional.length,['матч','матча','матчей'])}</span><span class="sec-state" role="status" title="Показано по ленте ${s.kind==='live'?'LIVE':'линии'}, история сервера ещё загружается"><span class="spinner" aria-hidden="true"></span>уточняется</span></div>`;
+ // The count is what the section shows: rows hidden by the History projection (e.g. LIVE-only matches never seen in the
+ // line, or a switched-off bookmaker) are not counted; while more pages exist the server total is shown.
+ const n=s.rows.length,count=s.state==='ready'||n?plural(s.hasMore||shown==null?s.total:shown,['матч','матча','матчей']):'',mark=s.kind==='live'?'<span class="dot bad" aria-hidden="true"></span>':s.kind==='line'?'<span class="dot accent" aria-hidden="true"></span>':'';
  const state=s.state==='loading'?'<span class="sec-state" role="status"><span class="spinner" aria-hidden="true"></span>загрузка</span>':s.state==='error'?`<span class="sec-state bad" role="alert">не загрузилось</span><button class="btn small" data-history-retry="${esc(s.id)}">Повторить</button>`:'';
  return `<div class="group-head history-head">${mark}<span class="title">${esc(historySectionTitle(s))}</span>${s.kind==='day'?'<span class="sub">сняты с линии и LIVE</span>':''}<span class="n">${count}</span>${state}</div>`;
 }
@@ -528,7 +539,7 @@ function renderHistory(force){
  categoryOptions(null,History.facets()||[],'history');
  const sig=JSON.stringify([History.version(),selectedId('history'),prefs.favorites.length,prefs.teamLogos,Logos.version(),[...historyWindow.parked.keys()].join()]);
  if(!force&&viewSignatures.get('history')===sig)return;viewSignatures.set('history',sig);
- const started=performance.now(),any=sections.some(s=>s.rows.length);
+ const started=performance.now(),provisional=new Map(sections.map(s=>[s.id,historyProvisional(s)]).filter(([,r])=>r?.length)),any=sections.some(s=>s.rows.length)||provisional.size>0;
  if(!any){
   const err=sections.find(s=>s.state==='error');
   if(sections.some(s=>s.state==='loading'||s.state==='idle')&&!err){skeleton(el,10);updateListHead('history',0);return;}
@@ -538,21 +549,24 @@ function renderHistory(force){
  const items=[{key:'head',html:'<div class="col-head cols history" data-group="head"><span></span><span>Матч</span><span class="right">Появился</span><span class="right">Начало</span><span class="right">Конторы</span><span></span></div>'}];
  for(const s of sections){
   if(s.kind==='day'&&s.state==='ready'&&!s.total)continue;          // an empty past day takes no space
-  const inDay=s.kind==='day',children=[{key:'h',html:historySectionHead(s)}];
+  const inDay=s.kind==='day',feed=provisional.get(s.id)||null,list=feed||s.rows,projected=list.map(raw=>projectRow(raw,'history')).filter(Boolean),children=[{key:'h',html:historySectionHead(s,feed,projected.length)}];
+  if(s.kind==='day'&&s.state==='ready'&&!s.hasMore&&!projected.length)continue;
   // Windowing: a section far outside the viewport keeps only its header and a placeholder of its measured height.
   if(historyWindow.parked.has(s.id)&&s.rows.length&&!s.rows.some(x=>String(x.id)===selectedId('history')))children.push({key:'ph',html:`<div class="section-ph" style="height:${Math.max(40,historyWindow.parked.get(s.id))}px" aria-hidden="true"></div>`});
-  else for(const raw of s.rows){const e=projectRow(raw,'history');if(e)children.push({key:'r:'+e.id,html:historyRowCached(e,inDay)});}
-  if(!s.rows.length&&s.state==='loading')children.push({key:'sk',html:`<div class="skeleton-rows" aria-hidden="true">${'<div class="skeleton-row"><div class="skeleton sk" style="width:16px"></div><div class="skeleton sk two"></div><div class="skeleton sk"></div><div class="skeleton sk"></div></div>'.repeat(3)}</div>`});
-  if(s.state==='ready'&&!s.total&&!inDay)children.push({key:'empty',html:`<div class="section-empty">${s.kind==='live'?'Сейчас нет матчей в LIVE':'Сейчас нет матчей в линии'}</div>`});
+  else for(const e of projected)children.push({key:'r:'+e.id,html:historyRowCached(e,inDay)});
+  if(!list.length&&s.state==='loading')children.push({key:'sk',html:`<div class="skeleton-rows" aria-hidden="true">${'<div class="skeleton-row"><div class="skeleton sk" style="width:16px"></div><div class="skeleton sk two"></div><div class="skeleton sk"></div><div class="skeleton sk"></div></div>'.repeat(3)}</div>`});
+  if(s.state==='ready'&&!projected.length&&!s.hasMore&&!inDay)children.push({key:'empty',html:`<div class="section-empty">${s.kind==='live'?'Сейчас нет матчей в LIVE':'Сейчас нет матчей в линии'}</div>`});
   if(s.hasMore)children.push({key:'more',html:`<div class="list-more inline"><button class="btn" data-history-more="${esc(s.id)}" ${s.state==='loading'?'disabled':''}>${s.state==='loading'?'Загружаем…':`Показать ещё ${Math.min(HISTORY_PAGE_SIZE,s.total-s.rows.length)} · осталось ${s.total-s.rows.length}`}</button></div>`});
   items.push({key:'s:'+s.id,tag:'section',attrs:{'data-group':'s:'+s.id,class:'history-section','aria-label':historySectionTitle(s)},children});
  }
  const loadingDay=sections.some(s=>s.kind==='day'&&s.state==='loading'&&s.rows.length===0&&s!==sections.find(x=>x.kind==='day'));
  const rest=st?.remaining,next=st?.next?weekdayFmt.format(Date.parse(st.next+'T12:00:00Z')):'';
+ // The server's count of older matches is exact only when it scanned the whole archive; otherwise it is a lower bound.
+ const restText=rest?(st.remainingExact?` · осталось ${plural(rest,['матч','матча','матчей'])}`:` · ещё не менее ${plural(rest,['матча','матчей','матчей'])}`):'';
  let foot;
  if(loadingDay)foot=`<div class="list-more" id="historySentinel"><span class="sec-state"><span class="spinner" aria-hidden="true"></span>Загружаем более ранние матчи…</span></div>`;
- else if(st?.paused)foot=`<div class="list-more" id="historySentinel"><span class="muted">За несколько дней подряд матчей нет${rest?` · ещё ${plural(rest,['матч','матча','матчей'])} раньше`:''}</span><button class="btn" data-history-older>Искать раньше</button></div>`;
- else if(st?.canLoadOlder)foot=`<div class="list-more" id="historySentinel"><button class="btn" data-history-older>Загрузить ${esc(next)}${rest?` · осталось ${plural(rest,['матч','матча','матчей'])}`:''}</button></div>`;
+ else if(st?.paused)foot=`<div class="list-more" id="historySentinel"><span class="muted">За несколько дней подряд матчей нет${restText}</span><button class="btn" data-history-older>Искать раньше</button></div>`;
+ else if(st?.canLoadOlder)foot=`<div class="list-more" id="historySentinel"><button class="btn" data-history-older>Загрузить ${esc(next)}${restText}</button></div>`;
  else foot='<div class="list-end">Это вся история по фильтрам</div>';
  items.push({key:'foot',html:foot});
  patchTree(el,items);saveLogosSoon();observeHistorySections(el);
@@ -715,7 +729,7 @@ function findRow(view,id){
  if(view==='live')return feedRows('live').find(match)||null;
  if(view==='prematch')return feedRows('prematch').find(match)||null;
  if(view==='results')return (resultsRes.peek(resultsKey())?.value?.events||[]).find(match)||null;
- if(view==='history')return History.find(id);
+ if(view==='history')return History.find(id)||feedRows('live').find(match)||feedRows('prematch').find(match)||null;
  if(view==='compare')return [...feedRows('live'),...feedRows('prematch')].find(match)||null;
  return null;
 }

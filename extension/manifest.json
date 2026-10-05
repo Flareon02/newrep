@@ -1,16 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Esports Monitor",
-  "version": "9.2.0",
-  "description": "Esports Monitor realtime thin shell: LIVE-first scheduling, bounded warm odds, incremental Results and progressive History.",
+  "version": "9.3.0",
+  "description": "Esports Monitor: LIVE, line, results and progressive History across bookmakers, with match statistics and odds.",
   "minimum_chrome_version": "120",
   "permissions": [
     "storage",
     "alarms",
     "notifications",
-    "unlimitedStorage",
-    "tabs",
-    "clipboardWrite",
+    "unlimitedStorage"
+  ],
+  "optional_permissions": [
     "nativeMessaging"
   ],
   "host_permissions": [

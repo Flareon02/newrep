@@ -1,5 +1,5 @@
 'use strict';
-/* Team logos from the data the extension already has (9.2 UX). Never searches the web and never builds URLs.
+/* Team logos from the data the extension already has (9.3). Never searches the web and never builds URLs.
 
    Order for one side of a match:
      1. the merged event's logo (the server picks one bookmaker's logo for the fixture),

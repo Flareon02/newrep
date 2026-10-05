@@ -1,5 +1,5 @@
 'use strict';
-/* Collapse model of the Line (game > league > matches), 9.2 UX.
+/* Collapse model of the Line (game > league > matches) (9.3).
 
    - Closed games are remembered (prefs); open leagues exist only in this session.
    - Collapsing a game forgets which of its leagues were open; collapsing everything forgets all of them.

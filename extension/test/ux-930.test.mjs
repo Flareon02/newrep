@@ -1,4 +1,4 @@
-// 9.2 UX behaviour: collapse model, panel toggle, copy/context menu model, stream links, logos, game icons, theme,
+// 9.3 behaviour: collapse model, panel toggle, copy/context menu model, stream links, logos, game icons, theme,
 // GGBET/DataBet and the CS2 board (event log collapsed, round outcomes never invented).
 import test from 'node:test';
 import assert from 'node:assert/strict';

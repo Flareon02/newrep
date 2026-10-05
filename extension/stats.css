@@ -1,4 +1,4 @@
-/* 9.2 UX: CS2 statistics board, round timeline, folds and stream links. Tokens only (dark and light themes). */
+/* 9.3: CS2 statistics board, round timeline, folds and stream links. Tokens only (dark and light themes). */
 
 /* ------------------------------------------------------------ disclosure (one chevron everywhere) */
 .caret{width:14px;height:14px;flex:none;color:var(--muted);transition:transform .15s var(--ease)}

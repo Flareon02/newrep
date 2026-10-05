@@ -181,3 +181,20 @@ test('a background refresh of today never swallows a request for an older day (r
   for (const c of b.calls.splice(0)) c.release(); await settle();
   assert.equal(h.status().loadingOlder, false);
 });
+
+test('real-server lower-bound totals (totalExact:false) never end the archive early; empty pages never offer "more" (regression)', async () => {
+  // Production answers the summary from a partial scan: a smaller total with totalExact:false.
+  const fetchPage = (query) => { const params = Object.fromEntries(new URLSearchParams(query)); const page = compactUiPayload(queryUiEvents(fx.events, params, { links: [] }, 'history'));
+    if (params.limit === '1') return Promise.resolve({ ...page, total: 300, totalExact: false });
+    if (params.end && Number(params.end) < NOW - 7 * 86400000 && page.total === 0) return Promise.resolve({ ...page, total: 1, hasMore: true, totalExact: false }); // "not exhausted" but nothing found
+    return Promise.resolve({ ...page, totalExact: true }); };
+  const h = HistoryLoader.create({ fetchPage, clock: () => NOW, maxEmptySkip: 3 });
+  h.setQuery({ base: BASE }); h.ensureInitial(); await settle();
+  assert.equal(h.status().remainingExact, false);
+  for (let i = 0; i < 40 && h.status().canLoadOlder; i++) { h.loadOlder(); await settle(); }
+  const days = h.sections().filter((s) => s.kind === 'day');
+  assert.ok(days.length >= 10, `kept going past the lower bound (${days.length} days)`);
+  assert.equal(h.status().exhausted, false, 'an inexact total never claims the end');
+  assert.equal(h.status().paused, true, 'it stops at the empty-day pause instead');
+  assert.ok(days.every((s) => !(s.rows.length === 0 && s.hasMore)), 'an empty page never shows "Показать ещё"');
+});

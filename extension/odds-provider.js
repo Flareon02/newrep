@@ -1,6 +1,6 @@
 /* LIVE odds provider: GGBET.
    DataBet (the second feed of the same platform) is not part of the active source set: it is never selected, shown,
-   requested or offered in the UI. A stored pre-9.2 DataBet preference resolves to GGBET. Pure helpers shared by the
+   requested or offered in the UI. A stored pre-9.3 DataBet preference resolves to GGBET. Pure helpers shared by the
    service worker and the app, kept independent from Chrome APIs so the rules can be regression-tested. */
 (function(root){
  const PROVIDERS=Object.freeze(['ggbet']);

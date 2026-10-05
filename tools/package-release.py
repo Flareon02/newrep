@@ -3,11 +3,15 @@
 
     python3 tools/package-release.py            ->  dist/Esports-Monitor-server-<ver>.zip
                                                      dist/Esports-Monitor-extension-<ver>.zip
+                                                     dist/Esports-Monitor-browser-host-<ver>-optional.zip
+    python3 tools/package-release.py --extension-only   (extension + optional helper, no server ZIP)
 
 Server ZIP: top folder astek-monitor-server-v<ver>/ with executable *.sh and the two empty
 secrets/ placeholder files that docker-compose bind-mounts (real values are created on the
 server by configure-ggbet-relay.sh / upgrade.sh and are never part of a release).
-Extension ZIP: top folder Esports-Monitor-v<ver>/, without the developer-only test/ folder.
+Extension ZIP: top folder Esports-Monitor-v<ver>/, runtime files only (no test/, no Markdown docs). It never contains
+the optional Windows helper (browser-host/: PowerShell installer + C# source, registry writes); that helper is a
+separate, optional ZIP so the extension package holds no scripts or executables.
 Only committed files are packaged, so secrets and local data cannot leak into a release.
 """
 import io, json, pathlib, subprocess, sys, tarfile, zipfile
@@ -49,9 +53,26 @@ def build_extension(version):
     top = f"Esports-Monitor-v{version}"
     target = dist / f"Esports-Monitor-extension-{version}.zip"
     with zipfile.ZipFile(target, "w") as zf:
-        for name, payload, executable in tracked("extension"):
-            if name.startswith("test/"):
+        for name, payload, executable in sorted(tracked("extension")):
+            if not runtime_file(name):
                 continue
+            write(zf, f"{top}/{name}", payload, executable)
+    return target
+
+
+RUNTIME_EXT = (".js", ".css", ".html", ".json", ".png", ".webp", ".svg")
+
+
+def runtime_file(name):
+    """Only files the browser loads at runtime go into the extension package."""
+    return not name.startswith(("test/", "browser-host/")) and name.lower().endswith(RUNTIME_EXT)
+
+
+def build_browser_host(version):
+    top = f"Esports-Monitor-browser-host-v{version}"
+    target = dist / f"Esports-Monitor-browser-host-{version}-optional.zip"
+    with zipfile.ZipFile(target, "w") as zf:
+        for name, payload, executable in sorted(tracked("browser-host")):
             write(zf, f"{top}/{name}", payload, executable)
     return target
 
@@ -64,7 +85,9 @@ def main():
     dist.mkdir(exist_ok=True)
     server_version = json.loads((root / "server/package.json").read_text())["version"]
     extension_version = json.loads((root / "extension/manifest.json").read_text())["version"]
-    for path in (build_server(server_version), build_extension(extension_version)):
+    builds = [] if "--extension-only" in sys.argv else [build_server(server_version)]
+    builds += [build_extension(extension_version), build_browser_host(extension_version)]
+    for path in builds:
         print(f"{path.relative_to(root)}  {path.stat().st_size // 1024} KiB")
     return 0
 

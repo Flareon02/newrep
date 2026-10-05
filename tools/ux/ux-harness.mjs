@@ -164,7 +164,7 @@ async function profile() {
   } finally { await server.close(); }
 }
 
-// Real-browser acceptance checks of the 9.2 UX (PASS/FAIL per check, exit code 1 on any failure).
+// Real-browser acceptance checks of extension 9.3 (PASS/FAIL per check, exit code 1 on any failure).
 async function verify() {
   const server = await startMockServer({ historyLatencyMs: 120 });
   const results = [];
@@ -301,6 +301,11 @@ async function verify() {
       expect(a[0] === 'light' && a[1] !== 'rgb(13, 17, 23)' && b[0] === 'light' && b[1] === 'light', JSON.stringify({ a, b }));
       await page.click('#themeButton'); await sleep(150);
       return { a, b };
+    });
+    await check('toolbar icon focuses the open monitor instead of opening a duplicate (no "tabs" permission)', async () => {
+      let [w] = b.context.serviceWorkers(); if (!w) w = await b.context.waitForEvent('serviceworker');
+      const r = await w.evaluate(async () => { const p = (await chrome.storage.local.get('prefs')).prefs || {}; await chrome.storage.local.set({ prefs: { ...p, openMode: 'tab' } }); await new Promise((x) => setTimeout(x, 200)); const count = async () => (await chrome.runtime.getContexts({ contextTypes: ['TAB'] })).filter((c) => c.documentUrl.startsWith(chrome.runtime.getURL('app.html'))).length; const before = await count(); await open(); await open(); return { before, after: await count(), perms: (await chrome.permissions.getAll()).permissions }; });
+      expect(r.before >= 1 && r.after === r.before, JSON.stringify(r)); expect(!r.perms.includes('tabs') && !r.perms.includes('nativeMessaging'), 'permissions ' + r.perms); return r;
     });
     await b.close();
   } finally { await server.close(); }

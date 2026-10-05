@@ -1,8 +1,8 @@
-# Extension 9.2.0 — UX / performance redesign (candidate)
+# Extension 9.3.0 — UX / performance redesign
 
 Frontend only. No server, collector, routing or protocol change: everything below uses parameters the current API
 already supports (`/api/ui/history` with `phase`, `hours`, `end`, `limit`, `offset`; `queryUiEvents` in
-`server/src/ui-service.js`). Version stays 9.2.0.
+`server/src/ui-service.js`). Works with the existing production backend (server 4.15.x).
 
 ## 1. Why History froze (measured, not guessed)
 
@@ -109,7 +109,7 @@ Sections, each a small query; nothing loads the whole archive:
 
 ## 5. Verification
 
-- `node --test extension/test/*.test.mjs` — unit tests incl. `history-loader.test.mjs` and `ux-920.test.mjs`.
+- `node --test extension/test/*.test.mjs` — unit tests incl. `history-loader.test.mjs` and `ux-930.test.mjs`.
 - `node tools/ux/ux-harness.mjs verify` — real-browser acceptance checks (panel toggle, CS2 log collapsed, copy match
   name, bookmaker URL available/unavailable, History request plan, toolbar stability, game menu keyboard, Line fold
   semantics, GGBET toggle + no DataBet, broken-logo retry storm, theme persistence).

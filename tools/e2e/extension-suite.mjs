@@ -376,45 +376,41 @@ scenario('E17', 'X2', 'SSE stream goes silent (half-dead connection): the worker
   await page.close();
 });
 
-scenario('E18', 'X1 X2 X4', 'LIVE odds provider GGBET <-> DataBet lives in Settings (Авто/GGBET/DataBet): requests follow the choice, providers never mix, the choice survives a reopen, an unavailable provider is explicit and non-technical', async () => {
+scenario('E18', 'X1 X2 X4', 'LIVE odds provider is GGBET only (9.3): DataBet is offered and requested nowhere, a stored DataBet preference migrates to GGBET, the GGBET switch is a display preference that leaves the feed unchanged', async () => {
   const shots = process.env.E2E_SCREENSHOTS || '';
   const shot = async (page, name) => { if (shots) await page.screenshot({ path: path.join(shots, name) }); };
-  const rowSources = (page) => page.$$eval('#content .list[data-view="live"] article.match [data-source-ref]', (rows) => [...new Set(rows.map((r) => r.dataset.sourceRef.split(':')[0]))]);
-  const selected = (page) => page.evaluate('OddsProvider.selected(prefs)');
-  const notice = (page) => page.evaluate(() => { const n = document.getElementById('providerNotice'); return n && !n.hidden ? n.textContent : ''; });
-  const setMode = async (page, mode) => { await page.click('#settingsButton'); await sleep(400); await page.click('[data-settings-section="sources"]'); await sleep(400); await page.click(`[data-odds-mode="${mode}"]`); await sleep(800); await page.click('#settingsDone'); await sleep(600); };
+  const liveCols = (page) => page.$$eval('#content .list[data-view="live"] .col-head .book-col', (n) => n.map((x) => x.textContent.trim()));
+  // An old profile that had chosen DataBet in 9.2.
+  await swEval(async () => { const p = (await chrome.storage.local.get('prefs')).prefs || {}; await chrome.storage.local.set({ prefs: { ...p, liveOddsProvider: 'databet', liveOddsMode: 'databet', databet: true } }); });
+  proxyState.liveProviders.length = 0; proxyState.streamProviders.length = 0;
   let page = await openApp();
   await until(async () => (await cards(page)) >= 1, { what: 'LIVE cards' });
-  if (await page.locator('#oddsSource, #ggbet, #databet').count()) throw new Error('the GGBET/DataBet switch is still on the main screen');
-  await until(async () => (await selected(page)) === 'ggbet', { what: 'Auto picks GGBET (DataBet is disabled on the local server)' });
-  await until(async () => !(await rowSources(page)).includes('databet'), { what: 'no DataBet rows while GGBET is selected' });
-  await shot(page, 'provider-ggbet-selected.png');
-  // Fixed choice in Settings: DataBet.
-  proxyState.liveProviders.length = 0; proxyState.streamProviders.length = 0;
-  await setMode(page, 'databet');
-  await until(async () => (await selected(page)) === 'databet', { what: 'DataBet selected' });
-  await until(async () => remote || (proxyState.liveProviders.includes('databet') && proxyState.streamProviders.includes('databet')), { what: 'LIVE feed and stream requested for DataBet' });
-  if (!remote && proxyState.liveProviders.some((p) => p !== 'databet')) throw new Error('a LIVE request after the switch did not name DataBet: ' + proxyState.liveProviders.join(','));
-  await until(async () => (await cards(page)) >= 1, { what: 'LIVE cards after the switch' });
-  await until(async () => !(await rowSources(page)).includes('ggbet'), { what: 'no GGBET rows while DataBet is selected' });
-  if (remote) await until(async () => (await rowSources(page)).includes('databet') || /DataBet временно недоступен/.test(await notice(page)), { timeout: 30000, what: 'DataBet rows or the explicit DataBet-unavailable notice' });
-  else await until(async () => /DataBet временно недоступен/.test(await notice(page)), { what: 'explicit "DataBet unavailable" notice (DataBet is disabled on the local server)' });
-  const text = await notice(page);
-  if (/proxy|прокси|CZECH|HTTP|ECONN|token|https?:/i.test(text)) throw new Error('technical reason shown to the user: ' + text);
-  if (await page.evaluate(() => !document.getElementById('banner').hidden)) throw new Error('provider outage shown as a server outage');
-  if ((await cards(page)) < 1) throw new Error('rows vanished while the provider is unavailable');
-  await shot(page, remote ? 'provider-databet-selected.png' : 'provider-databet-unavailable.png');
-  // The choice survives closing and reopening the extension page.
-  await page.close(); page = await openApp();
-  await until(async () => (await selected(page)) === 'databet', { what: 'DataBet still selected after reopen' });
+  if (await page.locator('#oddsSource, #ggbet, #databet, [data-odds-mode]').count()) throw new Error('a GGBET/DataBet provider switch is still present');
+  await until(async () => (await swEval(async () => (await chrome.storage.local.get('prefs')).prefs?.liveOddsProvider)) === 'ggbet', { what: 'stored DataBet preference migrated to GGBET' });
   const stored = await swEval(async () => (await chrome.storage.local.get('prefs')).prefs);
-  if (stored?.liveOddsProvider !== 'databet' || stored?.liveOddsMode !== 'databet') throw new Error('stored provider is ' + stored?.liveOddsProvider + '/' + stored?.liveOddsMode);
-  // Back to Auto: the working feed (GGBET here) is chosen again.
-  await setMode(page, 'auto');
-  await until(async () => (await selected(page)) === 'ggbet', { what: 'Auto returns to GGBET' });
-  await until(async () => !(await rowSources(page)).includes('databet') && !/DataBet временно недоступен/.test(await notice(page)), { what: 'GGBET view without DataBet rows or the DataBet notice' });
-  if (remote) await until(async () => (await rowSources(page)).includes('ggbet') || /GGBET временно недоступен/.test(await notice(page)), { timeout: 30000, what: 'GGBET rows or the explicit GGBET-unavailable notice' });
+  if ('databet' in stored || 'liveOddsMode' in stored) throw new Error('DataBet preferences kept: ' + JSON.stringify({ databet: stored.databet, mode: stored.liveOddsMode }));
+  await until(async () => remote || (proxyState.liveProviders.length > 0 && proxyState.streamProviders.length > 0), { what: 'LIVE feed and stream requests' });
+  if (!remote && [...proxyState.liveProviders, ...proxyState.streamProviders].some((p) => p !== 'ggbet')) throw new Error('a LIVE/stream request did not name GGBET: ' + [...proxyState.liveProviders, ...proxyState.streamProviders].join(','));
+  if (/DataBet/i.test(await page.evaluate(() => document.body.innerText))) throw new Error('DataBet is visible on the main screen');
+  // Settings → Источники: GGBET has its own switch; switching it off hides its column, the network does not change.
+  await page.click('#settingsButton'); await sleep(400); await page.click('[data-settings-section="sources"]'); await sleep(400);
+  const settingsText = await page.textContent('#settingsView');
+  if (/DataBet/i.test(settingsText) || !/GGBET/.test(settingsText)) throw new Error('Settings → Источники must list GGBET and no DataBet');
+  if (!(await page.locator('[data-book-setting="ggbet"]').count())) throw new Error('no GGBET switch in Settings');
+  await shot(page, 'sources-ggbet-switch.png');
+  const before = proxyState.liveProviders.length;
+  await page.click('[data-book-setting="ggbet"]'); await sleep(500); await page.click('#settingsDone'); await sleep(600);
+  if ((await swEval(async () => (await chrome.storage.local.get('prefs')).prefs?.ggbet)) !== false) throw new Error('GGBET off was not saved');
+  if (!remote && (await liveCols(page)).includes('GGBET')) throw new Error('GGBET column still shown while switched off');
+  await sleep(1500);
+  if (!remote && proxyState.liveProviders.slice(before).some((p) => p !== 'ggbet')) throw new Error('switching GGBET off changed the feed provider');
+  await page.close(); page = await openApp(); await until(async () => (await cards(page)) >= 1, { what: 'LIVE cards after reopen' });
+  if ((await swEval(async () => (await chrome.storage.local.get('prefs')).prefs?.ggbet)) !== false) throw new Error('GGBET off did not survive a reopen');
+  await page.click('#settingsButton'); await sleep(400); await page.click('[data-settings-section="sources"]'); await sleep(400);
+  await page.click('[data-book-setting="ggbet"]'); await sleep(500); await page.click('#settingsDone'); await sleep(600);
+  if ((await swEval(async () => (await chrome.storage.local.get('prefs')).prefs?.ggbet)) !== true) throw new Error('GGBET on was not saved');
   if (page.errors.length) throw new Error(page.errors.join(' | '));
+  results.note = `LIVE requests: ${[...new Set(proxyState.liveProviders)].join(',') || 'remote'}`;
   await page.close();
 });
 
@@ -560,11 +556,20 @@ scenario('E27', 'X1', 'Line: game > league hierarchy with counts; a collapsed ga
     if (await isOpen()) throw new Error('a refresh reopened the collapsed game');
     await page.reload(); await page.waitForSelector('#tabs [data-tab="prematch"]'); await clickTab(page, 'prematch'); await sleep(800);
     if (await isOpen()) throw new Error('the collapsed game reopened after a reload');
-    await page.click('[data-line-games="open"]'); await sleep(400);
+    // 9.3: one fold toggle ([data-line-fold]); expanding always gives games open + leagues collapsed (no nested state restored).
+    const fold = async (want) => { for (let i = 0; i < 2; i++) { const action = await page.getAttribute('[data-line-fold]', 'data-line-fold'); await page.click('[data-line-fold]'); await sleep(400); if (action === want) return; } throw new Error('fold toggle never offered ' + want); };   // one toggle: it names the action it performs (mixed state: collapse first)
     const states = () => page.evaluate(() => [...document.querySelectorAll('#content .list[data-view="prematch"] details.game-group')].map((d) => d.open));
+    const openLeagues = () => page.evaluate(() => document.querySelectorAll('#content .list[data-view="prematch"] details.league-group[open]').length);
+    await fold('open');
     if ((await states()).some((o) => !o)) throw new Error('expand all left a game closed');
-    await page.click('[data-line-games="close"]'); await sleep(400);
+    if (await openLeagues()) throw new Error('expand all opened leagues');
+    await page.locator('#content .list[data-view="prematch"] details.league-group > summary').first().click(); await sleep(300);
+    if ((await openLeagues()) !== 1) throw new Error('a league did not open');
+    await fold('close');
     if ((await states()).some((o) => o)) throw new Error('collapse all left a game open');
+    await fold('open');
+    if (await openLeagues()) throw new Error('the previously open league was restored after collapse/expand all');
+    await fold('close');
     // keyboard over the headers: focus the first game header, ArrowDown moves to the next header, Enter toggles
     await page.locator('#content .list[data-view="prematch"] details.game-group > summary').first().focus();
     await page.keyboard.press('ArrowDown'); await sleep(150);
@@ -572,7 +577,7 @@ scenario('E27', 'X1', 'Line: game > league hierarchy with counts; a collapsed ga
     await page.keyboard.press('Enter'); await sleep(300);
     const toggled = await page.evaluate(() => document.activeElement?.closest('details')?.open);
     if (!toggled) throw new Error(`Enter on the focused header (${focused}) did not open it`);
-    await page.click('[data-line-games="open"]'); await sleep(300);
+    await fold('open');
     results.note = `game count "${count.trim()}", header nav ok`;
   } finally { await page.close(); }
 });
@@ -723,9 +728,9 @@ scenario('E31', 'X1', 'screenshot matrix (narrow/medium/wide): LIVE, Prematch co
       const shot = (name) => page.screenshot({ path: path.join(shots, `${label}-${name}.png`) });
       await page.setViewportSize({ width, height }); await sleep(400);
       await clickTab(page, 'live'); await sleep(500); await shot('live');
-      await clickTab(page, 'prematch'); await page.waitForSelector('[data-line-games="close"]', { timeout: 30000 });
-      await page.click('[data-line-games="close"]'); await sleep(400); await shot('prematch-collapsed');
-      await page.click('[data-line-games="open"]'); await sleep(400); await shot('prematch-expanded');
+      await clickTab(page, 'prematch'); await page.waitForSelector('[data-line-fold]', { timeout: 30000 });
+      if ((await page.getAttribute('[data-line-fold]', 'data-line-fold')) === 'close') { await page.click('[data-line-fold]'); await sleep(400); } await shot('prematch-collapsed');
+      await page.click('[data-line-fold]'); await sleep(400); await shot('prematch-expanded');
       await clickTab(page, 'compare'); await sleep(1200); await shot('comparison');
       await clickTab(page, 'live'); await sleep(300);
       const rows = page.locator('#content .list[data-view="live"] article.match');

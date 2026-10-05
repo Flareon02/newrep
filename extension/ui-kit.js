@@ -1,5 +1,5 @@
 'use strict';
-/* Small shared UI components (9.2 UX): game listbox, context menu, disclosure chevron, stream links.
+/* Small shared UI components (9.3): game listbox, context menu, disclosure chevron, stream links.
    Plain DOM, no framework; markup helpers are pure functions (unit-tested through extension/test/ui-kit.test.mjs). */
 const UiKit=(()=>{
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

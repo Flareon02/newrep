@@ -41,7 +41,7 @@ function settingsDisplay(body){
  ${Ent.can('statistics.view')?`<section class="setting-card"><h3>Статистика</h3>${line('setDota','Статистика матчей Dota 2','Вкладка «Статистика» в карточке LIVE-матча.',prefs.dotaStatsEnabled===true)}</section>`:''}
  <section class="setting-card"><h3>Окно и ссылки</h3>
  <label class="field"><span>Открывать монитор</span><select id="setOpenMode" class="select"><option value="window">Отдельное окно приложения</option><option value="tab">Вкладка браузера</option></select><small>Применяется при следующем нажатии на значок расширения.</small></label>
- <label class="field"><span>Браузер для ссылок на конторы</span><select id="setBrowser" class="select" style="max-width:320px"><option value="current">Текущий браузер</option><option value="system">Системный браузер по умолчанию</option><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option><option value="firefox">Mozilla Firefox</option></select><small>Для другого браузера один раз установите помощник из папки browser-host. ID расширения: ${esc(chrome.runtime.id)}</small></label></section>
+ <label class="field"><span>Браузер для ссылок на конторы</span><select id="setBrowser" class="select" style="max-width:320px"><option value="current">Текущий браузер</option><option value="system">Системный браузер по умолчанию</option><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option><option value="firefox">Mozilla Firefox</option></select><small>Для другого браузера нужен отдельный помощник «Esports Monitor browser-host» (устанавливается один раз) и разрешение расширению на связь с ним. ID расширения: ${esc(chrome.runtime.id)}</small><small id="browserHostState" class="warn-note" hidden></small></label></section>
  ${Ent.can('tools.generator')?`<section class="setting-card"><h3>Экспериментальные функции</h3>${line('setGenerator','Генератор коэффициентов CS2','Расчёт собственной линии для матчей CS2.',prefs.generatorEnabled===true)}</section>`:''}`;
  $('setTheme').querySelectorAll('[data-theme-mode]').forEach(b=>b.onclick=()=>{setTheme(b.dataset.themeMode);for(const x of $('setTheme').querySelectorAll('button'))x.setAttribute('aria-pressed',String(x.dataset.themeMode===prefs.theme));});
  $('setOpenMode').value=prefs.openMode||'window';$('setBrowser').value=prefs.linkBrowser||'current';
@@ -50,7 +50,10 @@ function settingsDisplay(body){
  $('setExtras').onchange=()=>setPref('showExtras',$('setExtras').checked);
  if($('setDota'))$('setDota').onchange=()=>{setPref('dotaStatsEnabled',$('setDota').checked);if(!prefs.dotaStatsEnabled)DotaStatsPanel.clear?.();};
  $('setOpenMode').onchange=()=>setPref('openMode',$('setOpenMode').value);
- $('setBrowser').onchange=()=>setPref('linkBrowser',$('setBrowser').value);
+ // Another browser needs the native helper: the "nativeMessaging" permission is optional and asked for only here.
+ const hostNote=async()=>{const n=$('browserHostState');if(!n)return;const need=prefs.linkBrowser!=='current';const granted=need&&await chrome.permissions.contains({permissions:['nativeMessaging']}).catch(()=>false);n.hidden=!need||granted;n.textContent=need&&!granted?'Нет разрешения на связь с помощником: ссылки откроются в текущем браузере. Выберите браузер ещё раз, чтобы разрешить.':'';};
+ $('setBrowser').onchange=async()=>{const value=$('setBrowser').value;if(value!=='current'){let ok=false;try{ok=await chrome.permissions.request({permissions:['nativeMessaging']});}catch{}if(!ok){$('setBrowser').value=prefs.linkBrowser||'current';toast('Без разрешения ссылки открываются в текущем браузере');hostNote();return;}}setPref('linkBrowser',value);hostNote();};
+ hostNote();
  if($('setGenerator'))$('setGenerator').onchange=()=>setPref('generatorEnabled',$('setGenerator').checked);
 }
 function settingsSources(body){

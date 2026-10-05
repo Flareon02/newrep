@@ -233,6 +233,8 @@ button,input,select,textarea{font:inherit;color:inherit}
  .cols.results>.go,.cols.history>.go{display:none}
  .col-head.cols.results>:nth-child(n+4),.col-head.cols.history>:nth-child(n+4){display:none}
  .cols.history>.when:not(.strong)::before{content:'Начало ';color:var(--muted)}
+ .cols.results>.when{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
+ .cols.results>.when .strong::before{content:'окончание ';color:var(--muted);font-weight:400}
 }
 .col-head{position:sticky;top:0;z-index:5;padding:6px var(--s4);background:var(--bg);border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--fs-xs);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .col-head .book-col{display:flex;align-items:center;justify-content:center;gap:6px}
@@ -509,10 +511,6 @@ dialog#modal .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;ma
 #toast{position:fixed;left:50%;bottom:24px;z-index:60;transform:translateX(-50%);max-width:min(560px,92vw);padding:10px 16px;border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--raised);color:var(--text);box-shadow:var(--shadow);font-size:var(--fs-s)}
 
 /* results score */
-.final{display:grid;justify-items:end;gap:2px}
-.final .fs{font-size:var(--fs-l);font-weight:700;letter-spacing:.02em;white-space:nowrap}
-.final .maps-line{font-size:var(--fs-xs);color:var(--text-2);white-space:nowrap}
-.final .verified,.final .unverified{white-space:nowrap}
 
 /* capabilities: what the user may not use is not shown */
 html.no-favorites [data-fav],html.no-favorites [data-league-fav],html.no-favorites #favorites,html.no-favorites [data-dp="fav"]{display:none!important}
@@ -562,3 +560,15 @@ html.no-favorites [data-fav],html.no-favorites [data-league-fav],html.no-favorit
 /* scrollbars follow the theme */
 *{scrollbar-color:var(--line-strong) transparent}
 #toast{display:flex;align-items:center;gap:8px}
+.warn-note{color:var(--warn-text)}
+/* Results rows (9.3): same score typography as LIVE, compact verification mark, two-line time cell */
+.final{display:grid;justify-items:end;gap:2px}
+.final-line{display:inline-flex;align-items:center;gap:8px}
+.res-mark{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;font-size:11px;font-weight:700;color:var(--muted);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.res-mark.ok{color:var(--good-text);background:var(--good-soft);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--good) 45%,transparent)}
+.when .strong{display:block;color:var(--text);font-weight:600}
+.when small{display:block;color:var(--muted);font-size:var(--fs-xs)}
+/* Settings lines wrap on narrow windows (theme segmented control, long labels) */
+.setting-line{flex-wrap:wrap;row-gap:8px}
+.setting-line .text{flex:1 1 200px;min-width:0}
+.setting-line .segmented{flex-wrap:wrap;max-width:100%}
