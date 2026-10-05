@@ -36,7 +36,7 @@ async function notifyNew(kind,snapshot){
   if(prefs.notifications.favoritesOnly)fresh=fresh.filter(e=>[e.leagueKey,...(e.sourceRefs||[e]).map(r=>`${r.source}:${r.sourceEventId||r.id}`)].some(id=>(prefs.favorites||[]).includes(id)));
   for(const [index,e] of fresh.slice(0,8).entries()){
    const newRefs=(e.sourceRefs||[e]).filter(r=>prefs[r.source]!==false&&!before.has(`${r.source}:${r.sourceEventId||r.id}`));
-   const books=[...new Set((newRefs.length?newRefs:e.sourceRefs||[e]).map(r=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET',databet:'DataBet'})[r.source]||r.provider||r.source).filter(Boolean))].join(' + ');
+   const books=[...new Set((newRefs.length?newRefs:e.sourceRefs||[e]).map(r=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET'})[r.source]||r.provider||r.source).filter(Boolean))].join(' + ');
    await chrome.notifications.create(`${kind}-${Date.now()}-${index}`,{type:'basic',iconUrl:'icons/icon128.png',title:notificationLeague(e),message:`${e.team1} - ${e.team2}`,contextMessage:books,priority:0,silent:prefs.notifications.sound!==true});
   }
   if(fresh.length>8)await chrome.notifications.create(`${kind}-${Date.now()}-more`,{type:'basic',iconUrl:'icons/icon128.png',title:kind==='live'?'Ещё новые LIVE':'Ещё новые в линии',message:`Ещё событий: ${fresh.length-8}`,priority:0,silent:true});

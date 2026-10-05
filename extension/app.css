@@ -226,10 +226,6 @@ dialog[data-kind="book-odds"] .market-period{border:1px solid var(--line);border
 /* 6.10.6: keep the league-management DOM bounded and cheap to paint. */
 .league-list .league-row{content-visibility:auto;contain-intrinsic-size:72px}
 .league-more{display:block;width:calc(100% - 10px);margin:8px 5px 10px}
-/* LIVE odds provider selector (GGBET | DataBet): one segmented control inside the bookmaker toggles. */
-:root{--databet:#00a87e}
-.source.databet,.source-link.databet,#databet[aria-pressed=true]{color:var(--databet)}
-#databet[aria-pressed=true]{border-color:var(--databet);background:color-mix(in srgb,var(--databet) 12%,var(--surface))}
 .odds-source{display:inline-flex;align-items:center;flex:0 0 auto;gap:0}
 .odds-source[hidden]{display:none}
 .odds-source>button{border-radius:0}

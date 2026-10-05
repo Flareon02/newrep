@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- 16/32 px variant of icon.svg: the pulse and the live dot only, heavier strokes so they survive at 16 px. -->
+  <defs>
+    <linearGradient id="t" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1b2b4b"/><stop offset="1" stop-color="#0b1220"/></linearGradient>
+    <linearGradient id="p" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#5a98ff"/><stop offset="1" stop-color="#3fe2c6"/></linearGradient>
+  </defs>
+  <rect x="0.5" y="0.5" width="31" height="31" rx="7.5" fill="url(#t)"/>
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="none" stroke="#ffffff" stroke-opacity=".16" stroke-width="1"/>
+  <path d="M4 17 H 10 L 13.2 8.5 L 18.2 25 L 21.2 17 H 28" fill="none" stroke="url(#p)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="25.2" cy="7.2" r="3.6" fill="#ff5a52"/>
+</svg>

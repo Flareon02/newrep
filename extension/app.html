@@ -4,14 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Esports Monitor</title>
+<script src="theme-boot.js"></script>
 <script src="server-config.js"></script>
 <link rel="stylesheet" href="ui.css">
 <link rel="stylesheet" href="panels.css">
+<link rel="stylesheet" href="game-icons.css">
+<link rel="stylesheet" href="stats.css">
 </head>
 <body>
 <div id="app" class="app">
  <header class="topbar">
-  <div class="brand"><span class="brand-mark" aria-hidden="true">EM</span><span class="brand-name">Esports Monitor</span></div>
+  <div class="brand"><img class="brand-mark" src="icons/mark.svg" alt="" aria-hidden="true" width="28" height="28"><span class="brand-name">Esports Monitor</span></div>
   <nav id="tabs" class="nav" aria-label="Разделы">
    <button data-tab="live">LIVE <span id="liveCount" class="nav-count" aria-label="матчей в LIVE"></span></button>
    <button data-tab="prematch">Линия</button>
@@ -22,25 +25,30 @@
   <div class="topbar-right">
    <button id="sourcesButton" class="sources-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="sourcesPopover"><span id="sourcesDot" class="dot"></span><span>Источники</span><b id="sourcesCount">—</b></button>
    <div id="sourcesPopover" class="popover" role="dialog" aria-label="Состояние источников" hidden></div>
+   <button id="themeButton" class="icon-btn theme-btn" aria-label="Тема"><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg></button>
    <button id="settingsButton" class="icon-btn" aria-label="Настройки" title="Настройки"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.6Z"/></svg></button>
   </div>
  </header>
  <div id="banner" class="banner" role="status" hidden></div>
  <div id="providerNotice" class="banner warn" role="status" hidden></div>
  <section id="toolbar" class="toolbar" aria-label="Фильтры">
-  <label class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="search" class="input" type="search" placeholder="Команда, лига или игра" aria-label="Поиск" autocomplete="off"></label>
-  <select id="category" class="select" aria-label="Игра"><option value="">Все игры</option></select>
-  <select id="availability" class="select" aria-label="Наличие у контор"><option value="all">Все матчи</option><option value="both">У нескольких контор</option><option value="unique">Только у одной</option><option value="astek">Только AstekBet</option><option value="fonbet">Только Fonbet</option><option value="pinnacle">Только Pinnacle</option><option value="ggbet">Только GGBET</option><option value="databet">Только DataBet</option></select>
-  <select id="startWindow" class="select" aria-label="Время"></select>
-  <select id="historyPhase" class="select" aria-label="Состояние матча" hidden><option value="">Все появления</option><option value="line">Сейчас в линии</option><option value="live">Сейчас в LIVE</option><option value="removed">Сняты с линии и LIVE</option></select>
-  <select id="liveSort" class="select" aria-label="Сортировка"><option value="league">По лигам</option><option value="desc">Сначала новые</option><option value="asc">Сначала давние</option></select>
-  <span id="lineMode" class="segmented" role="group" aria-label="Вид линии" hidden><button type="button" data-line-mode="leagues">По лигам</button><button type="button" data-line-mode="schedule">По времени</button></span>
-  <span id="dateControl" class="date-nav" hidden><button id="prevDate" class="btn" aria-label="Предыдущий день">‹</button><button id="dateButton" class="btn" aria-haspopup="dialog"></button><button id="nextDate" class="btn" aria-label="Следующий день">›</button><button id="today" class="btn ghost">Сегодня</button></span>
-  <span id="compareMode" class="segmented" role="group" aria-label="Режим сравнения" hidden><button type="button" data-compare-mode="odds">Коэффициенты</button><button type="button" data-compare-mode="schedule">Расписание из файла</button></span>
-  <select id="compareSort" class="select" aria-label="Порядок сравнения" hidden><option value="time">По времени</option><option value="arb-desc">Вилка: больше → меньше</option><option value="arb-asc">Вилка: меньше → больше</option></select>
-  <span id="compareScope" class="segmented" role="group" aria-label="Матчи для сравнения" hidden><button type="button" data-compare-scope="live">LIVE</button><button type="button" data-compare-scope="prematch">Линия</button></span>
-  <button id="favorites" class="btn fav-toggle" aria-pressed="false" title="Только избранные матчи и лиги"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.55 4.44 1.08 6.26L12 17.35l-5.63 2.95 1.08-6.26L2.9 9.6l6.3-.9L12 3Z"/></svg>Избранное</button>
-  <button id="resetFilters" class="btn ghost" hidden>Сбросить</button>
+  <label class="search tb-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="search" class="input" type="search" placeholder="Команда, лига или игра" aria-label="Поиск" autocomplete="off"></label>
+  <div id="gameMenu" class="game-menu tb-game"><button id="categoryButton" type="button" class="select-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="categoryList"></button><div id="categoryList" class="lb-list" role="listbox" tabindex="-1" aria-label="Игра" hidden></div></div>
+  <div id="toolbarView" class="tb-view" role="group" aria-label="Фильтры раздела">
+   <select id="availability" class="select w-availability" aria-label="Наличие у контор" title="Наличие у контор"><option value="all">Все матчи</option><option value="both">У нескольких контор</option><option value="unique">Только у одной</option><option value="astek">Только AstekBet</option><option value="fonbet">Только Fonbet</option><option value="pinnacle">Только Pinnacle</option><option value="ggbet">Только GGBET</option></select>
+   <select id="startWindow" class="select w-window" aria-label="Время" title="Время"></select>
+   <select id="historyPhase" class="select w-phase" aria-label="Состояние матча" title="Состояние матча" hidden><option value="">Все появления</option><option value="line">Сейчас в линии</option><option value="live">Сейчас в LIVE</option><option value="removed">Сняты с линии и LIVE</option></select>
+   <select id="liveSort" class="select w-sort" aria-label="Сортировка" title="Сортировка"><option value="league">По лигам</option><option value="desc">Сначала новые</option><option value="asc">Сначала давние</option></select>
+   <span id="lineMode" class="segmented" role="group" aria-label="Вид линии" hidden><button type="button" data-line-mode="leagues">По лигам</button><button type="button" data-line-mode="schedule">По времени</button></span>
+   <span id="dateControl" class="date-nav" hidden><button id="prevDate" class="btn icon-only" aria-label="Предыдущий день" title="Предыдущий день">‹</button><button id="dateButton" class="btn w-date" aria-haspopup="dialog"></button><button id="nextDate" class="btn icon-only" aria-label="Следующий день" title="Следующий день">›</button><button id="today" class="btn ghost">Сегодня</button></span>
+   <span id="compareMode" class="segmented" role="group" aria-label="Режим сравнения" hidden><button type="button" data-compare-mode="odds">Коэффициенты</button><button type="button" data-compare-mode="schedule">Расписание из файла</button></span>
+   <span id="compareScope" class="segmented" role="group" aria-label="Матчи для сравнения" hidden><button type="button" data-compare-scope="live">LIVE</button><button type="button" data-compare-scope="prematch">Линия</button></span>
+   <select id="compareSort" class="select w-sort-wide" aria-label="Порядок сравнения" title="Порядок сравнения" hidden><option value="time">По времени</option><option value="arb-desc">Вилка: больше → меньше</option><option value="arb-asc">Вилка: меньше → больше</option></select>
+  </div>
+  <div class="tb-end">
+   <button id="favorites" class="btn fav-toggle" aria-pressed="false" title="Только избранные матчи и лиги"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.55 4.44 1.08 6.26L12 17.35l-5.63 2.95 1.08-6.26L2.9 9.6l6.3-.9L12 3Z"/></svg><span>Избранное</span></button>
+   <button id="resetFilters" class="btn ghost reset-btn" data-off="true" aria-hidden="true" tabindex="-1">Сбросить</button>
+  </div>
  </section>
  <main id="workspace" class="workspace">
   <section id="listPane" class="list-pane" aria-label="Матчи">
@@ -54,6 +62,6 @@
 </div>
 <div id="toast" role="status" hidden></div>
 <dialog id="modal"></dialog>
-<script src="store.js"></script><script src="presentation-utils.js"></script><script src="dom-update.js"></script><script src="dota-map.js"></script><script src="game-categories.js"></script><script src="league-model.js"></script><script src="feed-push.js"></script><script src="odds-provider.js"></script><script src="entitlements.js"></script><script src="user-text.js"></script><script src="league-client.js"></script><script src="import-htm.js"></script><script src="score-orientation.js"></script><script src="score-cache.js"></script><script src="view-model.js"></script><script src="score-timeline.js"></script><script src="score-dialog.js"></script><script src="match-history.js"></script><script src="live-generator.js"></script><script src="astek-market-names.js"></script><script src="market-canonical.js"></script><script src="dota-heroes.js"></script><script src="statistics-client.js"></script><script src="odds-timeline.js"></script><script src="dota-stats-panel.js"></script><script src="cs2-clock.js"></script><script src="cs2-panel.js"></script><script src="match-format.js"></script><script src="detail-panel.js"></script><script src="app-compare.js"></script><script src="app-settings.js"></script><script src="app-admin.js"></script><script src="app.js"></script>
+<script src="store.js"></script><script src="presentation-utils.js"></script><script src="dom-update.js"></script><script src="dota-map.js"></script><script src="game-categories.js"></script><script src="league-model.js"></script><script src="feed-push.js"></script><script src="odds-provider.js"></script><script src="entitlements.js"></script><script src="user-text.js"></script><script src="league-client.js"></script><script src="import-htm.js"></script><script src="score-orientation.js"></script><script src="score-cache.js"></script><script src="view-model.js"></script><script src="score-timeline.js"></script><script src="score-dialog.js"></script><script src="match-history.js"></script><script src="live-generator.js"></script><script src="astek-market-names.js"></script><script src="market-canonical.js"></script><script src="dota-heroes.js"></script><script src="statistics-client.js"></script><script src="odds-timeline.js"></script><script src="dota-stats-panel.js"></script><script src="cs2-clock.js"></script><script src="cs2-panel.js"></script><script src="match-format.js"></script><script src="history-loader.js"></script><script src="line-collapse.js"></script><script src="logo-resolver.js"></script><script src="ui-kit.js"></script><script src="detail-panel.js"></script><script src="app-compare.js"></script><script src="app-settings.js"></script><script src="app-admin.js"></script><script src="app.js"></script>
 </body>
 </html>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Esports Monitor mark: several data feeds converge into one live pulse; the red dot is "live". Works on dark and light backgrounds (own tile + edge). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1b2b4b"/><stop offset="1" stop-color="#0b1220"/></linearGradient>
+    <linearGradient id="pulse" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4d8eff"/><stop offset="1" stop-color="#37dcc0"/></linearGradient>
+  </defs>
+  <rect x="2" y="2" width="124" height="124" rx="28" fill="url(#tile)"/>
+  <rect x="2.75" y="2.75" width="122.5" height="122.5" rx="27.25" fill="none" stroke="#ffffff" stroke-opacity=".14" stroke-width="1.5"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M18 40 C 30 40, 34 64, 46 64 M18 88 C 30 88, 34 64, 46 64" stroke="#8fb4ff" stroke-opacity=".55" stroke-width="5"/>
+    <path d="M18 64 H 46" stroke="#8fb4ff" stroke-opacity=".55" stroke-width="5"/>
+    <path d="M44 64 H 56 L 66 34 L 80 96 L 90 64 H 110" stroke="url(#pulse)" stroke-width="10"/>
+  </g>
+  <circle cx="102" cy="28" r="11" fill="#ff5a52"/>
+  <circle cx="102" cy="28" r="11" fill="none" stroke="#0b1220" stroke-width="3"/>
+</svg>

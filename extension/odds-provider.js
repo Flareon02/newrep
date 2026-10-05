@@ -1,14 +1,16 @@
-/* LIVE odds provider selection: GGBET or DataBet, one at a time.
-   Pure helpers shared by the service worker and the app; kept independent from Chrome APIs so the
-   selection rules can be regression-tested. The two providers are never merged into one view. */
+/* LIVE odds provider: GGBET.
+   DataBet (the second feed of the same platform) is not part of the active source set: it is never selected, shown,
+   requested or offered in the UI. A stored pre-9.2 DataBet preference resolves to GGBET. Pure helpers shared by the
+   service worker and the app, kept independent from Chrome APIs so the rules can be regression-tested. */
 (function(root){
- const PROVIDERS=Object.freeze(['ggbet','databet']);
- const NAMES=Object.freeze({ggbet:'GGBET',databet:'DataBet'});
+ const PROVIDERS=Object.freeze(['ggbet']);
+ const RETIRED=Object.freeze(['databet']);
+ const NAMES=Object.freeze({ggbet:'GGBET'});
  const DEFAULT='ggbet';
  const normalize=value=>{const v=String(value||'').trim().toLowerCase();return PROVIDERS.includes(v)?v:DEFAULT;};
  const selected=prefs=>normalize(prefs?.liveOddsProvider);
- const isOddsProvider=source=>PROVIDERS.includes(String(source||''));
- // A ref of the provider that is not selected never belongs to the current view.
+ const isOddsProvider=source=>PROVIDERS.includes(String(source||''))||RETIRED.includes(String(source||''));
+ // A retired provider's ref never belongs to any view.
  const visible=(source,prefs)=>!isOddsProvider(source)||String(source)===selected(prefs);
  const withProvider=(path,prefs)=>`${path}${String(path).includes('?')?'&':'?'}provider=${selected(prefs)}`;
  const name=provider=>NAMES[normalize(provider)];
@@ -27,6 +29,6 @@
   if(status.available===false||(status.available===undefined&&status.connectionState!=='connected'))return {provider,label,ok:false,reason:status.lastError||'нет соединения с источником, переподключаемся'};
   return {provider,label,ok:true,reason:''};
  }
- const api={PROVIDERS,NAMES,DEFAULT,normalize,selected,isOddsProvider,visible,withProvider,name,detailKey,health};
+ const api={PROVIDERS,RETIRED,NAMES,DEFAULT,normalize,selected,isOddsProvider,visible,withProvider,name,detailKey,health};
  if(typeof module==='object'&&module.exports)module.exports=api;else root.OddsProvider=api;
 })(globalThis);

@@ -8,39 +8,38 @@ const load = (file, name) => { const root = {}; vm.runInNewContext(read(file), {
 const OddsProvider = load('odds-provider.js', 'OddsProvider');
 const MatchView = load('view-model.js', 'MatchView');
 
-test('odds provider selection defaults to GGBET and accepts only GGBET or DataBet', () => {
+test('LIVE odds provider is GGBET; a stored DataBet preference resolves to GGBET and DataBet is never visible', () => {
   assert.equal(OddsProvider.selected({}), 'ggbet');
-  assert.equal(OddsProvider.selected({ liveOddsProvider: 'databet' }), 'databet');
-  assert.equal(OddsProvider.selected({ liveOddsProvider: 'DataBet' }), 'databet');
+  assert.equal(OddsProvider.selected({ liveOddsProvider: 'databet' }), 'ggbet');
+  assert.equal(OddsProvider.selected({ liveOddsProvider: 'DataBet' }), 'ggbet');
   assert.equal(OddsProvider.selected({ liveOddsProvider: 'betfair' }), 'ggbet');
-  assert.equal(OddsProvider.withProvider('/api/ui/live?thin=1', { liveOddsProvider: 'databet' }), '/api/ui/live?thin=1&provider=databet');
+  assert.deepEqual([...OddsProvider.PROVIDERS], ['ggbet']);
+  assert.equal(OddsProvider.withProvider('/api/ui/live?thin=1', { liveOddsProvider: 'databet' }), '/api/ui/live?thin=1&provider=ggbet');
   assert.equal(OddsProvider.withProvider('/api/ui/live', {}), '/api/ui/live?provider=ggbet');
   assert.equal(OddsProvider.visible('astek', { liveOddsProvider: 'databet' }), true);
-  assert.equal(OddsProvider.visible('ggbet', { liveOddsProvider: 'databet' }), false);
-  assert.equal(OddsProvider.visible('databet', { liveOddsProvider: 'databet' }), true);
-  assert.equal(OddsProvider.name('databet'), 'DataBet');
-  assert.equal(OddsProvider.detailKey('live', 'logical:1', { liveOddsProvider: 'databet' }), 'live:databet:logical:1');
-  assert.notEqual(OddsProvider.detailKey('live', 'logical:1', {}), OddsProvider.detailKey('live', 'logical:1', { liveOddsProvider: 'databet' }));
-  assert.equal(OddsProvider.detailKey('prematch', 'p:1', { liveOddsProvider: 'databet' }), 'prematch:p:1');
+  assert.equal(OddsProvider.visible('ggbet', { liveOddsProvider: 'databet' }), true);
+  assert.equal(OddsProvider.visible('databet', { liveOddsProvider: 'databet' }), false);
+  assert.equal(OddsProvider.visible('databet', {}), false);
+  assert.equal(OddsProvider.isOddsProvider('databet'), true, 'still recognised, so its refs are filtered out');
+  assert.equal(OddsProvider.name('databet'), 'GGBET');
+  assert.equal(OddsProvider.detailKey('live', 'logical:1', { liveOddsProvider: 'databet' }), 'live:ggbet:logical:1');
+  assert.equal(OddsProvider.detailKey('prematch', 'p:1', {}), 'prematch:p:1');
 });
 
-test('provider health turns an unavailable DataBet into an explicit state instead of an endless spinner', () => {
-  const prefs = { liveOddsProvider: 'databet' };
+test('provider health turns an unavailable GGBET into an explicit state instead of an endless spinner', () => {
+  const prefs = {};
   assert.equal(OddsProvider.health(undefined, prefs).ok, true, 'no snapshot yet: the normal loading state applies');
-  const ok = OddsProvider.health({ providers: { databet: { oddsProvider: { connectionState: 'connected', stale: false } } } }, prefs);
-  assert.equal(ok.ok, true);
-  const down = OddsProvider.health({ providers: { databet: { oddsProvider: { connectionState: 'reconnecting', available: false, lastError: 'DataBet: WebSocket закрыт 1006' } } } }, prefs);
-  assert.deepEqual([down.ok, down.label, down.reason], [false, 'DataBet', 'DataBet: WebSocket закрыт 1006']);
-  const refreshing = OddsProvider.health({ providers: { databet: { oddsProvider: { connectionState: 'reconnecting', available: true } } } }, prefs);
-  assert.equal(refreshing.ok, true, 'a reconnect inside the grace window (token refresh) does not flash a banner');
-  assert.equal(OddsProvider.health({ providers: { databet: { oddsProvider: { connectionState: 'disabled' } } } }, prefs).ok, false);
-  assert.equal(OddsProvider.health({ providers: { ggbet: { oddsProvider: { connectionState: 'disabled' } } } }, {}).ok, true, 'a server without the default provider shows no banner');
+  assert.equal(OddsProvider.health({ providers: { ggbet: { oddsProvider: { connectionState: 'connected', stale: false } } } }, prefs).ok, true);
+  const down = OddsProvider.health({ providers: { ggbet: { oddsProvider: { connectionState: 'reconnecting', available: false, lastError: 'GGBET: WebSocket закрыт 1006' } } } }, prefs);
+  assert.deepEqual([down.ok, down.label, down.reason], [false, 'GGBET', 'GGBET: WebSocket закрыт 1006']);
+  assert.equal(OddsProvider.health({ providers: { ggbet: { oddsProvider: { connectionState: 'reconnecting', available: true } } } }, prefs).ok, true, 'a reconnect inside the grace window does not flash a banner');
+  assert.equal(OddsProvider.health({ providers: { ggbet: { oddsProvider: { connectionState: 'disabled' } } } }, prefs).ok, true, 'a server without GGBET shows no banner');
   assert.equal(OddsProvider.health({ transportError: 'HTTP 503' }, prefs).ok, false);
-  assert.equal(OddsProvider.health({ providers: { databet: { oddsProvider: { connectionState: 'connected', stale: true, lastUpdateAt: '2026-10-01T00:00:00Z' } } } }, prefs).reason, 'данные источника устарели');
-  assert.equal(OddsProvider.health({ providers: { databet: { oddsProvider: { connectionState: 'reconnecting', stale: true, lastUpdateAt: null } } } }, prefs).reason, 'ожидаем первые данные источника');
+  assert.equal(OddsProvider.health({ providers: { ggbet: { oddsProvider: { connectionState: 'connected', stale: true, lastUpdateAt: '2026-10-01T00:00:00Z' } } } }, prefs).reason, 'данные источника устарели');
+  assert.equal(OddsProvider.health({ providers: { ggbet: { oddsProvider: { connectionState: 'reconnecting', stale: true, lastUpdateAt: null } } } }, prefs).reason, 'ожидаем первые данные источника');
 });
 
-test('match view never shows the unselected odds provider and keeps both out of Results/History', () => {
+test('match view: GGBET only in LIVE and toggleable like any bookmaker; DataBet never; neither in Results/History', () => {
   const event = { sourceRefs: [
     { source: 'astek', inLive: true, firstPrematchAt: 1 },
     { source: 'ggbet', inLive: true },
@@ -48,10 +47,11 @@ test('match view never shows the unselected odds provider and keeps both out of 
   ] };
   const sources = (prefs, view) => MatchView.selected(event, prefs, view).map((r) => r.source);
   assert.deepEqual(sources({}, 'live'), ['astek', 'ggbet']);
-  assert.deepEqual(sources({ liveOddsProvider: 'databet' }, 'live'), ['astek', 'databet']);
-  assert.deepEqual(sources({ liveOddsProvider: 'databet', databet: false }, 'live'), ['astek']);
-  assert.deepEqual(sources({ liveOddsProvider: 'databet' }, 'results'), ['astek']);
-  assert.deepEqual(sources({ liveOddsProvider: 'databet' }, 'history'), ['astek']);
+  assert.deepEqual(sources({ liveOddsProvider: 'databet' }, 'live'), ['astek', 'ggbet']);
+  assert.deepEqual(sources({ ggbet: false }, 'live'), ['astek'], 'GGBET switched off in the extension');
+  assert.deepEqual(sources({ ggbet: true }, 'live'), ['astek', 'ggbet'], 'and back on');
+  assert.deepEqual(sources({}, 'results'), ['astek']);
+  assert.deepEqual(sources({}, 'history'), ['astek']);
 });
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -105,24 +105,20 @@ function serviceWorker({ prefs, seenEvents } = {}) {
 }
 const until = async (fn, ms = 3000) => { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return true; await new Promise((r) => setTimeout(r, 20)); } return false; };
 
-test('service worker: the stored provider drives LIVE requests and the feed stream; switching drops the old feed quietly', async () => {
+test('service worker: LIVE requests and the feed stream always use GGBET, also with a stored DataBet preference', async () => {
   const sw = serviceWorker({ prefs: { liveOddsProvider: 'databet', notifications: { live: true } }, seenEvents: { live: ['seed'] } });
   try {
     sw.open();
     assert.ok(await until(() => sw.fetched.some((u) => u.includes('/api/ui/live?compact=1')) && sw.fetched.some((u) => u.includes('/api/feed-stream'))), 'initial LIVE fetch and stream');
     const live = sw.fetched.filter((u) => u.includes('/api/ui/live'));
-    assert.ok(live.length >= 2 && live.every((u) => u.includes('provider=databet')), live.join('\n'));
-    assert.ok(sw.fetched.find((u) => u.includes('/api/feed-stream')).includes('provider=databet'));
+    assert.ok(live.length >= 2 && live.every((u) => u.includes('provider=ggbet')), live.join('\n'));
+    assert.ok(sw.fetched.find((u) => u.includes('/api/feed-stream')).includes('provider=ggbet'));
     assert.ok(sw.fetched.filter((u) => u.includes('/api/ui/prematch')).every((u) => !u.includes('provider=')), 'the line is provider-independent');
-    const notifiedBefore = sw.notifications.length;
-    // Switch to GGBET: the view is told, the LIVE feed is refetched for GGBET and the stream reconnects for GGBET.
-    sw.fetched.length = 0;
-    sw.changePrefs({ liveOddsProvider: 'ggbet', notifications: { live: true } });
-    assert.ok(sw.posted.some((m) => m.kind === 'live-provider' && m.provider === 'ggbet'));
-    assert.ok(await until(() => sw.fetched.some((u) => u.includes('/api/feed-stream') && u.includes('provider=ggbet')) && sw.fetched.some((u) => u.includes('/api/ui/live?compact=1') && u.includes('provider=ggbet'))), sw.fetched.join('\n'));
-    assert.equal(sw.fetched.some((u) => u.includes('provider=databet')), false, 'nothing is requested for the old provider after the switch');
-    const snapshot = [...sw.posted].reverse().find((m) => m.kind === 'live' && m.snapshot);
-    assert.ok(snapshot.snapshot.events.every((e) => e.sourceRefs.every((r) => r.source === 'ggbet')));
-    assert.equal(sw.notifications.length, notifiedBefore, 'switching providers is not a burst of "new match" notifications');
+    // Turning GGBET off in the extension is a display preference: the feed and the stream are unchanged.
+    sw.fetched.length = 0; const posted = sw.posted.length;
+    sw.changePrefs({ liveOddsProvider: 'ggbet', ggbet: false, notifications: { live: true } });
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(sw.posted.slice(posted).some((m) => m.kind === 'live-provider'), false, 'no provider switch');
+    assert.equal(sw.fetched.some((u) => u.includes('provider=databet')), false, 'DataBet is never requested');
   } finally { sw.dispose(); }
 });

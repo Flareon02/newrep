@@ -33,6 +33,7 @@ function renderSettings(){
 
 function settingsDisplay(body){
  body.innerHTML=`<h2>Отображение</h2><p class="lead">Что показывать в списках и в карточке матча.</p>
+ <section class="setting-card"><h3>Оформление</h3><div class="setting-line"><span class="text"><span>Тема</span><small>«Как в системе» следует настройке операционной системы.</small></span><span class="segmented" role="group" aria-label="Тема" id="setTheme">${['dark','light','system'].map(m=>`<button type="button" data-theme-mode="${m}" aria-pressed="${prefs.theme===m}">${THEME_LABEL[m]}</button>`).join('')}</span></div></section>
  <section class="setting-card"><h3>Списки матчей</h3>
  ${Ent.can('odds.live')||Ent.can('odds.prematch')?line('setOdds','Показывать коэффициенты','Цены основного рынка в списках, вкладка «Коэффициенты» в карточке матча и сравнение.',!prefs.hideOdds):''}
  ${line('setLogos','Логотипы команд','',prefs.teamLogos!==false)}
@@ -42,6 +43,7 @@ function settingsDisplay(body){
  <label class="field"><span>Открывать монитор</span><select id="setOpenMode" class="select"><option value="window">Отдельное окно приложения</option><option value="tab">Вкладка браузера</option></select><small>Применяется при следующем нажатии на значок расширения.</small></label>
  <label class="field"><span>Браузер для ссылок на конторы</span><select id="setBrowser" class="select" style="max-width:320px"><option value="current">Текущий браузер</option><option value="system">Системный браузер по умолчанию</option><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option><option value="firefox">Mozilla Firefox</option></select><small>Для другого браузера один раз установите помощник из папки browser-host. ID расширения: ${esc(chrome.runtime.id)}</small></label></section>
  ${Ent.can('tools.generator')?`<section class="setting-card"><h3>Экспериментальные функции</h3>${line('setGenerator','Генератор коэффициентов CS2','Расчёт собственной линии для матчей CS2.',prefs.generatorEnabled===true)}</section>`:''}`;
+ $('setTheme').querySelectorAll('[data-theme-mode]').forEach(b=>b.onclick=()=>{setTheme(b.dataset.themeMode);for(const x of $('setTheme').querySelectorAll('button'))x.setAttribute('aria-pressed',String(x.dataset.themeMode===prefs.theme));});
  $('setOpenMode').value=prefs.openMode||'window';$('setBrowser').value=prefs.linkBrowser||'current';
  if($('setOdds'))$('setOdds').onchange=()=>{setPref('hideOdds',!$('setOdds').checked);};
  $('setLogos').onchange=()=>{setPref('teamLogos',$('setLogos').checked);document.documentElement.classList.toggle('team-logos-off',!prefs.teamLogos);};
@@ -52,12 +54,10 @@ function settingsDisplay(body){
  if($('setGenerator'))$('setGenerator').onchange=()=>setPref('generatorEnabled',$('setGenerator').checked);
 }
 function settingsSources(body){
- const rows=sourceRows(),books=['astek','fonbet','pinnacle'].filter(s=>Ent.canProvider(s)),both=OddsProvider.PROVIDERS.every(p=>Ent.canProvider(p)),mode=['ggbet','databet'].includes(prefs.liveOddsMode)?prefs.liveOddsMode:'auto';
+ const rows=sourceRows(),books=BOOKS.filter(s=>Ent.canProvider(s));
  body.innerHTML=`<h2>Источники</h2><p class="lead">Конторы, которые участвуют в списках.</p>
- <section class="setting-card"><h3>Конторы</h3><p>Выключенная контора не показывается ни в одном разделе и не участвует в уведомлениях.</p>${books.map(s=>{const r=rows.find(x=>x.source===s);return line('book_'+s,`<span class="book-mark ${s}"></span> ${providerName(s)}`,`${esc(r.text)}${r.detail?' · '+esc(r.detail):''}`,prefs[s]!==false,`data-book-setting="${s}"`);}).join('')||'<p class="muted">Нет доступных контор.</p>'}</section>
- ${both?`<section class="setting-card"><h3>Коэффициенты LIVE</h3><p>GGBET и DataBet — две ленты одной платформы, одновременно показывается одна. «Авто» выбирает ту, что сейчас работает.</p><div class="segmented" role="group" aria-label="Источник коэффициентов LIVE">${[['auto','Авто'],['ggbet','GGBET'],['databet','DataBet']].map(([id,label])=>`<button type="button" data-odds-mode="${id}" aria-pressed="${mode===id}">${label}</button>`).join('')}</div><p class="muted">Сейчас показывается: ${esc(OddsProvider.name(OddsProvider.selected(prefs)))}</p></section>`:''}`;
- body.querySelectorAll('[data-book-setting]').forEach(c=>c.onchange=()=>{const s=c.dataset.bookSetting;prefs[s]=c.checked;if(!BOOKS.some(b=>prefs[b]!==false)){prefs[s]=true;c.checked=true;toast('Оставьте хотя бы одну контору');return;}savePrefs();});
- body.querySelectorAll('[data-odds-mode]').forEach(b=>b.onclick=async()=>{setPref('liveOddsMode',b.dataset.oddsMode);await chooseLiveOddsProvider();settingsSources(body);});
+ <section class="setting-card"><h3>Конторы</h3><p>Выключенная контора не показывается ни в одном разделе и не участвует в уведомлениях. GGBET даёт коэффициенты только в LIVE.</p>${books.map(s=>{const r=rows.find(x=>x.source===s);return line('book_'+s,`<span class="book-mark ${s}"></span> ${providerName(s)}`,`${esc(r.text)}${r.detail?' · '+esc(r.detail):''}`,prefs[s]!==false,`data-book-setting="${s}"`);}).join('')||'<p class="muted">Нет доступных контор.</p>'}</section>`;
+ body.querySelectorAll('[data-book-setting]').forEach(c=>c.onchange=()=>{const s=c.dataset.bookSetting;prefs[s]=c.checked;if(!BOOKS.some(b=>prefs[b]!==false)){prefs[s]=true;c.checked=true;toast('Оставьте хотя бы одну контору');return;}savePrefs();markDirty();});
 }
 function settingsNotifications(body){
  const n=prefs.notifications||{};

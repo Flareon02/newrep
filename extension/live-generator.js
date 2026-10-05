@@ -1,6 +1,6 @@
 const LiveGenerator=(()=>{
  let stop=()=>{};
- const name=s=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET',databet:'DataBet',manual:'Вручную'})[s]||s;
+ const name=s=>({astek:'AstekBet',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET',manual:'Вручную'})[s]||s;
  function open(initial,{modal,esc,load,reload,base,request:ctxRequest}){
   stop();const $=id=>document.getElementById(id);let event=initial,worker=null,closed=false,timer,debounce,timeout,signature='',pinnacle=null,stream=null,streamId='',streamAt=0,revision=0;
   const books=event.sourceRefs||[],scoreRef=books.find(r=>r.seriesScore&&r.scoreObserved!==false&&r.mapScores?.length)||books[0];
