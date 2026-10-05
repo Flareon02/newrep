@@ -22,7 +22,7 @@ async function settingsUsers(body){
 function adminMarkup(){
  const users=adminState.users,u=adminUser(),reg=adminState.registry;
  const list=!users?'<div class="skeleton" style="height:120px"></div>':users.length?`<div class="admin-users" role="listbox" aria-label="Пользователи">${users.map(x=>`<button type="button" role="option" class="admin-user" data-admin-user="${esc(x.id)}" aria-selected="${x.id===adminState.selected}"><b>${esc(x.name)}</b><small>${x.role==='admin'?'администратор':`${x.capabilities.length} прав`}${x.disabled?' · отключён':''}</small></button>`).join('')}</div>`:'<p class="muted">Пользователей пока нет.</p>';
- const token=adminState.token?`<div class="admin-token" role="status"><b>Ключ доступа${adminState.tokenFor?' · '+esc(adminState.tokenFor):''}</b><code id="adminToken">${esc(adminState.token)}</code><button type="button" class="btn" data-admin="copy-token">Копировать</button><small>Показывается один раз. Передайте его пользователю: он вставит ключ в «Настройки → Подключение».</small></div>`:'';
+ const token=adminState.token?`<div class="admin-token" role="status"><b>Ключ доступа${adminState.tokenFor?' · '+esc(adminState.tokenFor):''}</b><code id="adminToken">${esc(adminState.token)}</code><button type="button" class="btn" data-admin="copy-token">Копировать</button><small>Показывается один раз. Передайте его пользователю: ${globalThis.Platform?.hosted?'он введёт ключ на странице входа (веб-версия или приложение).':'он вставит ключ в «Настройки → Подключение».'}</small></div>`:'';
  let editor='<p class="muted">Выберите пользователя слева.</p>';
  if(u&&reg){
   const groups=Object.entries(reg.groups||{}),isAdmin=u.role==='admin';

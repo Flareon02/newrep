@@ -1,0 +1,33 @@
+/* Web/desktop additions to the 9.3.0 design system: start screen, Access Key gate, account and session tables.
+   Tokens only (ui.css :root / [data-theme="light"]); no new colours. */
+.boot,.gate{position:fixed;inset:0;display:grid;place-items:center;padding:var(--s4);background:var(--bg);color:var(--text)}
+.boot[hidden],.gate[hidden],#app[hidden]{display:none}
+.boot .brand-mark{width:40px;height:40px;opacity:.9;animation:eds-pulse 1.4s ease-in-out infinite}
+@keyframes eds-pulse{50%{opacity:.45}}
+@media (prefers-reduced-motion:reduce){.boot .brand-mark{animation:none}}
+.gate-card{width:min(420px,100%);padding:28px 28px 22px;border:1px solid var(--line);border-radius:var(--radius-l);background:var(--surface);box-shadow:var(--shadow)}
+.gate-brand{display:flex;align-items:center;gap:10px;margin-bottom:var(--s4)}
+.gate-brand .brand-mark{width:32px;height:32px}
+.gate-brand b{font-size:var(--fs-xl);font-weight:650;letter-spacing:-.01em}
+.gate-card h1{margin:0 0 6px;font-size:var(--fs-l);font-weight:600}
+.gate-card .lead{margin:0 0 var(--s4);color:var(--text-2);font-size:var(--fs-s)}
+.gate-card .banner{margin:0 0 var(--s4);border:1px solid var(--warn-line);border-radius:var(--radius-s)}
+.gate-field{display:grid;gap:6px;margin-bottom:var(--s3)}
+.gate-field>span{font-size:var(--fs-xs);font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.04em}
+.gate-input{display:flex;gap:6px}
+.gate-input .input{flex:1;height:38px;font:500 var(--fs-m)/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.02em}
+.gate-card .btn.primary{width:100%;height:38px;justify-content:center;font-size:var(--fs-m)}
+.gate-error{min-height:20px;margin:var(--s2) 0 0;color:var(--bad-text);font-size:var(--fs-s)}
+.gate-foot{margin:var(--s3) 0 0;color:var(--muted);font-size:var(--fs-xs);line-height:1.5}
+.setting-card code.sha{word-break:break-all;font-size:var(--fs-xs)}
+.setting-card a.btn{text-decoration:none;display:inline-flex;align-items:center}
+.table-scroll{overflow-x:auto;margin-top:var(--s3)}
+.data-table{width:100%;border-collapse:collapse;font-size:var(--fs-s)}
+.data-table th{position:sticky;top:0;padding:6px 8px;border-bottom:1px solid var(--line-strong);background:var(--surface);color:var(--muted);font-size:var(--fs-xs);font-weight:600;text-align:left;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.data-table td{padding:8px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+.data-table tr.current td{background:var(--accent-soft)}
+.data-table small{color:var(--muted)}
+.data-table .pill{grid-column:auto;grid-row:auto}
+.data-table .row-actions{display:flex;flex-wrap:wrap;gap:6px}
+.data-table input[type=date].input{height:28px;font-size:var(--fs-xs)}
+.settings-body:has(.admin-sessions) .setting-card{max-width:none}

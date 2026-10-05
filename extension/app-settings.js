@@ -2,9 +2,12 @@
 /* Settings (9.0): a full view instead of a modal. League links (formerly a primary tab) and diagnostics are
    management sections here; they never block the monitoring views. */
 const settingsState={section:'display',catalog:null,workingLinks:[],selection:new Set(),health:null,healthAt:0};
-const SETTINGS_SECTIONS=[['display','Отображение'],['sources','Источники'],['notifications','Уведомления'],['server','Подключение'],['leagues','Лиги и связи'],['users','Пользователи'],['diagnostics','Диагностика'],['backup','Резервная копия'],['about','О программе']];
+// Web/desktop builds (web/platform/platform.js) replace «Подключение» with «Аккаунт» (session, sign-out, desktop app)
+// and add «Сессии» for administrators; the extension has no Platform and keeps its sections.
+const HOSTED=!!globalThis.Platform?.hosted;
+const SETTINGS_SECTIONS=[['display','Отображение'],['sources','Источники'],['notifications','Уведомления'],['server',HOSTED?'Аккаунт':'Подключение'],['leagues','Лиги и связи'],['users','Пользователи'],...(HOSTED?[['sessions','Сессии']]:[]),['diagnostics','Диагностика'],['backup','Резервная копия'],['about','О программе']];
 // Ordinary users see their own preferences only; server internals, diagnostics and user management need capabilities.
-const settingsAllowed=id=>id==='notifications'?Ent.can('notifications'):id==='leagues'?Ent.can('leagues.manage'):id==='users'?Ent.can('admin.users'):id==='diagnostics'?Ent.can('admin.diagnostics'):true;
+const settingsAllowed=id=>id==='notifications'?Ent.can('notifications'):id==='leagues'?Ent.can('leagues.manage'):id==='users'?Ent.can('admin.users'):id==='sessions'?HOSTED&&Ent.can('admin.users')&&Ent.state()?.role==='admin':id==='diagnostics'?Ent.can('admin.diagnostics'):true;
 const settingsSections=()=>SETTINGS_SECTIONS.filter(([id])=>settingsAllowed(id));
 const LEAGUE_PROVIDERS=['astek','fonbet','pinnacle','ggbet'],LEAGUE_PAGE_SIZE=120,LEAGUE_VIEWS=[['live','LIVE'],['prematch','Линия'],['results','Результаты'],['history','История'],['compare','Сравнение']];
 const leagueListLimits=new Map(LEAGUE_PROVIDERS.map(s=>[s,LEAGUE_PAGE_SIZE]));
@@ -28,7 +31,7 @@ function renderSettings(){
  v.querySelectorAll('[data-settings-section]').forEach(b=>b.onclick=()=>{settingsState.section=b.dataset.settingsSection;renderSettings();v.querySelector(`[data-settings-section="${settingsState.section}"]`)?.focus();});
  $('settingsDone').onclick=()=>closeSettings();
  const body=$('settingsBody');
- ({display:settingsDisplay,sources:settingsSources,notifications:settingsNotifications,server:settingsServer,leagues:settingsLeagues,users:settingsUsers,diagnostics:settingsDiagnostics,backup:settingsBackup,about:settingsAbout})[sec](body);
+ ({display:settingsDisplay,sources:settingsSources,notifications:settingsNotifications,server:HOSTED?b=>Platform.renderAccount(b,{toast,report}):settingsServer,leagues:settingsLeagues,users:settingsUsers,sessions:b=>Platform.renderAdminSessions(b,{toast,report}),diagnostics:settingsDiagnostics,backup:settingsBackup,about:settingsAbout})[sec](body);
 }
 
 function settingsDisplay(body){
@@ -39,20 +42,20 @@ function settingsDisplay(body){
  ${line('setLogos','Логотипы команд','',prefs.teamLogos!==false)}
  ${line('setExtras','Дополнительные события','Сравнения киллов, карт и раундов, которые конторы выставляют отдельными матчами.',prefs.showExtras!==false)}</section>
  ${Ent.can('statistics.view')?`<section class="setting-card"><h3>Статистика</h3>${line('setDota','Статистика матчей Dota 2','Вкладка «Статистика» в карточке LIVE-матча.',prefs.dotaStatsEnabled===true)}</section>`:''}
- <section class="setting-card"><h3>Окно и ссылки</h3>
+ ${HOSTED?'':`<section class="setting-card"><h3>Окно и ссылки</h3>
  <label class="field"><span>Открывать монитор</span><select id="setOpenMode" class="select"><option value="window">Отдельное окно приложения</option><option value="tab">Вкладка браузера</option></select><small>Применяется при следующем нажатии на значок расширения.</small></label>
- <label class="field"><span>Браузер для ссылок на конторы</span><select id="setBrowser" class="select" style="max-width:320px"><option value="current">Текущий браузер</option><option value="system">Системный браузер по умолчанию</option><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option><option value="firefox">Mozilla Firefox</option></select><small>Для другого браузера нужен отдельный помощник «Esports Monitor browser-host» (устанавливается один раз) и разрешение расширению на связь с ним. ID расширения: ${esc(chrome.runtime.id)}</small><small id="browserHostState" class="warn-note" hidden></small></label></section>
+ <label class="field"><span>Браузер для ссылок на конторы</span><select id="setBrowser" class="select" style="max-width:320px"><option value="current">Текущий браузер</option><option value="system">Системный браузер по умолчанию</option><option value="chrome">Google Chrome</option><option value="edge">Microsoft Edge</option><option value="firefox">Mozilla Firefox</option></select><small>Для другого браузера нужен отдельный помощник «Esports Monitor browser-host» (устанавливается один раз) и разрешение расширению на связь с ним. ID расширения: ${esc(chrome.runtime.id)}</small><small id="browserHostState" class="warn-note" hidden></small></label></section>`}
  ${Ent.can('tools.generator')?`<section class="setting-card"><h3>Экспериментальные функции</h3>${line('setGenerator','Генератор коэффициентов CS2','Расчёт собственной линии для матчей CS2.',prefs.generatorEnabled===true)}</section>`:''}`;
  $('setTheme').querySelectorAll('[data-theme-mode]').forEach(b=>b.onclick=()=>{setTheme(b.dataset.themeMode);for(const x of $('setTheme').querySelectorAll('button'))x.setAttribute('aria-pressed',String(x.dataset.themeMode===prefs.theme));});
- $('setOpenMode').value=prefs.openMode||'window';$('setBrowser').value=prefs.linkBrowser||'current';
+ if($('setOpenMode')){$('setOpenMode').value=prefs.openMode||'window';$('setBrowser').value=prefs.linkBrowser||'current';}
  if($('setOdds'))$('setOdds').onchange=()=>{setPref('hideOdds',!$('setOdds').checked);};
  $('setLogos').onchange=()=>{setPref('teamLogos',$('setLogos').checked);document.documentElement.classList.toggle('team-logos-off',!prefs.teamLogos);};
  $('setExtras').onchange=()=>setPref('showExtras',$('setExtras').checked);
  if($('setDota'))$('setDota').onchange=()=>{setPref('dotaStatsEnabled',$('setDota').checked);if(!prefs.dotaStatsEnabled)DotaStatsPanel.clear?.();};
- $('setOpenMode').onchange=()=>setPref('openMode',$('setOpenMode').value);
+ if($('setOpenMode'))$('setOpenMode').onchange=()=>setPref('openMode',$('setOpenMode').value);
  // Another browser needs the native helper: the "nativeMessaging" permission is optional and asked for only here.
  const hostNote=async()=>{const n=$('browserHostState');if(!n)return;const need=prefs.linkBrowser!=='current';const granted=need&&await chrome.permissions.contains({permissions:['nativeMessaging']}).catch(()=>false);n.hidden=!need||granted;n.textContent=need&&!granted?'Нет разрешения на связь с помощником: ссылки откроются в текущем браузере. Выберите браузер ещё раз, чтобы разрешить.':'';};
- $('setBrowser').onchange=async()=>{const value=$('setBrowser').value;if(value!=='current'){let ok=false;try{ok=await chrome.permissions.request({permissions:['nativeMessaging']});}catch{}if(!ok){$('setBrowser').value=prefs.linkBrowser||'current';toast('Без разрешения ссылки открываются в текущем браузере');hostNote();return;}}setPref('linkBrowser',value);hostNote();};
+ if($('setBrowser'))$('setBrowser').onchange=async()=>{const value=$('setBrowser').value;if(value!=='current'){let ok=false;try{ok=await chrome.permissions.request({permissions:['nativeMessaging']});}catch{}if(!ok){$('setBrowser').value=prefs.linkBrowser||'current';toast('Без разрешения ссылки открываются в текущем браузере');hostNote();return;}}setPref('linkBrowser',value);hostNote();};
  hostNote();
  if($('setGenerator'))$('setGenerator').onchange=()=>setPref('generatorEnabled',$('setGenerator').checked);
 }
@@ -78,7 +81,7 @@ function settingsBackup(body){
  $('exportPrefs').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({schema:1,prefs},null,2)],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='esports-monitor-settings.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
  $('importPrefs').onchange=async()=>{try{const data=JSON.parse(await $('importPrefs').files[0].text());if(data.schema!==1||!Array.isArray(data.prefs?.favorites)||!Array.isArray(data.prefs?.hiddenLeagues))throw new Error('Неверный файл настроек');prefs={...prefs,...data.prefs};migratePrefs();savePrefs();toast('Настройки импортированы');}catch(e){report(e);}};
 }
-function settingsAbout(body){body.innerHTML=`<h2>О программе</h2><section class="setting-card"><dl class="kv"><dt>Расширение</dt><dd>Esports Monitor ${esc(chrome.runtime.getManifest().version)}</dd><dt>Сервер</dt><dd>${esc(BASE)}${snapshots.live?.serverVersion?' · версия '+esc(snapshots.live.serverVersion):''}</dd><dt>Горячие клавиши</dt><dd>Ctrl+1…5 — разделы · ↑/↓ — матчи · Enter — карточка матча · Esc — закрыть карточку</dd></dl></section>`;}
+function settingsAbout(body){body.innerHTML=`<h2>О программе</h2><section class="setting-card"><dl class="kv"><dt>${HOSTED?(Platform.desktop?'Приложение':'Веб-версия'):'Расширение'}</dt><dd>${HOSTED?'Esports Data':'Esports Monitor'} ${esc(chrome.runtime.getManifest().version)}</dd><dt>Сервер</dt><dd>${esc(BASE)}${snapshots.live?.serverVersion?' · версия '+esc(snapshots.live.serverVersion):''}</dd><dt>Горячие клавиши</dt><dd>Ctrl+1…5 — разделы · ↑/↓ — матчи · Enter — карточка матча · Esc — закрыть карточку</dd></dl></section>`;}
 
 // ---------------------------------------------------------------------------------------------------- diagnostics
 async function settingsDiagnostics(body){
