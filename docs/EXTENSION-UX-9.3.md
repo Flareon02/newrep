@@ -49,16 +49,46 @@ proves every one of the 1,900 matches is reachable exactly once. The machine is 
 the production server; run-to-run variance of a single long task on History open is 0.4–0.9 s, which is native
 style/layout work (JS in that task ≈ 0.1 s).
 
+## 2b. Final acceptance numbers (commit `beed4b6`)
+
+**REAL DATA** — production API (local `127.0.0.1`, read-only, admin token kept in memory), one user-like session per
+version, same machine, `tools/ux/real-acceptance.mjs`. ~1,700 History matches on the server.
+
+| Metric | 9.2.0 (old UI) | 9.3.0 |
+|---|---|---|
+| LIVE open (ms) | 839 | 952 |
+| LIVE longest task (ms) | 111 | 107 |
+| History first rows (ms) | 4,035 | 216 |
+| History open longest task (ms) | 99 | 82 |
+| Switch LIVE → History (ms) | 287 | 151 |
+| Switch History → LIVE (ms) | 63 | 70 |
+| After 6 "older" steps: rows loaded | 590 | 482 |
+| After 6 "older" steps: DOM nodes | 15,831 | 3,524 |
+| After 6 "older" steps: JS heap (MB) | 15.4 | 7.7 |
+| After 6 "older" steps: longest task (ms) | 94 | 190 |
+| Older step wait (ms) | 2,673–5,742 | 2,313–10,516 |
+| 45 s idle on History: History requests | 7 | 8 (2 throttled refreshes after real invalidations) |
+| 45 s idle on History: longest task (ms) | 1,043 | 0 |
+| 45 s idle on History: total long tasks (ms) | 2,437 | 0 |
+
+The 9.2.0 idle freeze grows with the number of loaded rows (1.0 s at 590 rows here; 22.9 s at 1,200 rows in the
+synthetic run). The longer 9.3.0 older-step waits are server time for sparse days (see KNOWN-LIMITATIONS), not
+main-thread work.
+
+**SYNTHETIC** — mock API, 1,900 matches, 450 ms simulated per History page, invalidation every 10 s
+(`tools/ux/ux-harness.mjs measure`): first rows 120 ms, open longest task 76 ms, deep loading (1,120 rows) longest task
+57 ms with 3,048 DOM nodes, idle 40 s: 0 long tasks.
+
 ## 3. History architecture (`extension/history-loader.js`)
 
 Sections, each a small query; nothing loads the whole archive:
 
 | Section | Query | First page |
 |---|---|---|
-| Сейчас в LIVE | `phase=live` | 100 |
-| Сейчас в линии | `phase=line` | 50 |
+| Сейчас в LIVE | `phase=live` (shown from the extension's LIVE feed until the server answers) | 100 |
+| Сейчас в линии | `phase=line` (shown from the line feed until the server answers) | 50 |
 | Today, yesterday, … (removed from line/LIVE) | `phase=removed&hours=<day>&end=<end of day>` | 100 |
-| Summary (remaining count, game facets) | `phase=removed&limit=1` | 1 |
+| Summary (remaining count, game facets; `totalExact:false` = lower bound, never ends the archive) | `phase=removed&limit=1` | 1 |
 
 - First screen: LIVE + line + today + summary (4 requests). Older days: one at a time, newest first, on scroll
   (IntersectionObserver + a rAF scroll check) or the explicit button "Загрузить <день> · осталось N"; a day with more
