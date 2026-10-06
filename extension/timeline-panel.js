@@ -230,8 +230,9 @@ const TimelinePanel = (() => {
       else if (a === 'back') setAt(st.at - 10000, { fetch: true, stopFollow: true });
       else if (a === 'fwd') setAt(st.at + 10000, { fetch: true, stopFollow: true });
       else if (a === 'mode') { st.mode = b.dataset.mode; renderControls(); scheduleFetch(0); }
-      else if (a === 'cat') { st.cat = b.dataset.cat; st.market = ''; renderControls(); scheduleFetch(0); }
-      else if (a === 'book') { st.provider = st.provider === b.dataset.book ? '' : b.dataset.book; renderControls(); scheduleFetch(0); }
+      else if (a === 'more') { st.limit = (st.limit || 80) + 80; renderBody(); }
+      else if (a === 'cat') { st.cat = b.dataset.cat; st.market = ''; st.limit = 80; renderControls(); scheduleFetch(0); }
+      else if (a === 'book') { st.provider = st.provider === b.dataset.book ? '' : b.dataset.book; st.limit = 80; renderControls(); scheduleFetch(0); }
       else if (a === 'goto') setAt(Number(b.dataset.at), { fetch: true, stopFollow: true });
       else if (a === 'market-only') { st.market = st.market === b.dataset.market ? '' : b.dataset.market; renderControls(); scheduleFetch(0); }
     });
@@ -292,7 +293,10 @@ const TimelinePanel = (() => {
     const providers = Object.entries(s.providers || {});
     const scores = `<div class="tl-section" data-market-key="tl-scores"><h4>Счёт и присутствие контор</h4><table class="src-table"><tbody>${providers.map(([p, x]) => `<tr><td><span class="book-mark ${esc(p)}" aria-hidden="true"></span> ${esc(BOOK_NAME[p] || p)}</td><td>${x.present ? '<span class="pill on">в линии</span>' : '<span class="pill off">нет матча</span>'}</td><td class="num">${esc(x.score?.score || '—')}</td><td class="muted">${x.score?.map ? 'карта ' + esc(x.score.map) : ''}${x.score?.betStop ? ' · приём ставок остановлен' : ''}</td><td class="muted">${x.markets ? x.markets + ' рынков' : ''}</td></tr>`).join('') || '<tr><td class="muted">Нет данных</td></tr>'}</tbody></table>${statsHtml(s.stats)}</div>`;
     const model = MarketCompare.fromState(s, { visible: ctx.bookVisible });
-    const grid = model.groups.length ? ctx.compareHtml(model, { teams, at: st.at, idPrefix: 'tl', pickMarket: true, track: false }) : `<p class="muted tl-empty">${s.markets?.length === 0 ? 'В этот момент рынков этой категории не было.' : 'Нет рынков для выбранных контор.'}${Object.keys(s.hiddenCategories || {}).length ? ' Другие категории: ' + Object.entries(s.hiddenCategories).map(([c, n]) => `${esc(c)} — ${n}`).join(', ') : ''}</p>`;
+    // 80 markets per page (a LIVE CS2 state has hundreds): small DOM, cheap patch on every scrub step.
+    const limit = st.limit || 80, page = { ...model, groups: model.groups.slice(0, limit) };
+    const more = model.groups.length > limit ? `<div class="list-more" data-market-key="tl-more"><button type="button" class="btn" data-tl="more">Показать ещё ${Math.min(80, model.groups.length - limit)} · осталось ${model.groups.length - limit}</button></div>` : '';
+    const grid = model.groups.length ? ctx.compareHtml(page, { teams, at: st.at, idPrefix: 'tl', pickMarket: true, track: false }) + more : `<p class="muted tl-empty">${s.markets?.length === 0 ? 'В этот момент рынков этой категории не было.' : 'Нет рынков для выбранных контор.'}${Object.keys(s.hiddenCategories || {}).length ? ' Другие категории: ' + Object.entries(s.hiddenCategories).map(([c, n]) => `${esc(c)} — ${n}`).join(', ') : ''}</p>`;
     const unknown = model.unknown.length ? `<details class="detail-section fold" data-market-key="tl-unknown"><summary>${UiKit.chevron('caret')}<span>Нераспознанные рынки</span><span class="n">${model.unknown.length}</span></summary><table class="src-table"><tbody>${model.unknown.slice(0, 200).map((u) => `<tr><td>${esc(BOOK_NAME[u.source] || u.source)}</td><td>${esc(u.title)}</td><td class="num">${u.prices.map((p) => `${esc(p.label)} ${p.value ?? '—'}`).join(' · ')}</td></tr>`).join('')}</tbody></table></details>` : '';
     ctx.patch(body, scores + `<div class="tl-section" data-market-key="tl-markets"><h4>Рынки в ${esc(fmtTime(st.at))}</h4>${grid}</div>` + unknown);
   }
