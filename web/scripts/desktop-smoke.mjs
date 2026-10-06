@@ -58,7 +58,7 @@ try {
   const names = ui.names || [];
   const has = (re) => names.some((n) => re.test(n));
   check('app starts and its window stays up', exited === null && !!ui.window, `window "${ui.window || ''}"${ui.error ? ' — ' + ui.error : ''}`);
-  check('bundled frontend renders the Access Key gate (UI Automation)', has(/Вход по ключу доступа/) && has(/^Button\|Войти$/) && has(/Ключ доступа/), names.filter((n) => /Вход|Войти|Ключ доступа|Показать/.test(n)).slice(0, 6).join(' ; ') || `${names.length} names`);
+  check('bundled frontend renders the Access Key gate (UI Automation)', has(/Вход по ключу доступа/) && has(/^Button\|Войти$/) && has(/^Edit\|.*ключ доступа/i), names.filter((n) => /Вход|Войти|ключ доступа|Показать/i.test(n)).slice(0, 6).join(' ; ') || `${names.length} names`);
   check('monitor is not shown before sign-in', !has(/^Button\|Результаты$/) && !has(/^Button\|История$/));
   console.log('INFO webview2:', (ps("(Get-CimInstance Win32_Process -Filter 'Name=''msedgewebview2.exe''' | Select-Object -First 1).CommandLine") || '(no command line)').slice(0, 500));
 
