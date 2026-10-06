@@ -2,8 +2,10 @@
 # Safe upgrade for the systemd layout (/opt/esports-monitor/releases/<id>/server + `current` symlink, unit
 # esports-monitor.service). Run as root from the directory of the UNPACKED release (where this script is):
 #
-#   sh ./upgrade-systemd.sh                 # backup → new release dir → switch → restart → health check
+#   sh ./upgrade-systemd.sh                 # backup → new release dir → switch → restart → health check (asks first)
+#   sh ./upgrade-systemd.sh --yes           # no question (scripts)
 #   sh ./upgrade-systemd.sh --no-db-backup  # skip the SQLite copy (the update does not change the monitor DB schema)
+# Target installation: ESM_ROOT (default /opt/esports-monitor), ESM_UNIT, ESM_ENV, ESM_BACKUP_DIR - printed before acting.
 #
 # Nothing is deleted. On a failed health check the previous release is restored automatically.
 # Data: monitor-v2.sqlite3 is not migrated by 4.16.0 (journal rows only gain optional JSON fields); personal settings
@@ -14,7 +16,8 @@ ROOT="${ESM_ROOT:-/opt/esports-monitor}"
 UNIT="${ESM_UNIT:-esports-monitor}"
 ENV_FILE="${ESM_ENV:-/etc/esports-monitor/server.env}"
 DB_BACKUP=1
-[ "${1:-}" = "--no-db-backup" ] && DB_BACKUP=0
+YES=0
+for a in "$@"; do case "$a" in --no-db-backup) DB_BACKUP=0;; --yes) YES=1;; *) echo "unknown option: $a" >&2; exit 2;; esac; done
 VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$HERE/package.json" | head -n1)"
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
 ID="v$VERSION-$STAMP"
@@ -31,6 +34,12 @@ PORT="$(sed -n 's/^PORT=//p' "$ENV_FILE" | tail -n1)"; PORT="${PORT:-8080}"
 DATA_DIR="$(sed -n 's/^DATA_DIR=//p' "$ENV_FILE" | tail -n1)"; DATA_DIR="${DATA_DIR:-/var/lib/esports-monitor/data}"
 TOKEN="$(sed -n 's/^API_TOKEN=//p' "$ENV_FILE" | tail -n1)"
 log "upgrade to $VERSION; current: $CURRENT; data: $DATA_DIR; port: $PORT"
+log "root: $ROOT  unit: $UNIT  env: $ENV_FILE"
+if [ "$YES" != 1 ]; then
+  [ -t 0 ] || die "not interactive: add --yes to confirm"
+  printf 'Type "upgrade" to install %s into %s and restart %s: ' "$VERSION" "$ROOT" "$UNIT"; read -r answer
+  [ "$answer" = upgrade ] || die "cancelled"
+fi
 
 # 1. syntax check of every server file with the installed Node
 for f in "$HERE"/src/*.js; do node --check "$f" || die "syntax error in $f"; done
@@ -57,7 +66,9 @@ log "backup: $BK"
 mkdir -p "$REL"
 cp -a "$HERE" "$REL/server"
 rm -f "$REL/server/upgrade-systemd.sh.lock"
-if cmp -s "$HERE/package-lock.json" "$CURRENT/server/package-lock.json" && [ -d "$CURRENT/server/node_modules" ]; then
+# same dependency tree = same lockfile apart from the root entry (its own version changes every release)
+same_deps(){ node -e 'const r=(f)=>{const l=JSON.parse(require("fs").readFileSync(f,"utf8"));const p={...(l.packages||{})};delete p[""];return JSON.stringify([p,l.dependencies||null])};process.exit(r(process.argv[1])===r(process.argv[2])?0:1)' "$1" "$2"; }
+if same_deps "$HERE/package-lock.json" "$CURRENT/server/package-lock.json" && [ -d "$CURRENT/server/node_modules" ]; then
   rm -rf "$REL/server/node_modules"; cp -a "$CURRENT/server/node_modules" "$REL/server/node_modules"
 else
   log "dependencies changed: npm ci --omit=dev"
