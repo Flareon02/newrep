@@ -1,0 +1,11 @@
+#!/bin/sh
+# Operator CLI for the Esports Data web gateway (see web/gateway/bin/eds-admin.mjs). Run as root.
+# Prints no secrets; bootstrap-admin writes a new administrator key to a root-only file.
+set -eu
+set -a; . /etc/esportsdata-web/gateway.env; set +a
+export UPSTREAM_TOKEN_FILE=/etc/esportsdata-web/upstream-token
+/usr/local/bin/node --disable-warning=ExperimentalWarning /opt/esportsdata-web/current/web/gateway/bin/eds-admin.mjs "$@"
+status=$?
+# The gateway service owns its database; keep any file the CLI created owned by it.
+chown -R esportsdata-web:esportsdata-web /var/lib/esportsdata-web 2>/dev/null || true
+exit $status

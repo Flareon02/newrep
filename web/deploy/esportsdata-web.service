@@ -1,0 +1,51 @@
+[Unit]
+Description=Esports Data web gateway (https://esportsdata.online: Access Key sessions + monitor UI)
+Documentation=file:///opt/esportsdata-web/current/docs/WEB-DEPLOYMENT.md
+After=network-online.target esports-monitor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=esportsdata-web
+Group=esportsdata-web
+WorkingDirectory=/opt/esportsdata-web/current/web/gateway
+EnvironmentFile=/etc/esportsdata-web/gateway.env
+# The monitor server's API token: a systemd credential (readable only by this service, not in the environment,
+# not on the command line). The gateway reads it from $CREDENTIALS_DIRECTORY/upstream-token.
+LoadCredential=upstream-token:/etc/esportsdata-web/upstream-token
+ExecStart=/usr/local/bin/node --disable-warning=ExperimentalWarning src/main.js
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+KillSignal=SIGTERM
+SyslogIdentifier=esportsdata-web
+UMask=0077
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/esportsdata-web
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+LimitNOFILE=8192
+TasksMax=64
+MemoryMax=384M
+MemoryHigh=256M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
