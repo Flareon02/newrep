@@ -34,7 +34,7 @@ for (const r of db.prepare('SELECT source, payload, publication_source FROM odds
         p.unknown++;
         const k = `${r.source}|${part.typeId}|${Object.keys(part.specifiers || {}).sort().join(',')}`;
         const u = unknown.get(k) || { provider: r.source, rawType: String(part.typeId), specKeys: Object.keys(part.specifiers || {}).sort(), changes: 0, sports: new Set(), titles: new Map(), examples: [] };
-        u.changes++; if (e.sport) u.sports.add(e.sport);
+        u.changes++; if (r.publication_source) u.current = (u.current || 0) + 1; else u.legacy = (u.legacy || 0) + 1; if (e.sport) u.sports.add(e.sport);
         const title = String(part.marketName || '');
         u.titles.set(title, (u.titles.get(title) || 0) + 1);
         if (u.examples.length < 3 && !u.examples.some((x) => x.title === title)) u.examples.push({ title, period: part.period ?? null, specifiers: part.specifiers, outcomes: part.outcomes.slice(0, 6).map((o) => ({ id: o.outcomeId, name: o.outcomeName, line: o.line })), teams: [e.team1, e.team2], sport: e.sport || '' });
@@ -54,7 +54,12 @@ if (arg('md')) {
   const NAME = { astek: 'AstekBet', fonbet: 'Fonbet', pinnacle: 'Pinnacle', ggbet: 'GGBET' };
   let md = `# Market coverage (semantics v${MARKET_SEMANTICS_VERSION})\n\nGenerated ${report.generatedAt} by \`tools/market-coverage.mjs\` from a read-only copy of the production journal (${rows} journal rows, ${legacy} of them written before 4.15).\nEvery market change was described with the server's own registry. **Unknown = not classified on purpose**: the structured ids do not prove what the bet is.\n\n| Bookmaker | market changes | coverage by volume — all rows | — rows written by 4.15+ | — legacy rows (≤4.14) | signatures known / total |\n|---|---:|---:|---:|---:|---:|\n`;
   for (const [k, p] of Object.entries(providers)) md += `| ${NAME[k] || k} | ${p.marketChanges} | ${p.coverageByVolume} % | ${p.currentRows.coverage} % of ${p.currentRows.changes} | ${p.legacyRows.coverage} % of ${p.legacyRows.changes} | ${p.knownSignatures} / ${p.signatures} |\n`;
-  for (const [k, p] of Object.entries(providers)) md += `\n## ${NAME[k] || k}\n\nKnown families (market changes): ${p.families.map(([f, n]) => `\`${f}\` ${n}`).join(', ') || '—'}\n\nUnknown types:\n\n` + (unknownList.filter((u) => u.provider === k).map((u) => `- \`${u.rawType}\`${u.specKeys.length ? ` (${u.specKeys.join(', ')})` : ''} — ${u.changes} changes · ${u.sports.join(', ') || 'sport n/a'} · e.g. «${u.titles.join('», «')}»${u.examples[0] ? ` · outcomes: ${u.examples[0].outcomes.map((o) => `${o.id}=${o.name ?? ''}${o.line != null ? ' ' + o.line : ''}`).join('; ')}` : ''}`).join('\n') || '- none') + '\n';
+  const line = (u) => `- \`${u.rawType}\`${u.specKeys.length ? ` (${u.specKeys.join(', ')})` : ''} — ${u.current || 0} current / ${u.legacy || 0} legacy changes · ${u.sports.join(', ') || 'sport n/a'} · e.g. «${u.titles.join('», «')}»${u.examples[0] ? ` · outcomes: ${u.examples[0].outcomes.map((o) => `${o.id}=${o.name ?? ''}${o.line != null ? ' ' + o.line : ''}`).join('; ')}` : ''}`;
+  md += `\n## Why legacy rows are not classified\n\nRows written before 4.15 (\`publication_source\` empty) stored only the parsed market (\`type\`, title, designation-only prices). They lack what the registry needs: Fonbet factor ids, Astek outcome templates (\`T\`), the Pinnacle team-total side, \`bestOf\`/\`units\`. Classifying them would mean guessing from titles, which the registry refuses. They leave the journal with the 7-day retention (oldest row: 2026-10-01). GGBET legacy rows kept typeId + specifiers and are classified.\n`;
+  for (const [k, p] of Object.entries(providers)) {
+    const list = unknownList.filter((u) => u.provider === k), cur = list.filter((u) => u.current), old = list.filter((u) => !u.current);
+    md += `\n## ${NAME[k] || k}\n\nKnown families (market changes): ${p.families.map(([f, n]) => `\`${f}\` ${n}`).join(', ') || '—'}\n\nStill unknown in rows written by 4.15+ (${cur.length} types, ${cur.reduce((n, u) => n + u.current, 0)} changes):\n\n${cur.sort((a, b) => b.current - a.current).map(line).join('\n') || '- none'}\n\nOnly in legacy rows (${old.length} types):\n\n${old.map(line).join('\n') || '- none'}\n`;
+  }
   fs.writeFileSync(arg('md'), md);
 }
 console.log(JSON.stringify(providers, (k, v) => (k === 'families' ? undefined : v), 1));
