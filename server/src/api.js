@@ -1,5 +1,5 @@
 import {sqliteHistoryStatus} from './match-history.js';
-import {eventHistoryQuery,historyOptions} from './match-history-query.js';
+import {historyOptions} from './match-history-query.js';
 import { forensicSpan } from './collector-forensics.js';
 import { log } from "./logger.js";
 import {StatisticsService} from './statistics-service.js';
@@ -26,6 +26,7 @@ import {safeWrite} from './sse.js';
 import {historyCapacity,warnHistoryCapacity} from './capacity.js';
 import {createAuthorizer,MIN_TOKEN_LENGTH} from './auth.js';
 import {UserSettingsStore} from './user-settings.js';
+import {TimelineClient} from './timeline-client.js';
 import {UserStore,createAccess,routeRequirement,routeProvider,can,canAny,filterForPrincipal,filterSsePayload,CAPABILITIES,CAPABILITY_GROUPS} from './entitlements.js';
 import {randomUUID,createHash} from 'node:crypto';
 import {writeCounters} from './sqlite-storage.js';
@@ -195,9 +196,10 @@ export function sseEventWire(event,payload){
   return `event: ${String(event||'message')}\ndata: ${JSON.stringify(payload??{})}\n\n`;
 }
 
-export function createApi({ authToken=config.apiToken, userStore=null, settingsStore=null, ggbetSupervisor=null, accessMode=config.accessControl, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState=null,databetCollector=null,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
+export function createApi({ authToken=config.apiToken, userStore=null, settingsStore=null, timelineClient=null, ggbetSupervisor=null, accessMode=config.accessControl, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState=null,databetCollector=null,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
   const authorizer=createAuthorizer(authToken);
   const settings=settingsStore||new UserSettingsStore({dataDir:config.dataDir});
+  const timeline=timelineClient||new TimelineClient({dataDir:config.dataDir});
   const users=userStore||new UserStore(),access=createAccess({masterToken:authorizer.misconfigured?'':authToken,users,mode:accessMode});
   if(access.enforce)log.info('[api] access control: per-user capabilities enforced (API_TOKEN holder = administrator)');
   if(!authorizer.enabled)log.warn('[api] API_TOKEN is not set: write and compute endpoints are open to any client that can reach this port');
@@ -423,7 +425,10 @@ export function createApi({ authToken=config.apiToken, userStore=null, settingsS
       return res.end();
     }
     // Who is asking, and may they? (entitlements.js) Data they may not see is also filtered in sendJson.
-    req.principal=await access.resolve(req,url);req.dataMode=/prematch/.test(url.pathname)||url.searchParams.get('view')==='prematch'||(url.pathname==='/api/ui/full-markets'?false:url.searchParams.get('scope')==='prematch')?'prematch':'live';
+    req.principal=await access.resolve(req,url);
+      // The web gateway calls as the server's service account; for per-user data (settings, history, timeline) it names
+      // the signed-in user, and only the server token may do that. The request then runs with that user's principal.
+      {const behalf=String(req.headers['x-esm-on-behalf-user']||'');if(behalf&&req.principal.builtin){const p=await access.principalFor(behalf);if(!p)return sendJson(req,res,403,{ok:false,error:'Пользователь не найден или отключён',code:'forbidden'});req.principal=p;req.onBehalf=true;}}req.dataMode=/prematch/.test(url.pathname)||url.searchParams.get('view')==='prematch'||(url.pathname==='/api/ui/full-markets'?false:url.searchParams.get('scope')==='prematch')?'prematch':'live';
     if(authorizer.misconfigured&&!authorizer.allows(req,url.pathname))return sendJson(req,res,503,{error:`API_TOKEN на сервере короче ${MIN_TOKEN_LENGTH} символов: запись отключена, пока токен не исправлен.`,code:'auth_misconfigured'});
     if(!access.enforce){    if(!authorizer.allows(req,url.pathname)){if(authorizer.misconfigured)return sendJson(req,res,503,{error:`API_TOKEN на сервере короче ${MIN_TOKEN_LENGTH} символов: запись отключена, пока токен не исправлен.`});res.setHeader('WWW-Authenticate','Bearer realm="esports-monitor"');return sendJson(req,res,401,{error:'Требуется токен доступа. Укажите токен сервера в настройках расширения.'});}}
     else if(req.principal.anonymous&&routeRequirement(req.method,url.pathname,url.searchParams)){res.setHeader('WWW-Authenticate','Bearer realm="esports-monitor"');return sendJson(req,res,401,{ok:false,error:'Нужен ключ доступа. Укажите его в настройках подключения.',code:'unauthorized'});}
@@ -431,11 +436,9 @@ export function createApi({ authToken=config.apiToken, userStore=null, settingsS
      if((need&&!canAny(req.principal,need))||(provider&&!can(req.principal,'provider.'+provider)))return sendJson(req,res,403,{ok:false,error:'Нет доступа к этому разделу.',code:'forbidden'});}
     if(url.pathname==='/api/me')return sendJson(req,res,200,{ok:true,serverVersion:config.version,access:access.mode,principal:{id:req.principal.id,name:req.principal.name,role:req.principal.role,anonymous:req.principal.anonymous},keyId:req.principal.keyId||'',entitlementsRevision:req.principal.rev||0,capabilities:[...req.principal.caps].sort(),features:{settingsSync:1,timeline:1,marketSemantics:2}});
     if(url.pathname==='/api/me/settings'){
-      // Personal settings: user + key from the request's own key. Only the server token (the web gateway's service
-      // account) may name another user, because the gateway authenticates its users itself.
+      // Personal settings: user + key of the request's principal (for the web gateway: the user it names, see above).
       try{
-        const onBehalf=req.principal.builtin&&String(req.headers['x-esm-on-behalf-user']||'');
-        const identity=onBehalf?{userId:onBehalf,keyId:String(req.headers['x-esm-on-behalf-key']||'')}:{userId:req.principal.anonymous?'':req.principal.id,keyId:req.principal.keyId||'',anonymous:req.principal.anonymous};
+        const identity={userId:req.principal.anonymous?'':req.principal.id,keyId:req.principal.keyId||'',anonymous:req.principal.anonymous};
         if(identity.anonymous&&access.enforce){res.setHeader('WWW-Authenticate','Bearer realm="esports-monitor"');return sendJson(req,res,401,{ok:false,error:'Нужен ключ доступа.',code:'unauthorized'});}
         const namespace=String(url.searchParams.get('ns')||'ui');
         if(req.method==='GET')return sendJson(req,res,200,{ok:true,...settings.get(identity,namespace)});
@@ -588,6 +591,8 @@ export function createApi({ authToken=config.apiToken, userStore=null, settingsS
         oddsProviders: oddsProvidersStatus(),
         network: networkStatus(),
         persistence: persistenceStatus(),
+        timeline: timeline.status(),
+        userSettings: settings.status(),
         results: resultsService?.status?.()||{enabled:false}
         ,leagueRules:{revision:leagueStore.revision(),groups:leagueStore.state.links.length,catalogLeagues:leagueStore.catalog.size,hiddenLeagueKeys:leagueStore.state.visibility.excludedLeagueKeys.length,publishAuth:'one-time-challenge'},security:{cors:'extension-only',writeAuth:authorizer.mode,getRateLimitPerMinute:config.apiRateLimitPerMinute,postRateLimitPerMinute:config.apiPostRateLimitPerMinute,sseLimitPerIp:config.apiSseLimitPerIp,upstreamMaxBytes:config.upstreamMaxBytes}
       });
@@ -776,22 +781,36 @@ export function createApi({ authToken=config.apiToken, userStore=null, settingsS
     if (url.pathname === "/api/live/databet" && databetLiveState) return snapshotResponse(req,res,{...singleProviderSnapshot(databetLiveState,'live'),providers:{databet:singleProviderSnapshot(databetLiveState,'live')}});
     if(req.method==='GET'&&url.pathname==='/api/ui/odds-providers')return sendJson(req,res,200,{defaultProvider:'ggbet',providers:oddsProvidersStatus(),serverVersion:config.version});
 
-    if(req.method==='GET'&&/^\/api\/events\/[^/]+\/history$/.test(url.pathname)){
+    // Event history and timeline: identities of the event's bookmakers (live/line views, or `ids` of an archived card),
+    // filtered by the principal's bookmakers; the query runs in the timeline worker (timeline-client.js), never here.
+    const eventRoute=/^\/api\/(?:events|ui\/event)\/([^/]+)\/(history|timeline\/meta|timeline|state-at)$/.exec(url.pathname);
+    if(req.method==='GET'&&eventRoute){
       try{
-        const eventId=decodeURIComponent(url.pathname.split('/')[3]);if(eventId.length>300)throw Object.assign(Error('Неверный eventId'),{status:400});
-        let keys=[];
+        const eventId=decodeURIComponent(eventRoute[1]),op=eventRoute[2];if(eventId.length>300)throw Object.assign(Error('Неверный eventId'),{status:400});
+        let keys=[],event=null;
         if(/^(astek|fonbet|pinnacle|ggbet):[\w-]{1,80}$/.test(eventId))keys=[eventId];
         else {
           const live=await liveSnapshot('ggbet'),prematch=await uiPrematchSnapshot();
-          const event=[...(live.events||[]),...(prematch.events||[])].find(e=>String(e.id)===eventId);
+          event=[...(live.events||[]),...(prematch.events||[])].find(e=>String(e.id)===eventId)||null;
           if(event)keys=(event.sourceRefs?.length?event.sourceRefs:[event]).flatMap(r=>[identity(r),...(r.aliases||[])]);
           // Archived cards carry the provider identities already returned by the server ledger.
           else keys=String(url.searchParams.get('ids')||'').split(',').slice(0,32);
         }
         keys=keys.filter(k=>/^(astek|fonbet|pinnacle|ggbet):[\w-]{1,80}$/.test(k)&&can(req.principal,'provider.'+k.split(':')[0]));
-        const options=historyOptions(url.searchParams);options.includeOdds=can(req.principal,'odds.history');options.includeScores=can(req.principal,'scores.history');
-        return sendJson(req,res,200,{eventId,...eventHistoryQuery(keys,options)});
-      }catch(error){return sendJson(req,res,error.status||500,{error:error.message});}
+        const includeOdds=can(req.principal,'odds.history'),includeScores=can(req.principal,'scores.history');
+        if(op==='history'){const options=historyOptions(url.searchParams);options.includeOdds=includeOdds;options.includeScores=includeScores;return sendJson(req,res,200,{eventId,...await timeline.request('history',{keys,options})});}
+        // Team order of each bookmaker relative to this event (reversed refs swap home/away and mirror handicap lines).
+        const refsOf=event?(event.sourceRefs?.length?event.sourceRefs:[event]):[];
+        const reversed=event?refsOf.filter(r=>r.scoreReversed===true).flatMap(r=>[identity(r),...(r.aliases||[])]):String(url.searchParams.get('rev')||'').split(',').filter(Boolean).slice(0,32);
+        const q=url.searchParams,base={keys,reversed,includeOdds,includeScores,provider:String(q.get('provider')||''),market:String(q.get('market')||'').slice(0,200),team1:event?.team1||String(q.get('team1')||'').slice(0,150),team2:event?.team2||String(q.get('team2')||'').slice(0,150),sport:event?.category||String(q.get('sport')||'').slice(0,80),bestOf:Number(event?.bestOf||refsOf.find(r=>r.bestOf)?.bestOf||q.get('bestOf'))||0};
+        if(base.provider&&!['astek','fonbet','pinnacle','ggbet'].includes(base.provider))throw Object.assign(Error('Неизвестный bookmaker'),{status:400});
+        const ts=v=>{if(v==null||v==='')return null;const n=/^\d+$/.test(v)?Number(v):Date.parse(v);if(!Number.isFinite(n)||n<0)throw Object.assign(Error('Неверное время'),{status:400});return n;};
+        let result;
+        if(op==='timeline/meta')result=await timeline.request('meta',{...base,buckets:Number(q.get('buckets'))||120});
+        else if(op==='timeline')result=await timeline.request('range',{...base,from:ts(q.get('from'))??0,to:ts(q.get('to'))??Date.now(),cursor:String(q.get('cursor')||''),limit:Number(q.get('limit'))||200,kinds:String(q.get('kinds')||'')||undefined});
+        else {const at=ts(q.get('at'));if(at==null)throw Object.assign(Error('Укажите время (at)'),{status:400});result=await timeline.request('stateAt',{...base,at,cats:String(q.get('cats')||'').slice(0,200)||undefined,detail:q.get('detail')==='1'});}
+        return sendJson(req,res,200,{eventId,keys,...result});
+      }catch(error){if(error?.retryAfterMs)res.setHeader('Retry-After',String(Math.max(1,Math.ceil(error.retryAfterMs/1000))));return sendJson(req,res,error.status||500,{error:error.message,...(error.retryAfterMs?{retryable:true,retryAfterMs:error.retryAfterMs}:{})});}
     }
     if(url.pathname==='/api/score-history'){
       const keys=(url.searchParams.get('ids')||'').split(',').filter(Boolean);
@@ -869,6 +888,8 @@ export function createApi({ authToken=config.apiToken, userStore=null, settingsS
         oddsProviders: oddsProvidersStatus(),
         network: networkStatus(),
         persistence: persistenceStatus(),
+        timeline: timeline.status(),
+        userSettings: settings.status(),
         results: resultsService?.status?.()||{enabled:false}
       });
     }

@@ -390,6 +390,9 @@ export async function migrateLegacy({compact=false,progress=()=>{}}={}){
 }
 
 let fastMetricsCache={at:0,value:null};
+const journalRows={value:null,at:0};
+// Set from the SQLite history worker's periodic status (it counts the journal off the main thread).
+export function setJournalRowCount(n,at=Date.now()){if(Number.isFinite(Number(n))){journalRows.value=Number(n);journalRows.at=at;}}
 function lastVerifiedIntegrity(){
   const marker=legacyJson(path.join(path.resolve(config.dataDir),'.sqlite-v2-migration.json'),null);
   return marker?.completedAt?{integrity:'ok',integrityVerifiedAt:Number(marker.completedAt)||0,integritySource:'migration-final-check'}:{integrity:'not-checked',integrityVerifiedAt:0,integritySource:'none'};
@@ -401,9 +404,11 @@ export function storageMetrics({checkIntegrity=true,integrityOverride=null}={}){
   const page=db.prepare('PRAGMA page_count').get(),free=db.prepare('PRAGMA freelist_count').get();const val=o=>Number(Object.values(o||{})[0]||0);
   // COUNT(*) over a million-row odds journal is not part of the health critical
   // path more than once every few seconds. Cache the whole cheap metrics sample.
-  const oddsRows=Number(db.prepare('SELECT COUNT(*) AS n FROM odds_entries_v3').get()?.n||0);
+  // An exact COUNT(*) only for explicit checks (CLI/migration). On the health path a cold COUNT over the journal took
+  // ~0.5 s of the main thread; there the count comes from the history writer worker (journalRowCount below).
+  const exact=checkIntegrity||!!integrityOverride,oddsRows=exact?Number(db.prepare('SELECT COUNT(*) AS n FROM odds_entries_v3').get()?.n||0):journalRows.value;
   const integrity=integrityOverride?{integrity:String(integrityOverride),integrityVerifiedAt:now,integritySource:'explicit-check'}:(checkIntegrity?{integrity:integrityCheck()?'ok':'failed',integrityVerifiedAt:now,integritySource:'quick-check'}:lastVerifiedIntegrity());
-  const value={engine:'sqlite',schemaVersion:SCHEMA_VERSION,file:path.basename(file),sizeMiB:Math.round(size/104857.6)/10,walMiB:Math.round(wal/104857.6)/10,pageCount:val(page),freePages:val(free),oddsRows,...integrity};
+  const value={engine:'sqlite',schemaVersion:SCHEMA_VERSION,file:path.basename(file),sizeMiB:Math.round(size/104857.6)/10,walMiB:Math.round(wal/104857.6)/10,pageCount:val(page),freePages:val(free),oddsRows,oddsRowsSource:exact?'count':journalRows.value==null?'unavailable':'history-worker',oddsRowsAt:exact?now:journalRows.at||null,...integrity};
   if(!checkIntegrity&&!integrityOverride)fastMetricsCache={at:now,value};
   return value;
 }
