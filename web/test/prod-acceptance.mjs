@@ -36,7 +36,8 @@ execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days
 const tls = https.createServer({ key: fs.readFileSync(path.join(tmp, 'k.pem')), cert: fs.readFileSync(path.join(tmp, 'c.pem')) }, (req, res) => {
   const up = http.request(GATEWAY + req.url, { method: req.method, headers: { ...req.headers, 'cf-connecting-ip': '198.51.100.7', 'cf-ipcountry': 'AM' } }, (r) => { res.writeHead(r.statusCode, r.headers); res.flushHeaders?.(); r.pipe(res); });
   up.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
-  req.on('close', () => up.destroy());
+  // The response closing (client gone) ends the upstream request; req 'close' fires as soon as the body is read.
+  res.on('close', () => up.destroy());
   req.pipe(up);
 });
 await new Promise((r) => tls.listen(0, '127.0.0.1', r));
@@ -51,7 +52,9 @@ async function gw(pathname, { method = 'GET', body, cookie = '' } = {}) {
 }
 const adminLogin = await gw('/auth/verify', { method: 'POST', body: { key: adminKey, client: 'web' } });
 assert(adminLogin.status === 200, 'admin key sign-in failed: ' + adminLogin.status);
-const adminCookie = adminLogin.cookie;
+let adminCookie = adminLogin.cookie;
+// One key = one session: the browser admin profile below replaces this session, so sign in again when needed.
+const reAdmin = async () => { const r = await gw('/auth/verify', { method: 'POST', body: { key: adminKey, client: 'web' } }); adminCookie = r.cookie; return r.status; };
 const caps = (await gw('/api/admin/capabilities', { cookie: adminCookie })).data.capabilities.map((c) => c.key).filter((k) => !k.startsWith('admin.'));
 const restrictedCaps = caps.filter((k) => !['provider.pinnacle', 'odds.fullMarkets', 'history.view'].includes(k));
 const created = [];
@@ -218,6 +221,7 @@ try {
     await B.page.reload(); await B.page.waitForSelector('#gate:not([hidden])', { timeout: 15000 });
   });
   await check('audit log records admin actions without secrets', async () => {
+    await reAdmin();
     const a = await gw('/auth/admin/audit?limit=50', { cookie: adminCookie });
     const actions = a.data.entries.map((e) => e.action);
     const text = JSON.stringify(a.data);
@@ -230,6 +234,7 @@ try {
 } finally {
   await A.context.close().catch(() => {});
   // Cleanup: delete the test keys (their sessions end with them) and sign the admin session out.
+  await reAdmin();
   for (const id of created) await gw(`/api/admin/users/${id}/delete`, { method: 'POST', cookie: adminCookie, body: {} });
   const left = (await gw('/api/admin/users', { cookie: adminCookie })).data?.users?.filter((u) => created.includes(u.id)).length;
   await gw('/auth/logout', { method: 'POST', cookie: adminCookie, body: {} });
