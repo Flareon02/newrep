@@ -14,7 +14,8 @@ import { allowedModes, endStream } from './feed-hub.js';
 const gzipAsync = promisify(gzip);
 const STREAM_ROUTES = new Set(['/api/statistics/stream', '/api/pinnacle/live-stream']);
 const COPY_HEADERS = ['content-type', 'content-encoding', 'cache-control', 'last-modified', 'vary', 'retry-after', 'content-disposition'];
-const EVENT_HISTORY = /^\/api\/events\/[^/]+\/history$/;
+const EVENT_HISTORY = /^\/api\/(?:events|ui\/event)\/[^/]+\/history$/;
+const ON_BEHALF = /^\/api\/(?:me\/settings|(?:events|ui\/event)\/[^/]+\/(?:history|timeline\/meta|timeline|state-at))$/;
 const BODY_LIMIT = 16 * 1024 * 1024;
 
 // Same as server/src/api.js (req.dataMode): which odds capability applies to the payload.
@@ -73,8 +74,9 @@ export function createApiProxy({ upstream, hub, registry, keys, log = console, c
     const clientGzip = /\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''));
     const headers = { accept: String(req.headers.accept || 'application/json'), 'accept-encoding': pass && clientGzip ? 'gzip' : 'identity' };
     if (req.headers['content-type']) headers['content-type'] = String(req.headers['content-type']);
-    // Personal settings belong to the signed-in user and key; the server accepts the user only from its service token.
-    if (path === '/api/me/settings') { headers['x-esm-on-behalf-user'] = String(principal.id); headers['x-esm-on-behalf-key'] = String(principal.keyId || ''); }
+    // Per-user data (settings, event history, timeline/replay): the server runs these with the signed-in user's own
+    // principal (rights, bookmakers, key id); it accepts a named user only from its service token.
+    if (ON_BEHALF.test(path)) headers['x-esm-on-behalf-user'] = String(principal.id);
     const inm = unscopeEtag(req.headers['if-none-match'], principal);
     if (inm) headers['if-none-match'] = inm;
 

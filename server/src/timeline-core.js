@@ -167,14 +167,22 @@ export function timelineMeta(db, req) {
       }
   }
   const density = new Array(buckets).fill(0);
-  if (from != null && to != null && to > from && req.includeOdds !== false) {
-    const span = to - from;
-    for (const k of keys) for (const row of db.prepare('SELECT at FROM odds_entries_v3 WHERE source=? AND event_id=?').iterate(k.provider, k.id)) density[Math.min(buckets - 1, Math.floor(((row.at - from) / span) * buckets))]++;
+  // Density over the requested window (zoomed scrubber) or the whole range.
+  const dFrom = Number(req.from) > 0 ? Math.max(Number(req.from), from ?? 0) : from, dTo = Number(req.to) > 0 ? Math.min(Number(req.to), to ?? Infinity) : to;
+  if (dFrom != null && dTo != null && dTo > dFrom && req.includeOdds !== false) {
+    const span = dTo - dFrom;
+    for (const k of keys) for (const row of db.prepare('SELECT at FROM odds_entries_v3 WHERE source=? AND event_id=? AND at>=? AND at<=?').iterate(k.provider, k.id, dFrom, dTo)) density[Math.min(buckets - 1, Math.floor(((row.at - dFrom) / span) * buckets))]++;
+  }
+  // LIVE start: the first journal row of a bookmaker's LIVE event (GGBET is LIVE-only; Astek LIVE has its own ids).
+  let liveFrom = null;
+  for (const k of keys) {
+    const first = db.prepare('SELECT at, payload FROM odds_entries_v3 WHERE source=? AND event_id=? ORDER BY at, seq LIMIT 1').get(k.provider, k.id);
+    try { if (first && inflate(first.payload).phase === 'live') liveFrom = liveFrom == null ? first.at : Math.min(liveFrom, first.at); } catch {}
   }
   marks.sort((a, b) => a.at - b.at);
   const maps = [];
   for (const m of marks) if (m.map != null && (!maps.length || maps.at(-1).map !== m.map)) maps.push({ map: m.map, at: m.at, provider: m.provider });
-  return { timelineVersion: TIMELINE_VERSION, semanticsVersion: MARKET_SEMANTICS_VERSION, from, to, providers, marks: marks.slice(0, 1500), maps, density: { buckets, counts: density }, statistics: statisticsInfo(req) };
+  return { timelineVersion: TIMELINE_VERSION, semanticsVersion: MARKET_SEMANTICS_VERSION, from, to, liveFrom, providers, marks: marks.slice(0, 1500), maps, density: { buckets, from: dFrom, to: dTo, counts: density }, statistics: statisticsInfo(req) };
 }
 
 // ---------------------------------------------------------------------------------------------------- range -------
@@ -267,4 +275,12 @@ function statisticsAt(req, at) {
     }).filter((m) => m.started);
     return { provider: 'cs2', team1: d.team1, team2: d.team2, maps, current: maps.at(-1) || null };
   } catch { return null; }
+}
+
+// One bookmaker's markets at `at`, in the shape of the live API (key/type/rawType/prices with decimal and the
+// provider's outcome ids). Used by test tools to show a real journal state through the regular odds path.
+export function marketsAt(db, key, at, cache = null) {
+  const k = split(key), { markets, meta } = replay(db, k, at, cache);
+  const prices = (m) => m.outcomes.map((o) => ({ outcomeId: o.outcomeId, rawType: ['astek', 'fonbet'].includes(k.provider) ? Number(o.outcomeId) : undefined, designation: k.provider === 'pinnacle' ? o.outcomeId : undefined, label: o.outcomeName, rawLabel: o.outcomeName, decimal: m.status === 'open' && o.active !== false ? o.odds : null, points: o.line }));
+  return { meta, markets: [...markets.values()].map((m) => ({ key: m.marketId, marketId: m.marketId, type: m.typeId, rawType: k.provider === 'astek' ? undefined : m.typeId, rawGroup: k.provider === 'astek' ? m.typeId : undefined, rawTitle: m.marketName, title: m.marketName, period: m.period ?? 0, specifiers: m.specifiers, status: m.status, prices: prices(m) })) };
 }

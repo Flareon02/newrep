@@ -97,7 +97,7 @@ const client=Store.createClient({base:()=>BASE,headers:()=>ServerConfig.headers(
 function applyProfilePrefs(next){applyingProfile=true;try{prefs={...DEFAULT_PREFS,...next};migratePrefs();changedPrefKeys();savePrefs();applyTheme();document.documentElement.classList.toggle('team-logos-off',prefs.teamLogos===false);lineFold=LineCollapse.create({closedGames:Array.isArray(prefs.lineClosedGames)?prefs.lineClosedGames:[]});if(typeof markDirty==='function'){markDirty();renderChrome();if(!$('settingsView').hidden)renderSettings();DetailPanel.render();}}finally{applyingProfile=false;}}
 const settingsSync=SettingsSync.create({storage:chrome.storage.local,client,getPrefs:()=>prefs,applyPrefs:applyProfilePrefs,defaults:DEFAULT_PREFS,log:e=>report(e)});
 // Compatibility wrapper for the reused modules (score dialog, odds timeline, generator, stats panels, league client).
-async function request(path,options={}){if(options.method==='POST'){const body=typeof options.body==='string'?JSON.parse(options.body):options.body;return client.post(path,body);}return client.get(path);}
+async function request(path,options={}){if(options.method==='POST'){const body=typeof options.body==='string'?JSON.parse(options.body):options.body;return client.post(path,body);}return client.get(path,options.signal?{signal:options.signal}:{});}
 const persist=Store.createPersist({storage:chrome.storage.local,prefix:'lastKnown9:',minIntervalMs:30000});
 
 // Event details: LIVE ones belong to the selected odds provider (never reuse GGBET detail for DataBet).
@@ -322,6 +322,21 @@ function morphInto(parent,html){
 // Keyed patch of a list described as data: a leaf {key,html} or a group {key,tag,attrs,children}. A leaf is parsed
 // only when its html differs from the html it was built from, so a feed update that changes one price touches one row;
 // unchanged rows keep their nodes (focus, hover, images, scroll). A focused row that changed is morphed, not replaced.
+// In-place sync of a live element to a freshly parsed one with the same structure: attributes and text nodes are
+// updated where they differ, children are matched by position and tag (an unmatched fresh child is moved in), so
+// unchanged nodes - including loaded <img> logos - are never replaced.
+function syncNode(a,b){
+ for(const attr of [...a.attributes])if(!b.hasAttribute(attr.name))a.removeAttribute(attr.name);
+ for(const attr of b.attributes)if(a.getAttribute(attr.name)!==attr.value)a.setAttribute(attr.name,attr.value);
+ let ac=a.firstChild,bc=b.firstChild;
+ while(bc){const next=bc.nextSibling;
+  if(ac&&ac.nodeType===bc.nodeType&&(ac.nodeType!==1||ac.localName===bc.localName)){
+   if(ac.nodeType===1)syncNode(ac,bc);else if(ac.nodeValue!==bc.nodeValue)ac.nodeValue=bc.nodeValue;
+   ac=ac.nextSibling;
+  }else a.insertBefore(bc,ac);
+  bc=next;}
+ while(ac){const n=ac.nextSibling;ac.remove();ac=n;}
+}
 function patchTree(parent,items){
  // Pass 1: find the leaves whose html changed and parse them all at once (one template, not one per row).
  const stale=[];
@@ -340,7 +355,9 @@ function patchTree(parent,items){
     for(const [k,v] of Object.entries(item.attrs||{}))if(node.getAttribute(k)!==v)node.setAttribute(k,v);
    }else if(item.fresh){
     const fresh=item.fresh;item.fresh=null;
-    if(node&&node.contains(document.activeElement)&&node.localName===fresh.localName){morphInto(node,fresh.innerHTML);for(const a of [...node.attributes])if(!fresh.hasAttribute(a.name))node.removeAttribute(a.name);for(const a of fresh.attributes)if(node.getAttribute(a.name)!==a.value)node.setAttribute(a.name,a.value);}
+    // A changed row is synced in place (only the text/attributes that differ): the row node, its logo images and its
+    // geometry stay, so a price tick never rebuilds the row, re-decodes logos or moves the scroll anchor.
+    if(node&&node.localName===fresh.localName)syncNode(node,fresh);
     else{if(node)node.remove();node=fresh;}
     node.__key=item.key;node.__html=item.html;
    }
@@ -923,6 +940,8 @@ DetailPanel.configure({esc,stamp,providerName,refsOf:refs,scoreOf,bookVisible,bo
  generatorAvailable:(e,view)=>Ent.can('tools.generator')&&!!prefs.generatorEnabled&&!oddsHidden(view)&&['live','prematch'].includes(view)&&GameCategories.info(e.category).key==='cs'&&!isExtraEvent(e),
  statsAvailable:(e,view)=>Ent.can('statistics.view')&&['live','results'].includes(view)&&!isExtraEvent(e)&&((StatisticsClient.info(e)?.provider==='dota2'&&prefs.dotaStatsEnabled&&GameCategories.info(e.category).key==='dota')||(StatisticsClient.info(e)?.provider==='cs2'&&GameCategories.info(e.category).key==='cs')),
  detail:(e,view,opts)=>detailSwr(e,view,opts),learnLogos:v=>{Logos.learn(v);saveLogosSoon();},leaseFull,releaseFull,can:key=>Ent.can(key),isAdmin:()=>Ent.isAdmin(),oddsHidden,invalidateDetail:(e,view)=>details.invalidate(detailKeyFor(e,view==='compare'?'live':view)),onClosed:onDetailClosed});
+// «Таймлайн» tab: same request client (key, abort), same canonical comparison grid as «Коэффициенты».
+TimelinePanel.configure({esc,stamp,refsOf:refs,bookVisible,errorText,toast,request,patch:(node,html)=>StableDOM.patch(node,html),compareHtml:(...a)=>DetailPanel.compareHtml(...a)});
 StatisticsClient.configure({base:BASE,request,view:()=>tab,active:()=>['live','results'].includes(tab),render:()=>{DetailPanel.render();}});
 Cs2Panel.configure({esc,request,logosEnabled:()=>prefs.teamLogos!==false,learnLogos:v=>{Logos.learn(v);saveLogosSoon();},render:()=>DetailPanel.refreshStats()});
 DotaStatsPanel.configure({enabled:()=>prefs.dotaStatsEnabled===true,logosEnabled:()=>prefs.teamLogos!==false,esc,request,render:()=>DetailPanel.refreshStats()});

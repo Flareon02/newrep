@@ -1,0 +1,332 @@
+/* Cross-bookmaker comparison grid (Коэффициенты → Сравнение контор, Таймлайн) and the Таймлайн tab. */
+
+/* ------------------------------------------------------------------------------------------- comparison ----------- */
+.odds-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.odds-top .muted.small {
+  font-size: var(--fs-xs);
+}
+.cmp {
+  padding: 8px var(--s4) 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.mkt-group > .cmp:first-of-type {
+  border-top: 0;
+}
+.cmp-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-bottom: 6px;
+  font-size: var(--fs-s);
+  font-weight: 600;
+  line-height: 18px;
+  cursor: help;
+}
+.cmp-title small {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: var(--fs-xs);
+}
+.cmp-title .link-btn {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+.cmp.closed .cmp-title > span {
+  color: var(--muted);
+}
+/* The grid never scrolls the page sideways: outcome column shrinks with ellipsis, price columns share the rest. Only a
+   very narrow pane with many bookmakers scrolls this one table horizontally. */
+.cmp-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.cmp-grid {
+  width: 100%;
+  min-width: calc(110px + var(--cols, 4) * 52px);
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 3px 3px;
+  font-variant-numeric: tabular-nums;
+}
+.cmp-grid th.o {
+  width: 38%;
+}
+.cmp-grid thead th {
+  padding: 0 4px 2px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmp-grid thead th .book-mark {
+  margin-right: 4px;
+}
+.cmp-grid tbody th {
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+  font-weight: 500;
+  text-align: left;
+}
+.cmp-grid td {
+  height: 30px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--raised);
+  color: var(--text);
+  font-size: var(--fs-m);
+  font-weight: 650;
+  text-align: center;
+  white-space: nowrap;
+}
+.cmp-grid td.best {
+  background: var(--accent-soft);
+  border-color: var(--best-line);
+  color: var(--best-text);
+}
+.cmp-grid td.absent {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--line-soft);
+  color: var(--faint);
+  font-weight: 400;
+}
+.cmp-grid td.none,
+.cmp-grid td.susp {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: var(--fs-s);
+}
+.cmp-grid td.susp {
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: var(--warn-text);
+}
+/* the change arrow takes no width: the number never moves when it appears */
+.cmp-grid td .chg {
+  position: absolute;
+  margin-left: -12px;
+  font-size: 10px;
+}
+.cmp-grid td {
+  position: relative;
+}
+.cmp-grid td .chg.up {
+  color: var(--up);
+}
+.cmp-grid td .chg.down {
+  color: var(--down);
+}
+
+/* ---------------------------------------------------------------------------------------------- timeline ---------- */
+.tl {
+  display: grid;
+  gap: 8px;
+  padding: var(--s3) var(--s4) var(--s4);
+}
+.tl-time {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-height: 28px;
+}
+.tl-time b {
+  font-size: var(--fs-l);
+  font-variant-numeric: tabular-nums;
+}
+.tl-time .tl-score {
+  padding: 2px 8px;
+  border-radius: var(--radius-s);
+  background: var(--raised);
+  font-weight: 700;
+}
+.tl-time .refreshing {
+  color: var(--accent-strong);
+  font-size: var(--fs-xs);
+}
+.tl-time .warn {
+  color: var(--warn-text);
+  font-size: var(--fs-s);
+}
+.tl-scrub {
+  position: relative;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.tl-scrub:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.tl-density {
+  position: absolute;
+  inset: 6px 4px 6px 4px;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  pointer-events: none;
+}
+.tl-density i {
+  flex: 1;
+  min-width: 0;
+  border-radius: 1px;
+  background: var(--accent-line);
+  opacity: 0.55;
+}
+.tl-marks {
+  position: absolute;
+  inset: 0 4px;
+  pointer-events: none;
+}
+.tl-marks b,
+.tl-marks u {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--warn);
+  pointer-events: auto;
+}
+.tl-marks u {
+  top: auto;
+  height: 8px;
+  background: var(--text-2);
+}
+.tl-thumb {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: var(--text);
+  box-shadow: 0 0 0 2px var(--surface);
+  pointer-events: none;
+}
+.tl-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.tl-controls {
+  display: grid;
+  gap: 6px;
+}
+.tl-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.tl-row .btn.sm {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.tl-row .btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.tl-books {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tl-books .chip.book[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.tl-section h4 {
+  margin: 8px 0 4px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tl-section .mkt-group h4 {
+  position: static;
+}
+.tl-section .cmp {
+  padding-left: 0;
+  padding-right: 0;
+}
+.tl-stats {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-s);
+}
+.tl-empty {
+  margin: 8px 0;
+}
+.tl-changes {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tl-changes li {
+  display: grid;
+  grid-template-columns: auto 10px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-s);
+}
+.tl-changes li.future {
+  opacity: 0.55;
+}
+.tl-changes li.score .tl-what {
+  color: var(--warn-text);
+}
+.tl-changes .tl-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tl-chg {
+  display: inline-flex;
+  gap: 4px;
+  margin-right: 10px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.tl-chg b.up {
+  color: var(--up);
+}
+.tl-chg b.down {
+  color: var(--down);
+}
+@container (max-width: 420px) {
+  .tl-row .btn.sm {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .cmp-grid th.o {
+    width: 34%;
+  }
+}

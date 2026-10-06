@@ -5,7 +5,11 @@ import http from 'node:http';
 import { queryUiEvents, compactUiPayload } from '../../server/src/ui-service.js';
 import { buildFixtures, cs2Stats } from './fixtures.mjs';
 
-export function startMockServer({ port = 0, historyLatencyMs = 450, invalidateEveryMs = 0, fixtures = buildFixtures() } = {}) {
+// Optional `realEvent` ({ db, at, team1, team2, category, refs: [{ source, id, reversed }] }): one LIVE event backed by the
+// production journal (a read-only SQLite copy) - its detail markets come from the journal state through the server's own
+// canonical semantics, and the timeline endpoints run the real timeline worker. Nothing is fetched from bookmakers.
+export async function startMockServer({ port = 0, historyLatencyMs = 450, invalidateEveryMs = 0, fixtures = buildFixtures(), realEvent = null } = {}) {
+  const real = realEvent ? await realBackend(realEvent, fixtures) : null;
   const log = [];
   const sse = new Set();
   const svg = (h) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#${h.slice(0, 6)}"/><text x="16" y="21" font-size="13" text-anchor="middle" fill="#fff" font-family="sans-serif">${h.slice(0, 2).toUpperCase()}</text></svg>`;
@@ -43,6 +47,10 @@ export function startMockServer({ port = 0, historyLatencyMs = 450, invalidateEv
       const page = queryUiEvents(removed, params, { links: [] }, 'results');
       return done(send(res, 200, compactUiPayload({ ...page, complete: true, status: 'ready', uiRevision: 1, count: page.total })));
     }
+    if (real && p === '/api/ui/event-detail' && url.searchParams.get('id') === real.event.id) return done(send(res, 200, real.detail()));
+    if (real && /^\/api\/events\/[^/]+\/(timeline\/meta|timeline|state-at)$/.test(p)) {
+      try { return done(send(res, 200, await real.timeline(p, url.searchParams))); } catch (error) { return done(send(res, error.status || 500, { error: error.message }), error.status || 500); }
+    }
     if (p === '/api/ui/event-detail') {
       const id = url.searchParams.get('id'), e = [...fixtures.liveEvents, ...fixtures.lineEvents].find((x) => String(x.id) === id);
       if (!e) return done(send(res, 404, { error: 'нет матча' }), 404);
@@ -71,6 +79,32 @@ export function startMockServer({ port = 0, historyLatencyMs = 450, invalidateEv
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({
     url: `http://127.0.0.1:${server.address().port}`, log, fixtures,
     invalidateHistory() { for (const res of sse) try { res.write(`event: ui-invalidate\ndata: ${JSON.stringify({ view: 'history', revision: Date.now(), reason: 'manual', at: Date.now() })}\n\n`); } catch {} },
-    close() { clearInterval(timer); for (const res of sse) try { res.end(); } catch {} return new Promise((r) => { server.closeAllConnections?.(); server.close(r); }); },
+    close() { clearInterval(timer); real?.close(); for (const res of sse) try { res.end(); } catch {} return new Promise((r) => { server.closeAllConnections?.(); server.close(r); }); },
   })));
+}
+
+async function realBackend({ db: file, at, team1, team2, category, refs }, fixtures) {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { marketsAt } = await import('../../server/src/timeline-core.js');
+  const { TimelineClient } = await import('../../server/src/timeline-client.js');
+  const { enrichEventMarketSemantics } = await import('../../server/src/market-semantics.js');
+  const path = await import('node:path');
+  const db = new DatabaseSync(file, { readOnly: true });
+  const client = new TimelineClient({ dataDir: path.dirname(file), file, idleMs: 60000 });
+  const sourceRefs = refs.map((r) => ({ id: `${r.source}:${r.id}`, sourceEventId: r.id, source: r.source, category, league: 'Real journal', team1, team2, inLive: true, enteredLiveAt: at - 3600000, startAt: at - 3600000, scoreReversed: !!r.reversed, quote: null }));
+  const event = { id: 'real-1', ui: true, category, league: 'Real journal (production copy)', leagueKey: 'real|journal', team1, team2, inLive: true, enteredLiveAt: at - 3600000, startAt: at - 3600000, bestOf: 3, sourceRefs };
+  fixtures.liveEvents.unshift(event);
+  return {
+    event,
+    detail() {
+      const full = { ...event, sourceRefs: sourceRefs.map((r) => { const m = marketsAt(db, `${r.source}:${r.sourceEventId}`, at); return { ...r, odds: { team1: m.meta?.team1 || (r.scoreReversed ? team2 : team1), team2: m.meta?.team2 || (r.scoreReversed ? team1 : team2), updatedAt: at, markets: m.markets } }; }) };
+      return { ok: true, view: 'live', event: enrichEventMarketSemantics(full), marketDetailErrors: {} };
+    },
+    async timeline(p, q) {
+      const op = p.endsWith('/meta') ? 'meta' : p.endsWith('/state-at') ? 'stateAt' : 'range';
+      const req = { keys: String(q.get('ids') || '').split(',').filter(Boolean), reversed: String(q.get('rev') || '').split(',').filter(Boolean), includeOdds: true, includeScores: true, provider: q.get('provider') || '', market: q.get('market') || '', team1: q.get('team1') || '', team2: q.get('team2') || '', sport: q.get('sport') || '', bestOf: Number(q.get('bestOf')) || 0, at: Number(q.get('at')) || undefined, from: Number(q.get('from')) || (op === 'meta' ? undefined : 0), to: Number(q.get('to')) || (op === 'meta' ? undefined : Date.now()), cursor: q.get('cursor') || '', limit: Number(q.get('limit')) || 200, kinds: q.get('kinds') || undefined, cats: q.get('cats') || undefined };
+      return { eventId: event.id, keys: req.keys, ...(await client.request(op, req)) };
+    },
+    close() { client.stop(); db.close(); },
+  };
 }

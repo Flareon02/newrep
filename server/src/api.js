@@ -806,7 +806,7 @@ export function createApi({ authToken=config.apiToken, userStore=null, settingsS
         if(base.provider&&!['astek','fonbet','pinnacle','ggbet'].includes(base.provider))throw Object.assign(Error('Неизвестный bookmaker'),{status:400});
         const ts=v=>{if(v==null||v==='')return null;const n=/^\d+$/.test(v)?Number(v):Date.parse(v);if(!Number.isFinite(n)||n<0)throw Object.assign(Error('Неверное время'),{status:400});return n;};
         let result;
-        if(op==='timeline/meta')result=await timeline.request('meta',{...base,buckets:Number(q.get('buckets'))||120});
+        if(op==='timeline/meta')result=await timeline.request('meta',{...base,buckets:Number(q.get('buckets'))||120,from:ts(q.get('from'))??undefined,to:ts(q.get('to'))??undefined});
         else if(op==='timeline')result=await timeline.request('range',{...base,from:ts(q.get('from'))??0,to:ts(q.get('to'))??Date.now(),cursor:String(q.get('cursor')||''),limit:Number(q.get('limit'))||200,kinds:String(q.get('kinds')||'')||undefined});
         else {const at=ts(q.get('at'));if(at==null)throw Object.assign(Error('Укажите время (at)'),{status:400});result=await timeline.request('stateAt',{...base,at,cats:String(q.get('cats')||'').slice(0,200)||undefined,detail:q.get('detail')==='1'});}
         return sendJson(req,res,200,{eventId,keys,...result});

@@ -136,19 +136,22 @@ button,input,select,textarea{font:inherit;color:inherit}
 .source-row .src-state.bad{color:var(--bad-text)}.source-row .src-state.warn{color:var(--warn-text)}
 .popover .popover-foot{display:flex;justify-content:space-between;gap:8px;margin-top:6px;padding:8px 8px 4px;border-top:1px solid var(--line);color:var(--muted);font-size:var(--fs-xs)}
 
-.toolbar{display:grid;grid-template-columns:minmax(180px,300px) 220px minmax(0,1fr) auto;grid-template-areas:"search game view end";align-items:center;gap:var(--s2);height:var(--toolbar-h);padding:0 var(--s4);border-bottom:1px solid var(--line);background:var(--surface)}
-/* Shared toolbar: four fixed zones in every section (search · game · section filters · favourites/reset). The section
-   zone never wraps (it scrolls sideways when narrow), so the bar keeps its height and edges on every tab. */
-.tb-search{grid-area:search}.tb-game{grid-area:game}.tb-view{grid-area:view}.tb-end{grid-area:end}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px var(--s2);min-height:var(--toolbar-h);padding:7px var(--s4);border-bottom:1px solid var(--line);background:var(--surface)}
+/* Shared toolbar: search · game · section filters · favourites/reset. When the width is not enough the bar WRAPS onto
+   another row (it used to scroll the filters sideways under a hidden scrollbar: filters slid under «Избранное» and
+   could not be reached). Every control stays visible and clickable at any width. */
+.tb-search{flex:1 1 200px;min-width:160px;max-width:320px}.tb-game{flex:0 1 200px;min-width:150px}.tb-view{flex:100 1 260px;min-width:0}.tb-end{flex:none;margin-left:auto}
+/* line breaks use the small basis; the selects then grow up to their preferred width */
+.tb-view>.select{flex:1 1 140px;max-width:230px}
 .toolbar .tb-off{visibility:hidden}
-.tb-view{display:flex;align-items:center;gap:var(--s2);min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;height:100%;padding:2px 0}
-.tb-view::-webkit-scrollbar{display:none}
-.tb-view>*{flex:none}
+.tb-view{display:flex;flex-wrap:wrap;align-items:center;gap:6px var(--s2)}
+.tb-view>*{flex:0 1 auto;min-width:0}
 .tb-end{display:flex;align-items:center;gap:var(--s2);justify-content:flex-end}
 .toolbar .search{position:relative;min-width:0}
 .toolbar .search .input{width:100%;padding-left:32px}
 .toolbar .search svg{position:absolute;left:9px;top:8px;width:16px;height:16px;color:var(--muted);pointer-events:none}
-.w-availability{width:186px}.w-window{width:216px}.w-phase{width:190px}.w-sort{width:150px}.w-sort-wide{width:206px}.w-date{min-width:132px}
+/* filter widths: preferred size, may shrink to a readable minimum, never below it (the row wraps instead) */
+.w-availability{min-width:140px}.w-window{min-width:150px}.w-phase{min-width:140px}.w-sort{min-width:120px;max-width:170px}.w-sort-wide{min-width:150px}.w-date{min-width:110px}
 .reset-btn[data-off="true"]{visibility:hidden}
 .fav-toggle[aria-pressed=true]{color:var(--warn-text);border-color:var(--warn-line);background:var(--warn-soft)}
 .date-nav{display:inline-flex;align-items:center;gap:2px}
@@ -198,17 +201,22 @@ button,input,select,textarea{font:inherit;color:inherit}
  .workspace.with-detail .detail-pane{position:absolute;top:0;right:0;bottom:0;z-index:30;width:min(560px,94vw);box-shadow:var(--shadow)}
  .workspace.with-detail .drawer-backdrop{display:block;position:absolute;inset:0;z-index:29;background:var(--overlay)}
 }
-@media (max-width:860px){.brand-name{display:none}.nav button{padding:0 9px}}
-/* narrower: two fixed rows - search + favourites/reset, then game + section filters */
-@media (max-width:900px){
- .toolbar{grid-template-columns:200px minmax(0,1fr) auto;grid-template-areas:"search search end" "game view view";height:auto;min-height:calc(var(--toolbar-h)*2 - 8px);row-gap:6px;padding:6px var(--s3)}
- .tb-view{height:auto}
+/* Section tabs: in one row with the brand and the status buttons while they fit; below 960px they get their own row,
+   and on a very narrow window the tabs wrap instead of scrolling out of sight. */
+@media (max-width:960px){
+ .topbar{flex-wrap:wrap;height:auto;min-height:var(--topbar-h);row-gap:2px;padding-block:6px}
+ .nav{order:3;flex-basis:100%;margin-left:0;flex-wrap:wrap;overflow:visible}
+ .nav button{padding:0 10px}
 }
-@media (max-width:480px){.toolbar{grid-template-columns:150px minmax(0,1fr) auto}.fav-toggle span{display:none}.fav-toggle{width:var(--control-h);padding:0}}
-/* narrow window: tabs get their own scrollable row, the toolbar packs into a grid, the detail drawer takes the width */
+@media (max-width:900px){.toolbar{padding:6px var(--s3)}}
+@media (max-width:480px){.fav-toggle span{display:none}.fav-toggle{width:var(--control-h);padding:0}}
 @media (max-width:640px){
- .topbar{flex-wrap:wrap;height:auto;row-gap:2px;padding-block:6px}
- .nav{order:3;flex-basis:100%;margin-left:0}
+ .tb-search{flex:1 1 200px;max-width:none}
+ .tb-end{order:1}
+ .tb-game{flex:1 1 160px;order:2}
+ .tb-view{order:3}
+ .tb-view{flex:1 1 100%}
+ .tb-view .select{flex:1 1 140px;width:auto}
  .sources-btn>span:not(.dot){display:none}
 
  .workspace.with-detail .detail-pane{width:100%}
@@ -218,10 +226,15 @@ button,input,select,textarea{font:inherit;color:inherit}
 /* columns shared by the header row and match rows */
 .cols{display:grid;align-items:center;column-gap:10px;grid-template-columns:28px minmax(200px,1fr) 124px repeat(var(--books,0),minmax(68px,96px)) 16px}
 .cols.no-odds{grid-template-columns:28px minmax(200px,1fr) 124px 196px 16px}
+/* Results / History columns. Defined BEFORE the narrow container rules below: they used to come later with the same
+   specificity and overrode them, so on a narrow list these rows kept the wide grid and the score/when/sources columns
+   were cut off at the right edge. */
+.cols.results{grid-template-columns:28px minmax(200px,1fr) minmax(96px,120px) minmax(120px,150px) minmax(140px,196px) 24px}
+.cols.history{grid-template-columns:28px minmax(200px,1fr) minmax(100px,118px) minmax(100px,118px) minmax(140px,196px) 24px}
 /* price cells are grouped for the narrow layout; in the column layout the group is transparent */
 .prices{display:contents}
 /* narrow list: teams + score on the first line, the bookmakers' prices on the second (each labelled) */
-@container list (max-width:620px){
+@container list (max-width:730px){
  .cols,.cols.no-odds{grid-template-columns:26px minmax(0,1fr) auto;row-gap:6px;column-gap:8px}
  .cols>.prices{display:grid;grid-column:2/-1;grid-template-columns:repeat(var(--books,1),minmax(0,1fr));gap:6px}
  .col-head>.prices,.match .go{display:none}
@@ -249,7 +262,8 @@ details.group>summary{list-style:none;cursor:pointer}
 details.group>summary::-webkit-details-marker{display:none}
 details.group>summary .caret{transition:transform .15s;color:var(--muted)}
 details.group[open]>summary .caret{transform:rotate(90deg)}
-details.group{content-visibility:auto;contain-intrinsic-size:auto 400px}
+/* No content-visibility on list groups/rows: its placeholder sizes (400px per group, 76px per row) were replaced by the
+   real height while the list scrolled, and scroll anchoring shifted the visible rows - the "floating" list. */
 /* Line hierarchy: game > league > matches. Game headers stick under the column header, league headers under them. */
 .line-tools{display:flex;align-items:center;gap:6px;padding:6px var(--s4);border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--fs-xs)}
 .line-tools span{margin-right:auto}
@@ -281,8 +295,8 @@ details.game-group>summary:focus-visible,details.league-group>summary:focus-visi
 .logo-ph{display:inline-block;width:18px;height:18px;flex:none;background:var(--faint);opacity:.55;-webkit-mask:var(--team-ph) center/14px no-repeat;mask:var(--team-ph) center/14px no-repeat}
 :root{--team-ph:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2.5 20 5.5v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10v-6z' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E")}
 html.team-logos-off .team .team-logo,html.team-logos-off .team .logo-ph{display:none}
-.score-col{display:grid;justify-items:end;align-content:center;text-align:right;min-width:0}
-.score-col .maps-line{font-size:var(--fs-xs);line-height:15px;color:var(--text-2);white-space:normal;overflow-wrap:anywhere}
+.score-col{display:grid;justify-items:end;align-content:center;text-align:right;min-width:0;font-variant-numeric:tabular-nums}
+.score-col .maps-line{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-xs);line-height:15px;color:var(--text-2)}
 .score-col .maps-line b,.detail-score .sub b{color:var(--text);font-weight:700}
 .score-col .series{font-weight:700;font-size:var(--fs-l);line-height:20px;color:var(--text);white-space:nowrap}
 .score-col .maps{display:grid;gap:2px;font-size:var(--fs-s);line-height:20px;color:var(--text-2)}
@@ -292,11 +306,11 @@ html.team-logos-off .team .team-logo,html.team-logos-off .team .logo-ph{display:
 .start-col{text-align:right;font-size:var(--fs-s);color:var(--text-2)}
 .start-col b{display:block;color:var(--text);font-size:var(--fs-m);font-weight:600}
 .price-col{display:grid;gap:2px}
-.price{display:flex;align-items:center;justify-content:center;gap:3px;height:20px;border-radius:4px;font-size:var(--fs-m);font-weight:600;color:var(--text);line-height:20px}
+.price{position:relative;display:flex;align-items:center;justify-content:center;gap:3px;height:20px;font-variant-numeric:tabular-nums;border-radius:4px;font-size:var(--fs-m);font-weight:600;color:var(--text);line-height:20px}
 .price.none{color:var(--muted);font-weight:400}
 .price.best{background:var(--accent-soft);color:var(--best-text);box-shadow:inset 0 0 0 1px var(--best-line)}
 .price.closed{color:var(--muted);font-weight:500}
-.price .chg{font-size:10px;line-height:1}
+.price .chg{position:absolute;left:2px;top:0;bottom:0;display:flex;align-items:center;font-size:10px;line-height:1;pointer-events:none}
 .price .chg.up{color:var(--up)}.price .chg.down{color:var(--down)}
 .price-col.absent .price{color:var(--faint)}
 .sources-col{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end}
@@ -313,7 +327,7 @@ html.team-logos-off .team .team-logo,html.team-logos-off .team .logo-ph{display:
 .list-end{padding:var(--s4);text-align:center;color:var(--muted);font-size:var(--fs-s)}
 
 /* History: sections (LIVE, line, one per day), each rendered and patched on its own */
-.history-section .match{content-visibility:auto;contain-intrinsic-size:auto 76px}
+
 .history-head .title{font-weight:650}
 .history-head .sub{color:var(--muted);font-weight:400;font-size:var(--fs-xs)}
 .sec-state{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:var(--fs-xs);font-weight:500}
@@ -325,8 +339,6 @@ html.team-logos-off .team .team-logo,html.team-logos-off .team .logo-ph{display:
 @media (prefers-reduced-motion:reduce){.spinner{animation-duration:2.4s}}
 .dot.accent{background:var(--accent)}
 /* rows for results/history: same skeleton, different trailing columns */
-.cols.results{grid-template-columns:28px minmax(220px,1fr) 120px 150px 196px 24px}
-.cols.history{grid-template-columns:28px minmax(220px,1fr) 118px 118px 196px 24px}
 .when{font-size:var(--fs-s);color:var(--text-2);text-align:right;line-height:18px}
 .when b{display:block;color:var(--text);font-weight:600;font-size:var(--fs-s)}
 .when.strong{color:var(--text);font-weight:600}
@@ -440,7 +452,7 @@ html.team-logos-off .team .team-logo,html.team-logos-off .team .logo-ph{display:
 /* narrow window: the section list becomes a scrollable strip above the section (the back button first) */
 @media (max-width:760px){
  .settings{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
- .settings-nav{display:flex;gap:4px;align-items:center;overflow-x:auto;overflow-y:hidden;padding:6px 8px;border-right:0;border-bottom:1px solid var(--line);scrollbar-width:none}
+ .settings-nav{display:flex;flex-wrap:wrap;gap:4px;align-items:center;overflow:visible;padding:6px 8px;border-right:0;border-bottom:1px solid var(--line)}
  .settings-nav h2{display:none}
  .settings-nav button{width:auto;flex:none;white-space:nowrap}
  .settings-nav button[aria-current=true]{box-shadow:inset 0 -2px 0 var(--accent)}

@@ -36,6 +36,8 @@ const DetailPanel=(()=>{
   if(['live','prematch','compare'].includes(view)&&!ctx.oddsHidden(view==='compare'?(event.inLive?'live':'prematch'):view))tabs.push(['odds','Коэффициенты']);
   if(ctx.statsAvailable(event,view))tabs.push(['stats','Статистика']);
   tabs.push(['info','Матч']);
+  // One history of the match: score, maps, rounds and every bookmaker's markets, with a replay scrubber.
+  if(ctx.can('odds.history')||ctx.can('scores.history'))tabs.push(['timeline','Таймлайн']);
   return tabs;
  }
 
@@ -46,7 +48,7 @@ const DetailPanel=(()=>{
    closeStats();
    const tabs=tabsFor(event,view),wanted=ctx.prefs().detailTab;
    const preferred=source||ctx.prefs().detailBook||'';
-   st={folds:new Set(),event,view,id:String(event.id),tab:tabs.some(t=>t[0]===wanted)?wanted:tabs[0][0],source:preferred,providerTab:'all',scope:'all',category:'all',query:'',detail:null,detailAt:0,loading:false,error:'',liveRef:null,liveAt:0};
+   st={folds:new Set(),oddsMode:ctx.prefs().detailOddsMode==='book'?'book':'compare',timelineMarket:'',event,view,id:String(event.id),tab:tabs.some(t=>t[0]===wanted)?wanted:tabs[0][0],source:preferred,providerTab:'all',scope:'all',category:'all',query:'',detail:null,detailAt:0,loading:false,error:'',liveRef:null,liveAt:0};
    root.hidden=false;root.scrollTop=0;
    renderShell();
   }else{st.event=event;if(source&&source!==st.source){st.source=source;resetMarketFilters();}}
@@ -58,7 +60,7 @@ const DetailPanel=(()=>{
   clearInterval(refreshTimer);refreshTimer=setInterval(()=>{if(!st||document.hidden)return;ctx.leaseFull?.(st.event,st.view);loadDetail(false);syncStream();},10000);
   if(st.tab==='stats')openStats();
  }
- function hide(){if(!st)return;closeStats();st=null;clearInterval(refreshTimer);closeStream();ctx.releaseFull?.();root.hidden=true;root.replaceChildren();ctx.onClosed?.();}
+ function hide(){if(!st)return;closeStats();TimelinePanel.close();st=null;clearInterval(refreshTimer);closeStream();ctx.releaseFull?.();root.hidden=true;root.replaceChildren();ctx.onClosed?.();}
  // The list got a newer snapshot (score, sources, quotes): re-render the header and the quotes in place.
  function update(event){if(!st||!event||String(event.id)!==st.id)return;st.event=event;render();}
  function onFeedPatches(patches){
@@ -87,10 +89,11 @@ const DetailPanel=(()=>{
  // Header: where (game · league), who (teams + logos), the score, and ONE status line. Times per bookmaker live in the
  // «Матч» tab only.
  function renderHead(){
-  const e=st.event,scored=ctx.scoreOf?ctx.scoreOf(e):e,d=scored.display||MatchFormat.displayScore(scored,e),live=st.view==='live'||e.inLive,ended=st.view==='results',fav=ctx.isFavorite(e);
+  const e=st.event,scored=ctx.scoreOf?ctx.scoreOf(e):e,d=scored.display||MatchFormat.displayScore(scored,e),live=st.view==='live'||(e.inLive&&!['results','history'].includes(st.view)),endedAt=Math.max(Number(e.endedAt)||0,...refs(e).map(r=>Number(r.endedAt||r.removedAt)||0)),ended=st.view==='results'||(st.view==='history'&&!e.inLive&&!e.inPrematch&&endedAt>0),fav=ctx.isFavorite(e);
   const status=[];
   if(live)status.push('<span class="chip live"><span class="dot bad" aria-hidden="true"></span>LIVE</span>');
   if(ended)status.push(`<span class="chip ${e.resultVerified||refs(e).some(r=>r.resultVerified)?'good':''}">${e.resultVerified||refs(e).some(r=>r.resultVerified)?'✓ Результат подтверждён':'Завершён'}</span>`);
+  if(ended&&endedAt)status.push(`<span class="chip" title="Время окончания">окончание ${esc(ctx.stamp(endedAt,true))}</span>`);
   const meta=[d.bestOf?`Bo${d.bestOf}`:'',live&&d.current>=0&&d.maps.length>1?`карта ${d.current+1}`:'',!live&&!ended&&e.startAt?`начало ${ctx.stamp(e.startAt,true)}`:'',live&&e.enteredLiveAt?`в LIVE с ${ctx.stamp(e.enteredLiveAt)}`:''].filter(Boolean);
   const big=d.series?`${d.series[0]} : ${d.series[1]}`:(d.text||'');
   const sub=d.series&&d.maps.length?d.maps.map((m,i)=>i===d.current&&live?`<b>${m.join(':')}</b>`:m.join(':')).join(' · '):'';
@@ -109,8 +112,10 @@ const DetailPanel=(()=>{
   if(!$('dpHead'))renderShell();
   renderHead();renderTabs();
   const body=$('dpBody');
+  if(st.tab!=='timeline')TimelinePanel.close();
   if(st.tab==='odds')renderOdds(body);
   else if(st.tab==='stats')renderStats(body);
+  else if(st.tab==='timeline')renderTimeline(body);
   else renderInfo(body);
  }
 
@@ -129,8 +134,66 @@ const DetailPanel=(()=>{
   return {key:'quote:winner',type:'moneyline',period:0,title:'Победитель',status:open?'open':q.s==='c'?'closed':'suspended',prices:[{designation:'home',label:st.event.team1,decimal:q.h},...(q.d?[{designation:'draw',label:'Ничья',decimal:q.d}]:[]),{designation:'away',label:st.event.team2,decimal:q.a}],__fromQuote:true,__teams:teams};
  }
 
+ // ------------------------------------------------------------------ comparison (canonical markets, server semantics v2)
+ // One row per canonical bet across bookmakers; the bookmaker's own market name is in the title tooltip. Unclassified
+ // markets are listed per bookmaker below, never merged.
+ const SHORT={astek:'Astek',fonbet:'Fonbet',pinnacle:'Pinnacle',ggbet:'GGBET'};
+ function compareHtml(model,{teams,idPrefix='cmp',pickMarket=false,timelineLink=false,track=true}={}){
+  const cols=model.books,bySection=new Map();
+  for(const g of model.groups){const k=MarketCompare.scopeLabel(g);if(!bySection.has(k))bySection.set(k,[]);bySection.get(k).push(g);}
+  const head=`<thead><tr><th scope="col" class="o"><span class="sr-only">Исход</span></th>${cols.map(b=>`<th scope="col"><span class="book-mark ${esc(b)}" aria-hidden="true"></span>${esc(SHORT[b]||b)}</th>`).join('')}</tr></thead>`;
+  const cell=(g,b,o)=>{
+   const book=g.books[b];if(!book)return '<td class="absent" title="Контора не выставила этот рынок">·</td>';
+   if(book.status&&book.status!=='open')return `<td class="susp" title="${book.status==='closed'?'Рынок закрыт':'Рынок приостановлен'}">${book.status==='closed'?'закр.':'⏸'}</td>`;
+   const p=book.prices[o],v=p?.value;if(v==null)return '<td class="none">—</td>';
+   const t=track?tracker.track(`${st.id}|${idPrefix}|${g.key}|${o}|${b}`,v):{};
+   return `<td class="${g.best[o]!=null&&Math.abs(v-g.best[o])<1e-9&&g.bookCount>1?'best':''}">${t.dir?`<span class="chg ${t.dir}" aria-label="${t.dir==='up'?'вырос':'снизился'} с ${esc(MatchFormat.formatPrice(t.was))}">${t.dir==='up'?'▲':'▼'}</span>`:''}${esc(MatchFormat.formatPrice(v))}</td>`;
+  };
+  return [...bySection].map(([section,groups])=>`<section class="mkt-group" data-market-key="${idPrefix}:s:${esc(section)}"><h4><span>${esc(section)}</span><span>${groups.length}</span></h4>${groups.map(g=>{
+   const raw=Object.entries(g.books).map(([b,x])=>`${SHORT[b]||b}: ${x.raw?.title||'—'}${x.at?` · ${ctx.stamp(x.at,false,true)}`:''}`).join('\n');
+   return `<div class="cmp ${g.openCount?'':'closed'}" data-market-key="${idPrefix}:${esc(g.key)}"><div class="cmp-title" title="${esc(raw)}"><span>${esc(g.title)}</span>${g.bookCount>1?`<small>${g.bookCount} конт.</small>`:''}${pickMarket?`<button type="button" class="link-btn small" data-tl="market-only" data-market="${esc(g.key)}">только этот</button>`:''}${timelineLink?`<button type="button" class="link-btn small" data-dp-market-timeline="${esc(g.key)}" title="История этого рынка у всех контор">история</button>`:''}</div><div class="cmp-wrap"><table class="cmp-grid" style="--cols:${cols.length}">${head}<tbody>${g.outcomes.map(o=>`<tr><th scope="row">${esc(MarketCompare.outcomeLabel(o,g,teams)||Object.values(g.books).map(x=>x.prices[o]?.label).find(Boolean)||'Исход')}</th>${cols.map(b=>cell(g,b,o)).join('')}</tr>`).join('')}</tbody></table></div></div>`;
+  }).join('')}</section>`).join('');
+ }
+ function oddsModeSwitch(){return `<span class="segmented odds-mode" role="group" aria-label="Вид коэффициентов">${[['compare','Сравнение контор'],['book','Одна контора']].map(([m,l])=>`<button type="button" data-dp-mode="${m}" aria-pressed="${(st.oddsMode||'compare')===m}">${l}</button>`).join('')}</span>`;}
+ function renderCompare(body,model){
+  const teams={team1:st.event.team1,team2:st.event.team2};
+  const scopes=[...new Set(model.groups.map(g=>MarketCompare.scopeLabel(g)))];
+  if(st.scope!=='all'&&!scopes.includes(st.scope))st.scope='all';
+  const inScope=model.groups.filter(g=>st.scope==='all'||MarketCompare.scopeLabel(g)===st.scope);
+  // «Основные» (winners, handicaps, totals) first: a LIVE CS2 match has >1,000 canonical markets with player props.
+  const CORE=new Set(['winners','handicaps','totals']),inCat=(g,c)=>c==='all'||(c==='core'?CORE.has(g.category):g.category===c);
+  const cats=['core',...Object.keys(MarketCanonical.categoryLabel).filter(k=>k!=='all'&&inScope.some(g=>g.category===k)),...(inScope.some(g=>g.category==='players')?['players']:[])];
+  if(!st.cmpCat||(st.cmpCat!=='all'&&!cats.includes(st.cmpCat)))st.cmpCat='core';
+  const q=MarketCanonical.norm(st.query);
+  const shown=inScope.filter(g=>inCat(g,st.cmpCat)&&(!q||MarketCanonical.norm([g.title,...g.outcomes.map(o=>MarketCompare.outcomeLabel(o,g,teams)||'')].join(' ')).includes(q)));
+  if(body.dataset.kind!=='compare'){body.dataset.kind='compare';body.innerHTML=`<div class="odds-controls" id="dpOddsControls"><div class="odds-top" id="dpModeRow"></div><div class="odds-filter"><input id="dpSearch" class="input" type="search" placeholder="Найти рынок или исход" aria-label="Поиск рынков" autocomplete="off"><span class="count" id="dpCount"></span></div><div class="market-tabs" id="dpMarketTabs" role="tablist" aria-label="Карта"></div><div class="market-tabs" id="dpCats" role="tablist" aria-label="Тип рынка"></div><div class="odds-meta" id="dpMeta" role="status"></div></div><div id="dpMarkets"></div>`;$('dpSearch').value=st.query;}
+  StableDOM.patch($('dpModeRow'),oddsModeSwitch()+`<span class="muted small">Одинаковые ставки разных контор — в одной строке; название рынка у конторы — в подсказке.</span>`);
+  const tabs=scopes.length>1?[`<button type="button" role="tab" data-dp-scope="all" aria-selected="${st.scope==='all'}">Все<b>${model.groups.length}</b></button>`,...scopes.map(sc=>`<button type="button" role="tab" data-dp-scope="${esc(sc)}" aria-selected="${st.scope===sc}">${esc(sc)}<b>${model.groups.filter(g=>MarketCompare.scopeLabel(g)===sc).length}</b></button>`)].join(''):'';
+  StableDOM.patch($('dpMarketTabs'),tabs);$('dpMarketTabs').hidden=!tabs;
+  const label=k=>k==='players'?'Игроки':k==='core'?'Основные':MarketCanonical.categoryLabel[k];
+  const catTabs=[`<button type="button" role="tab" data-dp-cmpcat="all" aria-selected="${st.cmpCat==='all'}">Все рынки<b>${inScope.length}</b></button>`,...cats.map(k=>`<button type="button" role="tab" data-dp-cmpcat="${k}" aria-selected="${st.cmpCat===k}">${esc(label(k))}<b>${inScope.filter(g=>inCat(g,k)).length}</b></button>`)].join('');
+  StableDOM.patch($('dpCats'),catTabs);$('dpCats').hidden=!catTabs;
+  $('dpCount').textContent=`${shown.length} из ${model.groups.length}`;
+  const meta=[];if(st.loading)meta.push('<span class="refreshing">обновляем…</span>');if(model.unknown.length)meta.push(`нераспознанных рынков: ${model.unknown.length} (внизу)`);
+  const errors=Object.entries(st.detail?.marketDetailErrors||{});if(errors.length)meta.push(`<span class="warn">не удалось обновить: ${esc(errors.map(([b,e])=>`${SHORT[b]||b} — ${e}`).join('; '))}</span>`);
+  StableDOM.patch($('dpMeta'),meta.join(' · '));
+  const unknown=model.unknown.length?`<details class="detail-section fold" data-market-key="cmp-unknown" data-fold="cmp-unknown" ${st.folds?.has('cmp-unknown')?'open':''}><summary>${UiKit.chevron('caret')}<span>Нераспознанные рынки</span><span class="n">${model.unknown.length}</span></summary><p class="muted small">Тип этих рынков ещё не сопоставлен с общим справочником, поэтому они показаны отдельно по каждой конторе.</p><table class="src-table"><tbody>${model.unknown.map(u=>`<tr><td><span class="book-mark ${esc(u.source)}" aria-hidden="true"></span> ${esc(SHORT[u.source]||u.source)}</td><td>${esc(u.title)}${u.status!=='open'?' <small class="muted">приостановлен</small>':''}</td><td class="num">${u.prices.map(p=>`${esc(p.label)} <b>${p.value!=null?esc(MatchFormat.formatPrice(p.value)):'—'}</b>`).join(' · ')}</td></tr>`).join('')}</tbody></table></details>`:'';
+  // Rendered in pages of 80 markets: the DOM stays small, a refresh patches only what is on screen.
+  const limit=st.cmpLimit||80,page=shown.slice(0,limit);
+  const html=shown.length?compareHtml({...model,groups:page},{teams,timelineLink:tabsFor(st.event,st.view).some(t=>t[0]==='timeline')})+(shown.length>limit?`<div class="list-more" data-market-key="cmp-more"><button type="button" class="btn" data-dp-more="1">Показать ещё ${Math.min(80,shown.length-limit)} · осталось ${shown.length-limit}</button></div>`:''):state('Нет рынков по фильтру',q?'Измените поиск.':'Выберите другую вкладку.');
+  StableDOM.patch($('dpMarkets'),html+unknown);
+  root.style.setProperty('--dp-tabs-h',($('dpTabs')?.offsetHeight||0)+'px');
+ }
+ function renderTimeline(body){
+  if(body.dataset.kind!=='timeline'){body.dataset.kind='timeline';body.innerHTML='';}
+  TimelinePanel.open(body,st.event,st.view);
+  if(st.timelineMarket){body.querySelector(`[data-tl="market-only"][data-market="${CSS.escape(st.timelineMarket)}"]`)?.click();st.timelineMarket='';}
+ }
+
  function renderOdds(body){
   const list=books();
+  if((st.oddsMode||'compare')==='compare'){const model=MarketCompare.build(list,{visible:ctx.bookVisible});if(model&&model.groups.length+model.unknown.length){renderCompare(body,model);return;}}
+  if(body.dataset.kind==='compare'){body.dataset.kind='';body.innerHTML='';}
   if(st.source&&!list.some(r=>r.source===st.source))st.source=list[0]?.source||'';
   if(!st.source)st.source=list[0]?.source||'';
   const ref=selectedRef();
@@ -151,9 +214,10 @@ const DetailPanel=(()=>{
 
   // controls (kept in place across refreshes: the search input keeps focus and value)
   if(!$('dpOddsControls')||!body.contains($('dpOddsControls'))){
-   body.innerHTML=`<div class="odds-controls" id="dpOddsControls"><div class="book-switch" id="dpBooks" role="group" aria-label="Букмекер"></div><div class="odds-filter"><input id="dpSearch" class="input" type="search" placeholder="Найти рынок или исход" aria-label="Поиск рынков" autocomplete="off"><span class="count" id="dpCount"></span></div><div class="market-tabs" id="dpMarketTabs" role="tablist" aria-label="Рынки"></div><div class="market-tabs" id="dpCats" role="tablist" aria-label="Тип рынка"></div><div class="odds-meta" id="dpMeta" role="status"></div></div><div id="dpMarkets"></div>`;
+   body.innerHTML=`<div class="odds-controls" id="dpOddsControls"><div class="odds-top" id="dpModeRow"></div><div class="book-switch" id="dpBooks" role="group" aria-label="Букмекер"></div><div class="odds-filter"><input id="dpSearch" class="input" type="search" placeholder="Найти рынок или исход" aria-label="Поиск рынков" autocomplete="off"><span class="count" id="dpCount"></span></div><div class="market-tabs" id="dpMarketTabs" role="tablist" aria-label="Рынки"></div><div class="market-tabs" id="dpCats" role="tablist" aria-label="Тип рынка"></div><div class="odds-meta" id="dpMeta" role="status"></div></div><div id="dpMarkets"></div>`;
    $('dpSearch').value=st.query;
   }
+  StableDOM.patch($('dpModeRow'),MarketCompare.build(list,{visible:ctx.bookVisible})?oddsModeSwitch():'');$('dpModeRow').hidden=!$('dpModeRow').innerHTML;
   StableDOM.patch($('dpBooks'),list.map(r=>{const n=r.source===st.source?markets.length:(r.odds?.markets?.length||0),health=ctx.bookHealth(r.source);return `<button type="button" data-book-source="${esc(r.source)}" data-dp-book="${esc(r.source)}" aria-pressed="${r.source===st.source}"><span class="book-mark ${esc(r.source)}" aria-hidden="true"></span>${esc(ctx.providerName(r.source))}${n?`<b>${n}</b>`:''}${health&&!health.ok?' <span class="status-text warn" title="'+esc(health.reason)+'">· недоступен</span>':''}</button>`;}).join('')||'<span class="muted">Нет данных букмекеров для этого матча</span>');
   const marketTabs=nativeTabs.length>1?(nativeTabs.some(t=>String(t.id)==='all')?nativeTabs:[{id:'all',name:'All'},...nativeTabs]).map(t=>{const id=String(t.id);return `<button type="button" role="tab" data-dp-ptab="${esc(id)}" aria-selected="${st.providerTab===id}">${esc(providerTabLabel(t))}<b>${described.filter(x=>inProviderTab(x.m,id)).length}</b></button>`;}).join(''):(scopes.length>1?[`<button type="button" role="tab" data-dp-scope="all" aria-selected="${st.scope==='all'}">Все<b>${inTab.length}</b></button>`,...scopes.map(p=>`<button type="button" role="tab" data-dp-scope="${p}" aria-selected="${st.scope===String(p)}">${esc(MarketCanonical.scopeLabel(p))}<b>${inTab.filter(x=>x.d.period===p).length}</b></button>`)].join(''):'');
   StableDOM.patch($('dpMarketTabs'),marketTabs);$('dpMarketTabs').hidden=!marketTabs;
@@ -235,20 +299,24 @@ const DetailPanel=(()=>{
  function onInput(event){if(event.target.id!=='dpSearch'||!st)return;st.query=event.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(render,60);}
  function onClick(event){
   if(!st)return;const t=event.target;
-  const tab=t.closest('[data-dp-tab]');if(tab){st.tab=tab.dataset.dpTab;ctx.setPref('detailTab',st.tab);$('dpBody').dataset.kind='';$('dpBody').innerHTML='';$('dpBody').scrollTop=0;if(st.tab==='stats')openStats();render();syncStream();return;}
+  const tab=t.closest('[data-dp-tab]');if(tab){if(st.tab==='timeline'&&tab.dataset.dpTab!=='timeline')TimelinePanel.close();st.tab=tab.dataset.dpTab;ctx.setPref('detailTab',st.tab);$('dpBody').dataset.kind='';$('dpBody').innerHTML='';$('dpBody').scrollTop=0;if(st.tab==='stats')openStats();render();syncStream();return;}
+  const cc=t.closest('[data-dp-cmpcat]');if(cc){st.cmpCat=cc.dataset.dpCmpcat;st.cmpLimit=80;render();return;}
+  if(t.closest('[data-dp-more]')){st.cmpLimit=(st.cmpLimit||80)+80;render();return;}
+  const mode=t.closest('[data-dp-mode]');if(mode){if((st.oddsMode||'compare')===mode.dataset.dpMode)return;st.oddsMode=mode.dataset.dpMode;ctx.setPref('detailOddsMode',st.oddsMode);resetMarketFilters();$('dpBody').dataset.kind='';$('dpBody').innerHTML='';render();return;}
+  const mt=t.closest('[data-dp-market-timeline]');if(mt){st.timelineMarket=mt.dataset.dpMarketTimeline;st.tab='timeline';ctx.setPref('detailTab',st.tab);$('dpBody').dataset.kind='';$('dpBody').innerHTML='';render();return;}
   const book=t.closest('[data-dp-book]');if(book){if(book.dataset.dpBook===st.source)return;st.source=book.dataset.dpBook;ctx.setPref('detailBook',st.source);resetMarketFilters();render();syncStream();return;}
   const ptab=t.closest('[data-dp-ptab]');if(ptab){st.providerTab=ptab.dataset.dpPtab;st.scope='all';st.category='all';render();return;}
-  const scope=t.closest('[data-dp-scope]');if(scope){st.scope=scope.dataset.dpScope;st.category='all';render();return;}
+  const scope=t.closest('[data-dp-scope]');if(scope){st.scope=scope.dataset.dpScope;st.category='all';st.cmpLimit=80;render();return;}
   const cat=t.closest('[data-dp-cat]');if(cat){st.category=cat.dataset.dpCat;render();return;}
   const action=t.closest('[data-dp]')?.dataset.dp;
   if(action==='close'){hide();return;}
   if(action==='fav'){ctx.toggleFavorite(st.event);render();return;}
   if(action==='copy'){ctx.copyMatch(st.event);return;}
-  if(action==='history'){ctx.openMatchHistory(st.event,st.view);return;}
+  if(action==='history'){if(tabsFor(st.event,st.view).some(t=>t[0]==='timeline')){st.tab='timeline';ctx.setPref('detailTab',st.tab);$('dpBody').dataset.kind='';$('dpBody').innerHTML='';render();}else ctx.openMatchHistory(st.event,st.view);return;}
   if(action==='scores'){ctx.openScoreHistory(st.event,st.view);return;}
   if(action==='timeline'){ctx.openOddsTimeline(st.event);return;}
   if(action==='generator'){ctx.openGenerator(st.event);return;}
   const link=t.closest('[data-open-url]');if(link?.dataset.openUrl&&link.getAttribute('aria-disabled')!=='true'){ctx.openUrl(link.dataset.openUrl);return;}
  }
- return {configure,show,hide,update,onFeedPatches,refreshStats,isOpen,currentId,render,event:()=>st?.event||null,refFor:source=>st?books().find(r=>r.source===source)||null:null,tabs:()=>st?tabsFor(st.event,st.view).map(t=>t[0]):[],state:()=>st&&{id:st.id,view:st.view,tab:st.tab,source:st.source,providerTab:st.providerTab,scope:st.scope,loading:st.loading}};
+ return {configure,show,hide,update,onFeedPatches,refreshStats,isOpen,currentId,render,compareHtml:(...a)=>compareHtml(...a),event:()=>st?.event||null,refFor:source=>st?books().find(r=>r.source===source)||null:null,tabs:()=>st?tabsFor(st.event,st.view).map(t=>t[0]):[],state:()=>st&&{id:st.id,view:st.view,tab:st.tab,source:st.source,providerTab:st.providerTab,scope:st.scope,loading:st.loading}};
 })();
