@@ -80,8 +80,9 @@ chown -R root:root "$REL"; chmod -R go-w "$REL"
 # 4. switch atomically, restart only the monitor (cloudflared, GGBET browser and the web gateway are not touched)
 echo "$CURRENT" > "$ROOT/previous"
 ln -sfn "$REL" "$ROOT/current.new" && mv -T "$ROOT/current.new" "$ROOT/current"
+restore(){ ln -sfn "$CURRENT" "$ROOT/current.new" && mv -T "$ROOT/current.new" "$ROOT/current"; systemctl restart "$UNIT" || true; }
 log "switched to $REL; restarting $UNIT"
-systemctl restart "$UNIT"
+systemctl restart "$UNIT" || { log "restart failed - restoring $CURRENT"; restore; die "upgrade rolled back to $CURRENT (restart of $UNIT failed)"; }
 
 # 5. health check: up, right version, LIVE answering; otherwise automatic rollback
 ok=0
@@ -95,8 +96,7 @@ done
 if [ "$ok" != 1 ]; then
   log "health check FAILED - restoring $CURRENT"
   journalctl -u "$UNIT" --no-pager -n 60 || true
-  ln -sfn "$CURRENT" "$ROOT/current.new" && mv -T "$ROOT/current.new" "$ROOT/current"
-  systemctl restart "$UNIT"
+  restore
   die "upgrade rolled back to $CURRENT"
 fi
 log "OK: $VERSION is serving (release $REL). Rollback: sh $REL/server/rollback-systemd.sh"
