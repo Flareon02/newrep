@@ -1,0 +1,1687 @@
+[
+ {
+  "name": "astek-G1-match-winner",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Funqo Academy",
+  "team2": "Team Granqo",
+  "market": {
+   "marketId": "759025631:0:1:1:",
+   "typeId": 1,
+   "marketName": "Победитель",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "^1^",
+     "line": null,
+     "decimalOdds": 1.42
+    },
+    {
+     "outcomeId": "3",
+     "outcomeName": "^2^",
+     "line": null,
+     "decimalOdds": 2.74
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-921-923-match-winner",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Funqo Academy",
+  "team2": "Team Granqo",
+  "market": {
+   "marketId": "68703162:0:moneyline:main",
+   "typeId": "moneyline",
+   "marketName": "Победитель",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "921",
+     "outcomeName": "1",
+     "line": null,
+     "decimalOdds": 1.4
+    },
+    {
+     "outcomeId": "923",
+     "outcomeName": "2",
+     "line": null,
+     "decimalOdds": 2.7
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-921-923-map3-winner",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Funqo Academy",
+  "team2": "Team Granqo",
+  "market": {
+   "marketId": "68703223:3:moneyline:main",
+   "typeId": "moneyline",
+   "marketName": "Победитель",
+   "period": 3,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "921",
+     "outcomeName": "1",
+     "line": null,
+     "decimalOdds": 1.4
+    },
+    {
+     "outcomeId": "923",
+     "outcomeName": "2",
+     "line": null,
+     "decimalOdds": 2.7
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-legacy-mixed-handicap-map3",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Funqo Academy",
+  "team2": "Team Granqo",
+  "market": {
+   "marketId": "68703223:3:handicap:2.5",
+   "typeId": "handicap",
+   "marketName": "Фора",
+   "period": 3,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "927",
+     "outcomeName": "1",
+     "line": "-2.5",
+     "decimalOdds": 1.7
+    },
+    {
+     "outcomeId": "928",
+     "outcomeName": "2",
+     "line": "+2.5",
+     "decimalOdds": 1.98
+    },
+    {
+     "outcomeId": "1569",
+     "outcomeName": "1",
+     "line": "+2.5",
+     "decimalOdds": 1.2
+    },
+    {
+     "outcomeId": "1572",
+     "outcomeName": "2",
+     "line": "-2.5",
+     "decimalOdds": 3.85
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-910-912-map3-handicap",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Funqo Academy",
+  "team2": "Team Granqo",
+  "market": {
+   "marketId": "68703223:3:handicap:3.5",
+   "typeId": "handicap",
+   "marketName": "Фора",
+   "period": 3,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "910",
+     "outcomeName": "1",
+     "line": "-3.5",
+     "decimalOdds": 2.17
+    },
+    {
+     "outcomeId": "912",
+     "outcomeName": "2",
+     "line": "+3.5",
+     "decimalOdds": 1.58
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-1727-1728-map3-total",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Funqo Academy",
+  "team2": "Team Granqo",
+  "market": {
+   "marketId": "68703223:3:total:21.5",
+   "typeId": "total",
+   "marketName": "Тотал",
+   "period": 3,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "1727",
+     "outcomeName": "Больше",
+     "line": "21.5",
+     "decimalOdds": 1.35
+    },
+    {
+     "outcomeId": "1728",
+     "outcomeName": "Меньше",
+     "line": "21.5",
+     "decimalOdds": 2.85
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-930-931-map3-total",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Funqo Academy",
+  "team2": "Team Granqo",
+  "market": {
+   "marketId": "68703223:3:total:22.5",
+   "typeId": "total",
+   "marketName": "Тотал",
+   "period": 3,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "930",
+     "outcomeName": "Больше",
+     "line": "22.5",
+     "decimalOdds": 1.8
+    },
+    {
+     "outcomeId": "931",
+     "outcomeName": "Меньше",
+     "line": "22.5",
+     "decimalOdds": 1.86
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G2438-map-handicap-dota",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Dota 2",
+  "team1": "The Last Titan",
+  "team2": "Wiser Warriors",
+  "market": {
+   "marketId": "759032360:0:2438:2438:1.5",
+   "typeId": 2438,
+   "marketName": "Фора по картам",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "2826",
+     "outcomeName": "^1^ фора по картам 1.5",
+     "line": 1.5,
+     "decimalOdds": 1.8
+    },
+    {
+     "outcomeId": "2827",
+     "outcomeName": "^2^ фора по картам -1.5",
+     "line": -1.5,
+     "decimalOdds": 1.944
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G2436-map-total-dota",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Dota 2",
+  "team1": "The Last Titan",
+  "team2": "Wiser Warriors",
+  "market": {
+   "marketId": "759032360:0:2436:2436:2.5",
+   "typeId": 2436,
+   "marketName": "Тотал по картам",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "2824",
+     "outcomeName": "Тотал по картам 2.5 Б",
+     "line": 2.5,
+     "decimalOdds": 1.8
+    },
+    {
+     "outcomeId": "2825",
+     "outcomeName": "Тотал по картам 2.5 М",
+     "line": 2.5,
+     "decimalOdds": 1.944
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-17-map-handicap",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-node",
+  "sport": "Dota 2",
+  "team1": "The Last Titan",
+  "team2": "Wiser Warriors",
+  "market": {
+   "marketId": "17h1_5",
+   "typeId": 17,
+   "marketName": "Фора по картам",
+   "period": null,
+   "specifiers": {
+    "hcp": "1.5"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "The Last Titan (+1.5)",
+     "line": null,
+     "decimalOdds": "1.95"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "Wiser Warriors (-1.5)",
+     "line": null,
+     "decimalOdds": "1.80"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-14-map-total",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-node",
+  "sport": "Dota 2",
+  "team1": "The Last Titan",
+  "team2": "Wiser Warriors",
+  "market": {
+   "marketId": "14t2_5",
+   "typeId": 14,
+   "marketName": "Тотал карт",
+   "period": null,
+   "specifiers": {
+    "total": "2.5"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Больше 2.5",
+     "line": null,
+     "decimalOdds": "1.71"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "Меньше 2.5",
+     "line": null,
+     "decimalOdds": "2.06"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-300-map1-round-total",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-node",
+  "sport": "Valorant",
+  "team1": "Team Shoshy",
+  "team2": "Players",
+  "market": {
+   "marketId": "300m1t22_5",
+   "typeId": 300,
+   "marketName": "Карта 1 - тотал раундов",
+   "period": null,
+   "specifiers": {
+    "mapnr": "1",
+    "total": "22.5"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Больше 22.5",
+     "line": null,
+     "decimalOdds": "1.79"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "Меньше 22.5",
+     "line": null,
+     "decimalOdds": "1.96"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-50-map2-winner-lol",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "League of Legends",
+  "team1": "Absolute Focus",
+  "team2": "OutPlay",
+  "market": {
+   "marketId": "50m2",
+   "typeId": 50,
+   "marketName": "Map 2 - Winner",
+   "period": null,
+   "specifiers": {
+    "mapnr": "2"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Absolute Focus",
+     "line": null,
+     "decimalOdds": "1.50"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "OutPlay",
+     "line": null,
+     "decimalOdds": "2.43"
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-moneyline-map2-dota",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Dota 2",
+  "team1": "Dark Tamplars",
+  "team2": "Immortal Squad",
+  "market": {
+   "marketId": "68703384:2:moneyline:main",
+   "typeId": "moneyline",
+   "marketName": "Победитель",
+   "period": 2,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "921",
+     "outcomeName": "1",
+     "line": null,
+     "decimalOdds": 1.6
+    },
+    {
+     "outcomeId": "923",
+     "outcomeName": "2",
+     "line": null,
+     "decimalOdds": 2.15
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-13-round-winner",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-node",
+  "sport": "Counter Strike 2",
+  "team1": "team_CMitch",
+  "team2": "players",
+  "market": {
+   "marketId": "13m1r14",
+   "typeId": 13,
+   "marketName": "Карта 1 - победитель раунда",
+   "period": null,
+   "specifiers": {
+    "mapnr": "1",
+    "roundnr": "14"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "team_CMitch 14",
+     "line": null,
+     "decimalOdds": "1.81"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "players 14",
+     "line": null,
+     "decimalOdds": "1.93"
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-legacy-mixed-handicap-match",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Nightmare Foxes",
+  "team2": "Phantom Sharks",
+  "market": {
+   "marketId": "68681929:0:handicap:1.5",
+   "typeId": "handicap",
+   "marketName": "Фора",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "927",
+     "outcomeName": "1",
+     "line": "+1.5",
+     "decimalOdds": 1.6
+    },
+    {
+     "outcomeId": "928",
+     "outcomeName": "2",
+     "line": "-1.5",
+     "decimalOdds": 2.2
+    },
+    {
+     "outcomeId": "1569",
+     "outcomeName": "1",
+     "line": "-1.5",
+     "decimalOdds": 2.3
+    },
+    {
+     "outcomeId": "1572",
+     "outcomeName": "2",
+     "line": "+1.5",
+     "decimalOdds": 1.55
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-1696-1697-match-total",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Nightmare Foxes",
+  "team2": "Phantom Sharks",
+  "market": {
+   "marketId": "68681929:0:total:12.5",
+   "typeId": "total",
+   "marketName": "Тотал",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "1696",
+     "outcomeName": "Больше",
+     "line": "12.5",
+     "decimalOdds": 1.16
+    },
+    {
+     "outcomeId": "1697",
+     "outcomeName": "Меньше",
+     "line": "12.5",
+     "decimalOdds": 4.4
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-3262-3263-map-handicap",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "68703613:0:map-handicap:1.5",
+   "typeId": "map-handicap",
+   "marketName": "Фора по картам",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "3262",
+     "outcomeName": "1",
+     "line": "-1.5",
+     "decimalOdds": 2.55
+    },
+    {
+     "outcomeId": "3263",
+     "outcomeName": "2",
+     "line": "+1.5",
+     "decimalOdds": 1.43
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-3274-3275-map-total",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "68703613:0:map-total:2.5",
+   "typeId": "map-total",
+   "marketName": "Тотал карт",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "3274",
+     "outcomeName": "Больше",
+     "line": "2.5",
+     "decimalOdds": 1.43
+    },
+    {
+     "outcomeId": "3275",
+     "outcomeName": "Меньше",
+     "line": "2.5",
+     "decimalOdds": 2.55
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-349-correct-map-score",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Dota 2",
+  "team1": "Dark Tamplars",
+  "team2": "Immortal Squad",
+  "market": {
+   "marketId": "349",
+   "typeId": 349,
+   "marketName": "Correct map score",
+   "period": null,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "2:0",
+     "line": null,
+     "decimalOdds": "1.60"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "2:1",
+     "line": null,
+     "decimalOdds": "3.87"
+    },
+    {
+     "outcomeId": "3",
+     "outcomeName": "0:2",
+     "line": null,
+     "decimalOdds": "11.50"
+    },
+    {
+     "outcomeId": "4",
+     "outcomeName": "1:2",
+     "line": null,
+     "decimalOdds": "4.11"
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G15-match-team-total-home",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Valorant",
+  "team1": "Lyn Riftora",
+  "team2": "Vanta",
+  "market": {
+   "marketId": "759033051:0:15:15:25.5",
+   "typeId": 15,
+   "marketName": "Тотал 1",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "11",
+     "outcomeName": "Индивидуальный тотал 1 Больше 25.5",
+     "line": 25.5,
+     "decimalOdds": 1.91
+    },
+    {
+     "outcomeId": "12",
+     "outcomeName": "Индивидуальный тотал 1 Меньше 25.5",
+     "line": 25.5,
+     "decimalOdds": 1.83
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G1-map2-winner",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "759032344:2:1:1:",
+   "typeId": 1,
+   "marketName": "Победитель",
+   "period": 2,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "^1^",
+     "line": null,
+     "decimalOdds": 1.835
+    },
+    {
+     "outcomeId": "3",
+     "outcomeName": "^2^",
+     "line": null,
+     "decimalOdds": 1.904
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G403-round-winner",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "759032344:2:403:292:17",
+   "typeId": 403,
+   "marketName": "Победитель раунда",
+   "period": 2,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "1365",
+     "outcomeName": "П1 в раунде",
+     "line": 17,
+     "decimalOdds": 1.845
+    },
+    {
+     "outcomeId": "1366",
+     "outcomeName": "П2 в раунде",
+     "line": 17,
+     "decimalOdds": 1.875
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G17-map2-total",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "759032344:2:17:4:20.5",
+   "typeId": 17,
+   "marketName": "Тотал",
+   "period": 2,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "9",
+     "outcomeName": "Тотал 20.5 Б",
+     "line": 20.5,
+     "decimalOdds": 1.184
+    },
+    {
+     "outcomeId": "10",
+     "outcomeName": "Тотал 20.5 М",
+     "line": 20.5,
+     "decimalOdds": 3.61
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G2-map2-handicap",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "759032344:2:2:3:-3.5",
+   "typeId": 2,
+   "marketName": "Фора",
+   "period": 2,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "7",
+     "outcomeName": "^1^ фора -3.5",
+     "line": -3.5,
+     "decimalOdds": 3
+    },
+    {
+     "outcomeId": "8",
+     "outcomeName": "^2^ фора 3.5",
+     "line": 3.5,
+     "decimalOdds": 1.344
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G2-match-handicap",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "FURIA",
+  "team2": "Aurora Gaming",
+  "market": {
+   "marketId": "758955945:0:2:2:2.5",
+   "typeId": 2,
+   "marketName": "Фора",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "7",
+     "outcomeName": "^1^ фора 2.5",
+     "line": 2.5,
+     "decimalOdds": 1.51
+    },
+    {
+     "outcomeId": "8",
+     "outcomeName": "^2^ фора -2.5",
+     "line": -2.5,
+     "decimalOdds": 2.4
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G2434-race-to-8",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "759032344:2:2434:751:8",
+   "typeId": 2434,
+   "marketName": "Кто первым выиграет N раундов",
+   "period": 2,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "2822",
+     "outcomeName": "Первым выиграет 8 раундов - ^1^",
+     "line": 8,
+     "decimalOdds": 3.23
+    },
+    {
+     "outcomeId": "2823",
+     "outcomeName": "Первым выиграет 8 раундов - ^2^",
+     "line": 8,
+     "decimalOdds": 1.304
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G15-map2-team-total-home",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "NightBot",
+  "team2": "Evil Ghost",
+  "market": {
+   "marketId": "759030207:2:15:5:10.5",
+   "typeId": 15,
+   "marketName": "Тотал 1",
+   "period": 2,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "11",
+     "outcomeName": "Индивидуальный тотал 1 Больше 10.5",
+     "line": 10.5,
+     "decimalOdds": 1.656
+    },
+    {
+     "outcomeId": "12",
+     "outcomeName": "Индивидуальный тотал 1 Меньше 10.5",
+     "line": 10.5,
+     "decimalOdds": 2.12
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G62-map2-team-total-away",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "NightBot",
+  "team2": "Evil Ghost",
+  "market": {
+   "marketId": "759030207:2:62:6:10.5",
+   "typeId": 62,
+   "marketName": "Тотал 2",
+   "period": 2,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "13",
+     "outcomeName": "Индивидуальный тотал 2 Больше 10.5",
+     "line": 10.5,
+     "decimalOdds": 1.36
+    },
+    {
+     "outcomeId": "14",
+     "outcomeName": "Индивидуальный тотал 2 Меньше 10.5",
+     "line": 10.5,
+     "decimalOdds": 2.945
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G2874-match-round-handicap",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "759032342:0:2874:2874:-10.5",
+   "typeId": 2874,
+   "marketName": "Фора по раундам",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "3862",
+     "outcomeName": "^1^ фора по раундам -10.5",
+     "line": -10.5,
+     "decimalOdds": 2.432
+    },
+    {
+     "outcomeId": "3863",
+     "outcomeName": "^2^ фора по раундам 10.5",
+     "line": 10.5,
+     "decimalOdds": 1.504
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G1136-match-round-total",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "759032342:0:1136:1136:42.5",
+   "typeId": 1136,
+   "marketName": "Тотал раундов",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "3864",
+     "outcomeName": "Тотал раундов 42.5 Б",
+     "line": 42.5,
+     "decimalOdds": 1.615
+    },
+    {
+     "outcomeId": "3865",
+     "outcomeName": "Тотал раундов 42.5 М",
+     "line": 42.5,
+     "decimalOdds": 2.195
+    }
+   ]
+  }
+ },
+ {
+  "name": "pinnacle-moneyline-match",
+  "provider": "pinnacle",
+  "publicationSource": "pinnacle",
+  "sport": "Counter Strike 2",
+  "team1": "9z",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "s;0;m",
+   "typeId": "moneyline",
+   "marketName": "moneyline",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "home",
+     "outcomeName": "home",
+     "line": null,
+     "decimalOdds": 2.27
+    },
+    {
+     "outcomeId": "away",
+     "outcomeName": "away",
+     "line": null,
+     "decimalOdds": 1.645
+    }
+   ]
+  }
+ },
+ {
+  "name": "pinnacle-spread-match-no-bestof",
+  "provider": "pinnacle",
+  "publicationSource": "pinnacle",
+  "sport": "Counter Strike 2",
+  "team1": "9z",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "s;0;s;1.5",
+   "typeId": "spread",
+   "marketName": "spread",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "home",
+     "outcomeName": "home",
+     "line": 1.5,
+     "decimalOdds": 1.433
+    },
+    {
+     "outcomeId": "away",
+     "outcomeName": "away",
+     "line": -1.5,
+     "decimalOdds": 2.86
+    }
+   ]
+  }
+ },
+ {
+  "name": "pinnacle-moneyline-map1",
+  "provider": "pinnacle",
+  "publicationSource": "pinnacle",
+  "sport": "Counter Strike 2",
+  "team1": "9z",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "s;1;m",
+   "typeId": "moneyline",
+   "marketName": "moneyline",
+   "period": 1,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "home",
+     "outcomeName": "home",
+     "line": null,
+     "decimalOdds": 2.32
+    },
+    {
+     "outcomeId": "away",
+     "outcomeName": "away",
+     "line": null,
+     "decimalOdds": 1.621
+    }
+   ]
+  }
+ },
+ {
+  "name": "pinnacle-team-total-map1",
+  "provider": "pinnacle",
+  "publicationSource": "pinnacle",
+  "sport": "Counter Strike 2",
+  "team1": "9z",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "s;1;tt;11.5;home",
+   "typeId": "team_total",
+   "marketName": "team_total",
+   "period": 1,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "over",
+     "outcomeName": "over",
+     "line": 11.5,
+     "decimalOdds": 1.98
+    },
+    {
+     "outcomeId": "under",
+     "outcomeName": "under",
+     "line": 11.5,
+     "decimalOdds": 1.813
+    }
+   ]
+  }
+ },
+ {
+  "name": "pinnacle-spread-map1",
+  "provider": "pinnacle",
+  "publicationSource": "pinnacle",
+  "sport": "Counter Strike 2",
+  "team1": "9z",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "s;1;s;2.5",
+   "typeId": "spread",
+   "marketName": "spread",
+   "period": 1,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "home",
+     "outcomeName": "home",
+     "line": 2.5,
+     "decimalOdds": 1.901
+    },
+    {
+     "outcomeId": "away",
+     "outcomeName": "away",
+     "line": -2.5,
+     "decimalOdds": 1.917
+    }
+   ]
+  }
+ },
+ {
+  "name": "pinnacle-total-map1",
+  "provider": "pinnacle",
+  "publicationSource": "pinnacle",
+  "sport": "Counter Strike 2",
+  "team1": "9z",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "s;1;ou;21.5",
+   "typeId": "total",
+   "marketName": "total",
+   "period": 1,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "over",
+     "outcomeName": "over",
+     "line": 21.5,
+     "decimalOdds": 1.962
+    },
+    {
+     "outcomeId": "under",
+     "outcomeName": "under",
+     "line": 21.5,
+     "decimalOdds": 1.833
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-unknown-1731-single",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "FURIA Esports",
+  "team2": "Aurora",
+  "market": {
+   "marketId": "68697852:0:unknown:1731:main",
+   "typeId": "unknown",
+   "marketName": "Рынок 1731",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "1731",
+     "outcomeName": "Исход 1731",
+     "line": "50.5",
+     "decimalOdds": 2
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G10558-asymmetric",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Team Majra",
+  "market": {
+   "marketId": "759032344:2:10558:4494:-1.5",
+   "typeId": 10558,
+   "marketName": "Фора (без учета ОТ)",
+   "period": 2,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "14131",
+     "outcomeName": "1 -1.5 (без учета ОТ)",
+     "line": -1.5,
+     "decimalOdds": 2.025
+    },
+    {
+     "outcomeId": "14132",
+     "outcomeName": "2 -1.5 (без учета ОТ)",
+     "line": -1.5,
+     "decimalOdds": 2.112
+    }
+   ]
+  }
+ },
+ {
+  "name": "fonbet-unknown-3266",
+  "provider": "fonbet",
+  "publicationSource": "fonbet",
+  "sport": "Counter Strike 2",
+  "team1": "BB Team",
+  "team2": "9z Team",
+  "market": {
+   "marketId": "68697865:0:unknown:3266:main",
+   "typeId": "unknown",
+   "marketName": "Рынок 3266",
+   "period": 0,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "3266",
+     "outcomeName": "Исход 3266",
+     "line": "-1.5",
+     "decimalOdds": 4.7
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-7-map2-winner-ot",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-node",
+  "sport": "Counter Strike 2",
+  "team1": "Team Rumble",
+  "team2": "Hamita Tigers",
+  "market": {
+   "marketId": "7m2",
+   "typeId": 7,
+   "marketName": "Карта 2 - Победитель (включая овертайм)",
+   "period": null,
+   "specifiers": {
+    "mapnr": "2"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Team Rumble",
+     "line": null,
+     "decimalOdds": "1.79"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "Hamita Tigers",
+     "line": null,
+     "decimalOdds": "1.96"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-8-race-to-13",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "team_kRaSnaL",
+  "team2": "Players",
+  "market": {
+   "marketId": "8m1r13",
+   "typeId": 8,
+   "marketName": "Map 1 - Race to rounds",
+   "period": null,
+   "specifiers": {
+    "mapnr": "1",
+    "roundnr": "13"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "team_kRaSnaL 13",
+     "line": null,
+     "decimalOdds": "1.06"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "Players 13",
+     "line": null,
+     "decimalOdds": "7.40"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-10-map1-round-handicap",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "team_kRaSnaL",
+  "team2": "Players",
+  "market": {
+   "marketId": "10h-7_5m1",
+   "typeId": 10,
+   "marketName": "Map 1 - Round handicap (incl. overtime)",
+   "period": null,
+   "specifiers": {
+    "hcp": "-7.5",
+    "mapnr": "1"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "team_kRaSnaL (-7.5)",
+     "line": null,
+     "decimalOdds": "1.75"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "Players (+7.5)",
+     "line": null,
+     "decimalOdds": "1.95"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-293-pistol-round-2",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "team_kRaSnaL",
+  "team2": "Players",
+  "market": {
+   "marketId": "293m1r2",
+   "typeId": 293,
+   "marketName": "Map 1 - Pistol round winner",
+   "period": null,
+   "specifiers": {
+    "mapnr": "1",
+    "roundnr": "2"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "team_kRaSnaL 2nd",
+     "line": null,
+     "decimalOdds": "1.77"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "Players 2nd",
+     "line": null,
+     "decimalOdds": "1.92"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-21-map3-1x2-no-ot",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "Gold Beasts",
+  "team2": "Total Esport",
+  "market": {
+   "marketId": "21m3",
+   "typeId": 21,
+   "marketName": "Map 3 - 1x2 (overtimes not include)",
+   "period": null,
+   "specifiers": {
+    "mapnr": "3"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Gold Beasts",
+     "line": null,
+     "decimalOdds": "1.02"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "draw",
+     "line": null,
+     "decimalOdds": "12.00"
+    },
+    {
+     "outcomeId": "3",
+     "outcomeName": "Total Esport",
+     "line": null,
+     "decimalOdds": "7.50"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-1592-winning-margin",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-node",
+  "sport": "Valorant",
+  "team1": "Team Subroza",
+  "team2": "Players",
+  "market": {
+   "marketId": "1592m1s2-4",
+   "typeId": 1592,
+   "marketName": "Map 1 - Winning margin (incl. overtime)",
+   "period": null,
+   "specifiers": {
+    "mapnr": "1",
+    "score": "2-4"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Team Subroza 2-4",
+     "line": null,
+     "decimalOdds": "1.36"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "Players 2-4",
+     "line": null,
+     "decimalOdds": "2.98"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-1564-team-round-total-home",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-node",
+  "sport": "Valorant",
+  "team1": "Team Subroza",
+  "team2": "Players",
+  "market": {
+   "marketId": "1564m1t11_5",
+   "typeId": 1564,
+   "marketName": "Map 1 - Team Subroza total rounds (incl. overtime)",
+   "period": null,
+   "specifiers": {
+    "mapnr": "1",
+    "total": "11.5"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Больше 11.5",
+     "line": null,
+     "decimalOdds": "1.31"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "Меньше 11.5",
+     "line": null,
+     "decimalOdds": "3.28"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-103-match-round-handicap",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "Aurora Gaming",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "103h-4_5",
+   "typeId": 103,
+   "marketName": "Rounds Handicap (incl. overtimes)",
+   "period": null,
+   "specifiers": {
+    "hcp": "-4.5"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Aurora Gaming (-4.5)",
+     "line": null,
+     "decimalOdds": "1.04"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "BB Team (+4.5)",
+     "line": null,
+     "decimalOdds": "9.80"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-194-match-round-total",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "Aurora Gaming",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "194t62_5",
+   "typeId": 194,
+   "marketName": "Total rounds (incl. overtimes)",
+   "period": null,
+   "specifiers": {
+    "total": "62.5"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "over 62.5",
+     "line": null,
+     "decimalOdds": "8.50"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "under 62.5",
+     "line": null,
+     "decimalOdds": "1.06"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-407-match-team-round-total-home",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "Aurora Gaming",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "407t34_5",
+   "typeId": 407,
+   "marketName": "Aurora Gaming total rounds (incl. overtimes)",
+   "period": null,
+   "specifiers": {
+    "total": "34.5"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "over 34.5",
+     "line": null,
+     "decimalOdds": "9.50"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "under 34.5",
+     "line": null,
+     "decimalOdds": "1.04"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-1590-asian-handicap",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "Aurora Gaming",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "1590h-1_75m3",
+   "typeId": 1590,
+   "marketName": "Map 3 - Asian round handicap (incl. overtime)",
+   "period": null,
+   "specifiers": {
+    "hcp": "-1.75",
+    "mapnr": "3"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Aurora Gaming (-1.75)",
+     "line": null,
+     "decimalOdds": "1.04"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "BB Team (+1.75)",
+     "line": null,
+     "decimalOdds": "9.20"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-929-round-total-3way",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "Aurora Gaming",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "929m3t22",
+   "typeId": 929,
+   "marketName": "Map 3 - Total rounds (3 way)",
+   "period": null,
+   "specifiers": {
+    "mapnr": "3",
+    "total": "22"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "over 22",
+     "line": null,
+     "decimalOdds": "3.36"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "exactly 22",
+     "line": null,
+     "decimalOdds": "8.00"
+    },
+    {
+     "outcomeId": "3",
+     "outcomeName": "under 22",
+     "line": null,
+     "decimalOdds": "1.47"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-1591-round-handicap-3way",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "Aurora Gaming",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "1591h-3m3",
+   "typeId": 1591,
+   "marketName": "Map 3 - Round handicap (3 way) (incl. overtime)",
+   "period": null,
+   "specifiers": {
+    "hcp": "-3",
+    "mapnr": "3"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "Aurora Gaming (-3)",
+     "line": null,
+     "decimalOdds": "1.29"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "exactly (-3)",
+     "line": null,
+     "decimalOdds": "6.30"
+    },
+    {
+     "outcomeId": "3",
+     "outcomeName": "BB Team (+3)",
+     "line": null,
+     "decimalOdds": "5.60"
+    }
+   ]
+  }
+ },
+ {
+  "name": "ggbet-4-round-parity",
+  "provider": "ggbet",
+  "publicationSource": "ggbet-browser",
+  "sport": "Counter Strike 2",
+  "team1": "Aurora Gaming",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "4m3",
+   "typeId": 4,
+   "marketName": "Map 3 - Odd/even rounds (incl. overtime)",
+   "period": null,
+   "specifiers": {
+    "mapnr": "3"
+   },
+   "outcomes": [
+    {
+     "outcomeId": "1",
+     "outcomeName": "odd",
+     "line": null,
+     "decimalOdds": "2.40"
+    },
+    {
+     "outcomeId": "2",
+     "outcomeName": "even",
+     "line": null,
+     "decimalOdds": "1.54"
+    }
+   ]
+  }
+ },
+ {
+  "name": "astek-G7603-winning-margin-unknown",
+  "provider": "astek",
+  "publicationSource": "astek",
+  "sport": "Counter Strike 2",
+  "team1": "Aurora Gaming",
+  "team2": "BB Team",
+  "market": {
+   "marketId": "758937673:3:7603:2059:11",
+   "typeId": 7603,
+   "marketName": "Победа с преимуществом",
+   "period": 3,
+   "specifiers": {},
+   "outcomes": [
+    {
+     "outcomeId": "6476",
+     "outcomeName": "П1 в 11 и более",
+     "line": 11,
+     "decimalOdds": 29
+    },
+    {
+     "outcomeId": "6478",
+     "outcomeName": "П2 в 11 и более",
+     "line": 11,
+     "decimalOdds": 29
+    }
+   ]
+  }
+ }
+]

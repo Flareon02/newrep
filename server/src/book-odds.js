@@ -1,4 +1,5 @@
 import {historyPrice} from './history-model.js';
+import {FONBET_FACTORS} from './market-registry.js';
 import {readFileSync} from 'node:fs';
 const names=JSON.parse(readFileSync(new URL('./astek-market-names.json',import.meta.url),'utf8'));
 const official=JSON.parse(readFileSync(new URL('./astek-market-official.json',import.meta.url),'utf8'));
@@ -97,42 +98,23 @@ export function astekOdds(raw,all=[],mode='live',context={}){
   return markets.length?{provider:'AstekBet',team1:clean(raw?.O1E||raw?.O1),team2:clean(raw?.O2E||raw?.O2),mode,updatedAt:explicitAt,stale:false,transport:'existing-feed',markets}:null;
 }
 
-// Fonbet's listBase/event feed exposes numeric factor ids without market captions.
-// Pair families below are taken from the real esports factors seen in the feed.
-const FONBET={
-  921:{family:'moneyline',side:'home'},922:{family:'moneyline',side:'draw'},923:{family:'moneyline',side:'away'},
-  924:{family:'double',side:'home-draw'},925:{family:'double',side:'draw-away'},1571:{family:'double',side:'home-away'},
-  910:{family:'handicap',side:'home'},912:{family:'handicap',side:'away'},
-  927:{family:'handicap',side:'home'},928:{family:'handicap',side:'away'},
-  989:{family:'handicap',side:'home'},991:{family:'handicap',side:'away'},
-  1569:{family:'handicap',side:'home'},1572:{family:'handicap',side:'away'},
-  1672:{family:'handicap',side:'home'},1675:{family:'handicap',side:'away'},
-  930:{family:'total',side:'over'},931:{family:'total',side:'under'},
-  3262:{family:'map-handicap',side:'home'},3263:{family:'map-handicap',side:'away'},
-  3274:{family:'map-total',side:'over'},3275:{family:'map-total',side:'under'}
-};
+// Fonbet's listBase/event feed exposes numeric factor ids without market captions. The factor table is shared with the
+// canonical market registry (market-registry.js), where each pair is verified on the journal. A factor that is not in
+// the table is never paired by guesswork (opposite points, adjacent ids): it stays its own `unknown` market.
+const FONBET=Object.fromEntries(Object.entries(FONBET_FACTORS).map(([id,x])=>[id,{family:x.family==='winner'?'moneyline':x.family,side:x.side}]));
 const fonbetTitle=f=>f==='moneyline'?'Победитель':f==='double'?'Двойной шанс':f==='handicap'?'Фора':f==='total'?'Тотал':f==='map-handicap'?'Фора по картам':f==='map-total'?'Тотал карт':null;
 const fonbetLabel=(side,id)=>side==='home'?'1':side==='away'?'2':side==='draw'?'Ничья':side==='over'?'Больше':side==='under'?'Меньше':side==='home-draw'?'1X':side==='draw-away'?'X2':side==='home-away'?'12':`Исход ${id}`;
-function inferFonbetFactor(f,all){
-  const id=Number(f.f),known=FONBET[id]; if(known)return known;
-  const p=finite(f.pt??f.p); if(p==null)return {family:'unknown',side:'other'};
-  const peers=all.filter(x=>x!==f&&finite(x.pt??x.p)!=null),opposite=peers.filter(x=>finite(x.pt??x.p)===-p),same=peers.filter(x=>finite(x.pt??x.p)===p);
-  if(opposite.length)return {family:'handicap',side:p<0?'home':'away'};
-  // Fonbet uses many rotating factor ids for the same two-way esports total.
-  // When a line has exactly one adjacent factor with the same points, the lower
-  // id is the over and the higher id is the under. This covers e.g. 1696/1697
-  // and 1727/1728 without exposing internal factor numbers to the UI.
-  if(same.length===1&&Math.abs(Number(same[0].f)-id)===1)return {family:'total',side:id<Number(same[0].f)?'over':'under'};
-  if(same.length)return {family:'total',side:'other'};
-  return {family:'unknown',side:'other'};
+function inferFonbetFactor(f){
+  return FONBET[Number(f.f)]||{family:'unknown',side:'other'};
 }
 function addFonbetEventMarkets(groups,e,containers,blockInfo,period){
   const factors=containers.flatMap(c=>Array.isArray(c?.factors)?c.factors:[]);
   for(const f of factors){
     const v=decimal(f.v); if(!v)continue;
-    const id=Number(f.f),spec=inferFonbetFactor(f,factors),p=finite(f.pt??f.p);
+    const id=Number(f.f),spec=inferFonbetFactor(f),p=finite(f.pt??f.p);
     const isHandicap=spec.family.includes('handicap'),isTotal=spec.family.includes('total');
-    const line=isHandicap&&p!=null?Math.abs(p):isTotal&&p!=null?p:'main';
+    // Handicap rows are keyed by the home team's line: home -1.5 pairs with away +1.5, never with home +1.5.
+    const line=isHandicap&&p!=null?(spec.side==='away'?-p:p):isTotal&&p!=null?p:'main';
     const familyKey=spec.family==='unknown'?`unknown:${id}`:spec.family;
     const key=[e.id,period,familyKey,line].join(':');
     const title=fonbetTitle(spec.family)||`Рынок ${id}`;

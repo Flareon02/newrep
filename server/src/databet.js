@@ -1,7 +1,7 @@
 import GameCategories from './game-categories.cjs';
 import { canonicalCategory, englishize, eventKind } from './entity-resolver.js';
 import { config } from './config.js';
-import { canonicalizeGgbetMarket } from './market-semantics.js';
+import { canonicalMarket } from './market-registry.js';
 import { proxyAgent, proxyDiagnostics, proxyFetch, redact, reportProxySession } from './egress.js';
 import {
   MATCH_STATUSES, LIVE_SPORTS, absoluteAsset, scoreParts, marketPeriod, marketType, localizedMarketTitle,
@@ -75,24 +75,27 @@ export function databetBootstrapFromHtml(html, { origin = config.databetOrigin, 
   return { token, wsUrl, origin, label, locale: info.locale, currency: info.currency, isAuthorized: info.isAuthorized, at: Number(at) || Date.now() };
 }
 
-function databetOdds(raw, home, away, at, providerTabs = null) {
+function databetOdds(raw, home, away, at, providerTabs = null, sport = '') {
   const homeId = text(home?.id), awayId = text(away?.id), markets = [];
   for (const m of Array.isArray(raw?.markets) ? raw.markets : []) {
     const status = text(m?.status).toUpperCase() === 'ACTIVE' && !raw?.betStop ? 'open' : 'suspended', type = marketType(m), period = marketPeriod(m), title = localizedMarketTitle(m, type, period);
     const prices = (m?.odds || []).map((o, index) => {
       const ids = (o?.competitorIds || []).map(String), name = text(o?.name), points = pricePoint(o, m);
       let designation = ids.includes(homeId) ? 'home' : ids.includes(awayId) ? 'away' : '';
-      designation = outcomeDesignation(name, designation);
+      let designationSource = designation ? 'competitor' : '';
+      const named = outcomeDesignation(name, designation);
+      if (named !== designation) { designation = named; designationSource = 'name'; }
       if (!designation && (m?.odds || []).length === 2) {
         if (['total', 'map-total', 'team-round-total', 'asian-round-total'].includes(type)) designation = index === 0 ? 'over' : 'under';
         else designation = index === 0 ? 'home' : 'away';
+        designationSource = 'position';
       }
       const decimal = finite(o?.value), open = status === 'open' && o?.isActive !== false && text(o?.status || 'NOT_RESULTED') === 'NOT_RESULTED' && decimal > 1;
-      return { designation: designation || `outcome-${o?.id || index + 1}`, label: localizedOutcomeLabel(name, designation, points), rawLabel: name, outcomeId: text(o?.id), points, decimal: open ? decimal : null, rawValue: text(o?.value), probability: finite(o?.probability), rawType: Number(m?.typeId) || 0 };
+      return { designation: designation || `outcome-${o?.id || index + 1}`, designationSource: designationSource || 'none', label: localizedOutcomeLabel(name, designation, points), rawLabel: name, outcomeId: text(o?.id), points, decimal: open ? decimal : null, rawValue: text(o?.value), probability: finite(o?.probability), rawType: Number(m?.typeId) || 0 };
     });
     const row = { key: `databet:${text(m?.id) || Number(m?.typeId) || markets.length}`, marketId: text(m?.id), type, title, rawTitle: text(m?.name), period, status, prices, rawType: Number(m?.typeId) || 0, tags: [...(m?.tags || [])].map(text), specifiers: Object.fromEntries((m?.specifiers || []).map((x) => [text(x?.name), text(x?.value)]).filter(([k]) => k)), upstreamProvider: meta(m, 'provider_source') };
     row.providerTabs = [...(providerTabs?.marketToTabs?.get(text(m?.id)) || ['all'])];
-    row.canonical = canonicalizeGgbetMarket(row, { team1: text(home?.name), team2: text(away?.name) }, 'databet');
+    row.canonical = canonicalMarket('databet', row, { sport, team1: text(home?.name), team2: text(away?.name) });
     row.title = row.canonical.title;
     markets.push(row);
   }
@@ -119,7 +122,7 @@ export function parseDatabetLiveEvent(raw, { origin = config.databetOrigin, loca
     marketKind: eventKind({ league, team1, team2 }), startAt: Date.parse(fixture.startTime) || Date.now(), updatedAt: at,
     bestOf, bestOfSource: bestOf ? 'databet:meta.bo' : 'unknown', bestOfEvidence: bestOf ? String(bestOf) : '',
     seriesScore: score.seriesScore, mapScores: score.mapScores, activeMap: score.activeMap, scoreText: score.scoreText, scoreObserved: score.scoreObserved,
-    odds: databetOdds(raw, score.home, score.away, at, providerTabs),
+    odds: databetOdds(raw, score.home, score.away, at, providerTabs, category),
     url: raw.slug ? `${base}/${lang}/esports/live/match/${encodeURIComponent(raw.slug)}` : `${base}/${lang}/esports/live`
   };
 }

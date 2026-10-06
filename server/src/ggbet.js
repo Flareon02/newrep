@@ -5,7 +5,7 @@ import https from 'node:https';
 import GameCategories from './game-categories.cjs';
 import { canonicalCategory, englishize, eventKind } from './entity-resolver.js';
 import { config } from './config.js';
-import { canonicalizeGgbetMarket } from './market-semantics.js';
+import {canonicalMarket} from './market-registry.js';
 import { proxyAgent, proxyDiagnostics, proxyFetch, redact, reportProxySession, netnsAgent, resetNetnsAgent } from './egress.js';
 import { unavailableRow } from './ggbet-browser-source.js';
 
@@ -189,23 +189,27 @@ export function pricePoint(odd,market){
   const overUnder=text(odd?.name).match(/^(?:over|under|больше|меньше|powyżej|poniżej)\s+([+-]?\d+(?:[.,]\d+)?)\s*$/i);if(overUnder)return Number(overUnder[1].replace(',','.'));
   const h=finite(spec(market,'hcp')),t=finite(spec(market,'total'));return h??t??undefined;
 }
-function ggbetOdds(raw,home,away,at,providerTabs=null){
+function ggbetOdds(raw,home,away,at,providerTabs=null,sport=''){
   const homeId=text(home?.id),awayId=text(away?.id),markets=[];
   for(const m of Array.isArray(raw?.markets)?raw.markets:[]){
     const status=text(m?.status).toUpperCase()==='ACTIVE'&&!raw?.betStop?'open':'suspended',type=marketType(m),period=marketPeriod(m),title=localizedMarketTitle(m,type,period);
     const prices=(m?.odds||[]).map((o,index)=>{
       const ids=(o?.competitorIds||[]).map(String);let designation=ids.includes(homeId)?'home':ids.includes(awayId)?'away':'';const name=text(o?.name),points=pricePoint(o,m);
-      designation=outcomeDesignation(name,designation);
+      // designationSource: competitor ids and outcome texts are provider data; the positional fallback is display-only
+      // and is ignored by the canonical registry (it never decides a canonical outcome).
+      let designationSource=designation?'competitor':'';
+      const named=outcomeDesignation(name,designation);if(named!==designation){designation=named;designationSource='name';}
       if(!designation&&(m?.odds||[]).length===2){
         if(['total','map-total','team-round-total','asian-round-total'].includes(type))designation=index===0?'over':'under';
         else designation=index===0?'home':'away';
+        designationSource='position';
       }
       const decimal=finite(o?.value),open=status==='open'&&o?.isActive!==false&&text(o?.status||'NOT_RESULTED')==='NOT_RESULTED'&&decimal>1;
-      return {designation:designation||`outcome-${o?.id||index+1}`,label:localizedOutcomeLabel(name,designation,points),rawLabel:name,points,decimal:open?decimal:null,rawType:Number(m?.typeId)||0};
+      return {designation:designation||`outcome-${o?.id||index+1}`,designationSource:designationSource||'none',label:localizedOutcomeLabel(name,designation,points),rawLabel:name,outcomeId:text(o?.id),points,decimal:open?decimal:null,rawType:Number(m?.typeId)||0};
     });
     const row={key:`ggbet:${text(m?.id)||Number(m?.typeId)||markets.length}`,type,title,rawTitle:text(m?.name),period,status,prices,rawType:Number(m?.typeId)||0,tags:[...(m?.tags||[])].map(text),specifiers:Object.fromEntries((m?.specifiers||[]).map(x=>[text(x?.name),text(x?.value)]).filter(([k])=>k)),upstreamProvider:meta(m,'provider_source')};
     row.providerTabs=[...(providerTabs?.marketToTabs?.get(text(m?.id))||['all'])];
-    row.canonical=canonicalizeGgbetMarket(row,{team1:text(home?.name),team2:text(away?.name)});
+    row.canonical=canonicalMarket('ggbet',row,{sport,team1:text(home?.name),team2:text(away?.name)});
     // From 4.3.0 onward the server is the semantic authority. Keep rawTitle and
     // rawType for audit, but expose the exact canonical family/title so clients
     // never have to guess from localized GGBET text or outcome shape.
@@ -222,7 +226,7 @@ export function parseGgbetLiveEvent(raw,{origin='https://gg.bet',at=Date.now(),p
   const sportId=text(fixture.sportId||sport.id),league=englishize(fixture.tournament?.name)||'Unknown league',category=canonicalCategory(GameCategories.resolve(englishize(sport.name)||sportId,league));
   const upstreamEventId=text(raw.id),sourceEventId=safeUuid(upstreamEventId);if(!sourceEventId)return null;
   const bestOf=Math.max(0,Number(meta(raw,'bo'))||0),base=String(origin||'https://gg.bet').replace(/\/+$/,'');
-  return {id:`ggbet-${sourceEventId}`,sourceEventId,upstreamEventId,source:'ggbet',provider:'GGBET',category,categoryKey:`ggbet:sport:${sportId||category.toLowerCase()}`,subSportId:sportId,league,leagueId:text(fixture.tournament?.id),leagueKey:`ggbet:id:${text(fixture.tournament?.id)||league.toLowerCase()}`,team1,team2,team1Logo:absoluteAsset(score.home?.logo),team2Logo:absoluteAsset(score.away?.logo),sportName:englishize(sport.name)||category,marketKind:eventKind({league,team1,team2}),startAt:Date.parse(fixture.startTime)||Date.now(),updatedAt:at,bestOf,bestOfSource:bestOf?'ggbet:meta.bo':'unknown',bestOfEvidence:bestOf?String(bestOf):'',seriesScore:score.seriesScore,mapScores:score.mapScores,activeMap:score.activeMap,scoreText:score.scoreText,scoreObserved:score.scoreObserved,odds:ggbetOdds(raw,score.home,score.away,at,providerTabs),url:raw.slug?`${base}/ru/esports/match/${encodeURIComponent(raw.slug)}`:`${base}/ru/live`};
+  return {id:`ggbet-${sourceEventId}`,sourceEventId,upstreamEventId,source:'ggbet',provider:'GGBET',category,categoryKey:`ggbet:sport:${sportId||category.toLowerCase()}`,subSportId:sportId,league,leagueId:text(fixture.tournament?.id),leagueKey:`ggbet:id:${text(fixture.tournament?.id)||league.toLowerCase()}`,team1,team2,team1Logo:absoluteAsset(score.home?.logo),team2Logo:absoluteAsset(score.away?.logo),sportName:englishize(sport.name)||category,marketKind:eventKind({league,team1,team2}),startAt:Date.parse(fixture.startTime)||Date.now(),updatedAt:at,bestOf,bestOfSource:bestOf?'ggbet:meta.bo':'unknown',bestOfEvidence:bestOf?String(bestOf):'',seriesScore:score.seriesScore,mapScores:score.mapScores,activeMap:score.activeMap,scoreText:score.scoreText,scoreObserved:score.scoreObserved,odds:ggbetOdds(raw,score.home,score.away,at,providerTabs,category),url:raw.slug?`${base}/ru/esports/match/${encodeURIComponent(raw.slug)}`:`${base}/ru/live`};
 }
 
 function mergeCompetitors(oldRows=[],nextRows=[]){const old=new Map(oldRows.map(r=>[text(r?.id),r]));return nextRows.map(r=>({...old.get(text(r?.id)),...r})).concat(oldRows.filter(r=>!nextRows.some(n=>text(n?.id)===text(r?.id))));}
