@@ -8,13 +8,14 @@ import { buildFixtures, cs2Stats } from './fixtures.mjs';
 // Optional `realEvent` ({ db, at, team1, team2, category, refs: [{ source, id, reversed }] }): one LIVE event backed by the
 // production journal (a read-only SQLite copy) - its detail markets come from the journal state through the server's own
 // canonical semantics, and the timeline endpoints run the real timeline worker. Nothing is fetched from bookmakers.
+let liveRevision = 1;
 export async function startMockServer({ port = 0, historyLatencyMs = 450, invalidateEveryMs = 0, fixtures = buildFixtures(), realEvent = null } = {}) {
   const real = realEvent ? await realBackend(realEvent, fixtures) : null;
   const log = [];
   const sse = new Set();
   const svg = (h) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#${h.slice(0, 6)}"/><text x="16" y="21" font-size="13" text-anchor="middle" fill="#fff" font-family="sans-serif">${h.slice(0, 2).toUpperCase()}</text></svg>`;
   const send = (res, status, body, headers = {}) => { const text = typeof body === 'string' ? body : JSON.stringify(body); res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'access-control-expose-headers': 'etag', ...headers }); res.end(text); return text.length; };
-  const meta = (kind) => ({ revision: `${kind}-1`, structureRevision: `${kind}-s1`, generatedAt: fixtures.now, providers: { astek: { lastSuccessfulUpdateAt: new Date().toISOString() }, fonbet: { lastSuccessfulUpdateAt: new Date().toISOString() }, pinnacle: { lastSuccessfulUpdateAt: new Date().toISOString() }, ggbet: { oddsProvider: { available: true, connectionState: 'connected' } } }, leagueRules: { revision: 1, links: [], visibility: {} } });
+  const meta = (kind) => ({ revision: kind === 'live' ? `live-${liveRevision}` : `${kind}-1`, structureRevision: `${kind}-s1`, generatedAt: fixtures.now, providers: { astek: { lastSuccessfulUpdateAt: new Date().toISOString() }, fonbet: { lastSuccessfulUpdateAt: new Date().toISOString() }, pinnacle: { lastSuccessfulUpdateAt: new Date().toISOString() }, ggbet: { oddsProvider: { available: true, connectionState: 'connected' } } }, leagueRules: { revision: 1, links: [], visibility: {} } });
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x'), p = url.pathname, started = Date.now();
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'Content-Type, Authorization, If-None-Match, X-API-Token', 'access-control-max-age': '86400' }); return res.end(); }
@@ -78,6 +79,17 @@ export async function startMockServer({ port = 0, historyLatencyMs = 450, invali
   if (invalidateEveryMs > 0) timer = setInterval(() => { for (const res of sse) try { res.write(`event: ui-invalidate\ndata: ${JSON.stringify({ view: 'history', revision: Date.now(), reason: 'feed:live:astek', at: Date.now() })}\n\n`); } catch {} }, invalidateEveryMs);
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({
     url: `http://127.0.0.1:${server.address().port}`, log, fixtures,
+    // Realtime simulation: change the main-market quotes of `count` LIVE events and tell the clients (as the server's feed
+    // stream does after a structural/odds change), so the extension refetches and patches its rows.
+    tickLive(count = 6) {
+      const list = fixtures.liveEvents;
+      for (let i = 0; i < Math.min(count, list.length); i++) {
+        const e = list[Math.floor(Math.random() * list.length)];
+        for (const r of e.sourceRefs) if (r.quote) r.quote = { ...r.quote, h: +(1.3 + Math.random() * 1.5).toFixed(2), a: +(1.3 + Math.random() * 1.5).toFixed(2), at: Date.now() };
+      }
+      liveRevision++;
+      for (const res of sse) try { res.write(`event: invalidate\ndata: ${JSON.stringify({ mode: 'live', provider: 'ggbet', meta: { revision: 'live-' + liveRevision }, at: Date.now() })}\n\n`); } catch {}
+    },
     invalidateHistory() { for (const res of sse) try { res.write(`event: ui-invalidate\ndata: ${JSON.stringify({ view: 'history', revision: Date.now(), reason: 'manual', at: Date.now() })}\n\n`); } catch {} },
     close() { clearInterval(timer); real?.close(); for (const res of sse) try { res.end(); } catch {} return new Promise((r) => { server.closeAllConnections?.(); server.close(r); }); },
   })));
