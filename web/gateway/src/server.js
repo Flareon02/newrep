@@ -124,7 +124,7 @@ export function createGateway(config, { clock = Date.now, log = createLogger(), 
       if (apiRate.add(r.session.id) > config.apiRequestsPerMinute) return auth.json(res, 429, { ok: false, error: 'Слишком много запросов', code: 'rate_limited' }, { 'retry-after': String(apiRate.retryAfter(r.session.id)) });
       const ctx = { principal: r.principal, session: r.session };
       if (p.startsWith('/auth/admin/')) return admin.handle(req, res, url, ctx);
-      if (p === '/api/me') return auth.json(res, 200, { ok: true, serverVersion: await upstreamVersion(), access: 'enforce', principal: { id: r.principal.id, name: r.principal.name, role: r.principal.role, anonymous: false }, capabilities: [...r.principal.caps].sort(), session: auth.sessionView(r.session, r.principal) });
+      if (p === '/api/me') return auth.json(res, 200, { ok: true, serverVersion: await upstreamVersion(), access: 'enforce', principal: { id: r.principal.id, name: r.principal.name, role: r.principal.role, anonymous: false }, keyId: r.principal.keyId || '', entitlementsRevision: r.principal.rev || 0, capabilities: [...r.principal.caps].sort(), features: { settingsSync: 1, timeline: 1, marketSemantics: 2 }, session: auth.sessionView(r.session, r.principal) });
       if (p === '/health') {
         if (!can(r.principal, 'admin.diagnostics')) return auth.json(res, 200, { ok: true, service: 'astek-fonbet-monitor-server', version: await upstreamVersion() });
         return proxy.handle(req, res, url, ctx);

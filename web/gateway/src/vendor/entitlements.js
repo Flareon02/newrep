@@ -56,7 +56,7 @@ export class UserStore {
     this.saving = Promise.resolve();
   }
   persist() { const data = { version: 1, users: this.users }; this.saving = this.saving.catch(() => {}).then(() => this.write(this.file, data)); return this.saving; }
-  view(u) { return { id: u.id, name: u.name, role: u.role, disabled: !!u.disabled, capabilities: [...u.capabilities], createdAt: u.createdAt, updatedAt: u.updatedAt, tokenUpdatedAt: u.tokenUpdatedAt }; }
+  view(u) { return { id: u.id, name: u.name, role: u.role, disabled: !!u.disabled, capabilities: [...u.capabilities], createdAt: u.createdAt, updatedAt: u.updatedAt, tokenUpdatedAt: u.tokenUpdatedAt, keyId: keyIdOf(u.tokenHash) }; }
   list() { return this.users.map((u) => this.view(u)); }
   get(id) { return this.users.find((u) => u.id === String(id)) || null; }
   byToken(token) { const d = digest(token); return this.users.find((u) => u.tokenHash && sameDigest(u.tokenHash, d)) || null; }
@@ -88,10 +88,13 @@ export function extractRequestToken(req, url) {
   if (url && /^\/api\/(?:pinnacle\/live-stream|statistics\/stream|feed-stream)$/.test(url.pathname)) return String(url.searchParams.get('access_token') || '').trim();
   return '';
 }
-function principal({ id, name, role, caps, anonymous = false, builtin = false }) {
+// keyId: a stable, non-reversible id of the key in use (changes when the key is rotated), so per-user data such as
+// settings can be bound to user + key. rev: changes whenever an administrator edits the user.
+const keyIdOf = (tokenDigest) => (tokenDigest ? createHash('sha256').update('key:' + tokenDigest).digest('hex').slice(0, 16) : '');
+function principal({ id, name, role, caps, anonymous = false, builtin = false, keyId = '', rev = 0 }) {
   const set = new Set(caps);
   const all = PROVIDERS.every((p) => set.has('provider.' + p)) && set.has('odds.live') && set.has('odds.prematch') && set.has('odds.fullMarkets');
-  return { id, name, role, anonymous, builtin, caps: set, unrestricted: all, sig: role === 'admin' ? 'admin' : [...set].sort().join(',') };
+  return { id, name, role, anonymous, builtin, caps: set, unrestricted: all, keyId, rev: Number(rev) || 0, sig: role === 'admin' ? 'admin' : [...set].sort().join(',') };
 }
 export function createAccess({ masterToken = '', users = null, mode = 'auto' } = {}) {
   const master = String(masterToken || '').trim(), masterDigest = master ? digest(master) : '';
@@ -99,8 +102,8 @@ export function createAccess({ masterToken = '', users = null, mode = 'auto' } =
   const enforce = mode === 'open' ? false : !!master;
   async function resolve(req, url) {
     const token = extractRequestToken(req, url);
-    if (token && masterDigest && sameDigest(digest(token), masterDigest)) return principal({ id: 'admin', name: 'Администратор', role: 'admin', caps: ALL, builtin: true });
-    if (token && users) { await users.ready; const u = users.byToken(token); if (u && !u.disabled) return principal({ id: u.id, name: u.name, role: u.role, caps: u.role === 'admin' ? ALL : u.capabilities }); }
+    if (token && masterDigest && sameDigest(digest(token), masterDigest)) return principal({ id: 'admin', name: 'Администратор', role: 'admin', caps: ALL, builtin: true, keyId: keyIdOf(masterDigest) });
+    if (token && users) { await users.ready; const u = users.byToken(token); if (u && !u.disabled) return principal({ id: u.id, name: u.name, role: u.role, caps: u.role === 'admin' ? ALL : u.capabilities, keyId: u.keyId || keyIdOf(u.tokenHash), rev: u.updatedAt }); }
     // Open mode (no server token): everything as before except managing users, which needs an administrator.
     return enforce ? principal({ id: 'anonymous', name: '', role: 'anonymous', caps: [], anonymous: true }) : principal({ id: 'anonymous', name: '', role: 'anonymous', caps: [...ALL].filter((k) => k !== 'admin.users' && k !== 'admin.panel'), anonymous: true });
   }
@@ -114,7 +117,7 @@ export const canAny = (p, keys) => keys.some((k) => can(p, k));
 const VIEW_CAPS = ['live.view', 'prematch.view', 'results.view', 'compare.view', 'history.view'];
 export function routeRequirement(method, pathname, params = new URLSearchParams()) {
   const p = pathname;
-  if (p === '/' || p === '/health' || p === '/api/me' || p.startsWith('/api/team-logos/')) return null;
+  if (p === '/' || p === '/health' || p === '/api/me' || p === '/api/me/settings' || p.startsWith('/api/team-logos/')) return null;
   if (p.startsWith('/api/admin/users') || p === '/api/admin/capabilities') return ['admin.users'];
   if (p.startsWith('/api/admin/') || p === '/api/status') return ['admin.diagnostics'];
   if (p === '/api/ui/live' || p === '/api/live' || p.startsWith('/api/live/') || p === '/api/ui/odds-providers' || p === '/api/ui/odds-watch') return p === '/api/live/history' || p === '/api/live/past' ? ['live.view', 'history.view'] : ['live.view'];
@@ -160,6 +163,10 @@ function scrubProviders(providers, p, mode = 'live') {
   const out = {};
   for (const [key, value] of Object.entries(providers)) {
     if (PROVIDERS.includes(key) && !can(p, 'provider.' + key)) continue;
+    // A list under a bookmaker key (league catalog: providers.astek = [leagues]) is that bookmaker's data, already
+    // allowed above. It must stay an array: spreading it into a status object turned it into {"0":…} and broke the
+    // «Лиги и связи» screen for every user without admin.diagnostics.
+    if (Array.isArray(value)) { out[key] = value; continue; }
     let row = value;
     if (row && typeof row === 'object') for (const list of ['events', 'logicalEvents']) if (Array.isArray(row[list])) row = { ...row, [list]: row[list].map((e) => scrubEvent(e, p, mode)).filter(Boolean) };
     if (row && typeof row === 'object' && !can(p, 'admin.diagnostics')) {

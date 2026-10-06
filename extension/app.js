@@ -41,7 +41,10 @@ const oddsHidden=view=>prefs.hideOdds||!Ent.oddsFor(view==='compare'?(prefs.comp
 const DEFAULT_PREFS={astek:true,fonbet:true,pinnacle:true,ggbet:true,liveOddsProvider:'ggbet',theme:'dark',linkBrowser:'current',openMode:'window',dotaStatsEnabled:true,teamLogos:true,favorites:[],hiddenLeagues:[],hiddenLeaguesByView:{},notifications:{live:false,prematch:false,favoritesOnly:false,sound:false},viewFilters:{},liveSort:'league',lineMode:'leagues',compareMode:'odds',compareScope:'live',showExtras:true,hideOdds:false,historyEnabled:true,detailTab:'odds',detailBook:'',onlyFavorites:false};
 let prefs={...DEFAULT_PREFS};
 let prefsTimer=0;
-function savePrefs(){clearTimeout(prefsTimer);prefsTimer=setTimeout(()=>chrome.storage.local.set({prefs}).catch(report),80);}
+// Personal settings follow the user + key (settings-sync.js): every save reports the keys that changed.
+let applyingProfile=false,prefsSeen={};
+function changedPrefKeys(){const keys=[];for(const k of new Set([...Object.keys(prefs),...Object.keys(prefsSeen)])){const v=JSON.stringify(prefs[k]);if(v!==prefsSeen[k]){keys.push(k);prefsSeen[k]=v;}}return keys;}
+function savePrefs(){clearTimeout(prefsTimer);prefsTimer=setTimeout(()=>chrome.storage.local.set({prefs}).catch(report),80);const keys=changedPrefKeys();if(!applyingProfile&&keys.length&&typeof settingsSync!=='undefined')settingsSync.changed(keys);}
 function flushPrefs(){clearTimeout(prefsTimer);prefsTimer=0;return chrome.storage.local.set({prefs}).catch(()=>{});}
 function setPref(key,value){prefs[key]=value;savePrefs();}
 function migratePrefs(){
@@ -90,6 +93,9 @@ function report(error){if(error?.name==='AbortError')return;const message=errorT
 
 // ---------------------------------------------------------------------------------------------------- data layer
 const client=Store.createClient({base:()=>BASE,headers:()=>ServerConfig.headers(),timeoutFor:url=>url.startsWith('/api/ui/history')||url.startsWith('/api/ui/results')||url.startsWith('/api/prematch/compare')?35000:15000});
+// Another user's/key's profile replaces the active one: prefs, theme, logos, folds and every view follow at once.
+function applyProfilePrefs(next){applyingProfile=true;try{prefs={...DEFAULT_PREFS,...next};migratePrefs();changedPrefKeys();savePrefs();applyTheme();document.documentElement.classList.toggle('team-logos-off',prefs.teamLogos===false);lineFold=LineCollapse.create({closedGames:Array.isArray(prefs.lineClosedGames)?prefs.lineClosedGames:[]});if(typeof markDirty==='function'){markDirty();renderChrome();if(!$('settingsView').hidden)renderSettings();DetailPanel.render();}}finally{applyingProfile=false;}}
+const settingsSync=SettingsSync.create({storage:chrome.storage.local,client,getPrefs:()=>prefs,applyPrefs:applyProfilePrefs,defaults:DEFAULT_PREFS,log:e=>report(e)});
 // Compatibility wrapper for the reused modules (score dialog, odds timeline, generator, stats panels, league client).
 async function request(path,options={}){if(options.method==='POST'){const body=typeof options.body==='string'?JSON.parse(options.body):options.body;return client.post(path,body);}return client.get(path);}
 const persist=Store.createPersist({storage:chrome.storage.local,prefix:'lastKnown9:',minIntervalMs:30000});
@@ -147,6 +153,7 @@ function onPortMessage(message){
  reconnectDelay=500;
  if(message.kind==='ui-invalidate'){handleUiInvalidate(message);return;}
  if(message.kind==='ui-stream'){reconcileServerViews();return;}
+ if(message.kind==='entitlements'){mePending=null;loadEntitlements();return;}
  if(message.kind==='freshness'){
   const kind=message.feed,target=snapshots[kind],f=message.freshness||{},failed=!!f.transportError;
   if(target&&!target.offline){Object.assign(target,f);if(!failed&&target.persisted&&f.revision&&String(f.revision)===String(target.revision))target.persisted=false;}
@@ -924,7 +931,7 @@ DotaStatsPanel.configure({enabled:()=>prefs.dotaStatsEnabled===true,logosEnabled
 let mePending=null;
 async function loadEntitlements(){
  if(mePending)return mePending;
- mePending=(async()=>{try{const me=await client.get('/api/me');me.at=Date.now();chrome.storage.local.set({entitlements9:me}).catch(()=>{});if(Ent.set(me))applyEntitlements();}
+ mePending=(async()=>{try{const me=await client.get('/api/me');me.at=Date.now();chrome.storage.local.set({entitlements9:me}).catch(()=>{});if(Ent.set(me))applyEntitlements();settingsSync.attach(me).catch(report);}
   catch(error){if(error?.status===404&&Ent.legacy())applyEntitlements();}
   finally{mePending=null;renderBanner();}})();
  return mePending;
@@ -943,7 +950,7 @@ setInterval(()=>{if(!document.hidden)loadEntitlements();},60000);
 
 // ---------------------------------------------------------------------------------------------------- boot ------
 document.addEventListener('visibilitychange',()=>{sendActivity();if(!document.hidden)reconcileServerViews();else persist.flush();});
-window.addEventListener('pagehide',()=>{flushPrefs();persist.flush();});
+window.addEventListener('pagehide',()=>{flushPrefs();persist.flush();settingsSync.flush().catch(()=>{});});
 setInterval(()=>{renderChrome();sendActivity();if(tab==='prematch')renderView('prematch');},20000);
 setInterval(()=>{if(tab==='results'&&$('settingsView').hidden)updateListHead('results',Number($('viewCount').textContent.split(' ')[0])||0,resultsRes.peek(resultsKey())?.value);},1000);
 // A logo that does not load: remembered as broken (never requested again), replaced by the placeholder at once, and the
@@ -960,7 +967,7 @@ async function init(){
  // One storage read: prefs + last-known feeds/results/history (instant first paint, refreshed right after).
  // Small keys first (prefs + LIVE, the default screen); the big Line/History copies load right after the first paint.
  const saved=await chrome.storage.local.get(['prefs','lastKnown9:live','lastKnown9:results','entitlements9','lastKnown9:logos']);Logos.load(saved['lastKnown9:logos']);
- prefs={...DEFAULT_PREFS,...saved.prefs};migratePrefs();savePrefs();applyTheme();if(saved.entitlements9)Ent.set(saved.entitlements9);document.documentElement.classList.toggle('no-favorites',!Ent.can('favorites'));for(const b of $('tabs').querySelectorAll('[data-tab]'))b.hidden=!Ent.canView(b.dataset.tab);lineFold=LineCollapse.create({closedGames:Array.isArray(prefs.lineClosedGames)?prefs.lineClosedGames:[]});
+ prefs={...DEFAULT_PREFS,...saved.prefs};migratePrefs();applyingProfile=true;changedPrefKeys();savePrefs();applyingProfile=false;applyTheme();if(saved.entitlements9){Ent.set(saved.entitlements9);settingsSync.attach(saved.entitlements9).catch(report);}document.documentElement.classList.toggle('no-favorites',!Ent.can('favorites'));for(const b of $('tabs').querySelectorAll('[data-tab]'))b.hidden=!Ent.canView(b.dataset.tab);lineFold=LineCollapse.create({closedGames:Array.isArray(prefs.lineClosedGames)?prefs.lineClosedGames:[]});
  document.documentElement.classList.toggle('team-logos-off',prefs.teamLogos===false);
  const live=saved['lastKnown9:live'];
  if(live?.events&&!snapshots.live)setSnapshot('live',live,{persisted:true});

@@ -38,7 +38,7 @@ const StatisticsClient=(()=>{
  function stopEntry(entry){removeQueued(entry);entry.source?.close();entry.source=null;}
  function startEntry(entry){
   if(entry.source||!entry.listeners.size||!window.EventSource||activeStreamCount()>=MAX_DETAIL_STREAMS)return false;
-  const source=new EventSource(ctx.base+'/api/statistics/stream?id='+encodeURIComponent(entry.id));entry.source=source;
+  const source=new EventSource(ServerConfig.streamUrl('/api/statistics/stream?id='+encodeURIComponent(entry.id)));entry.source=source;
   source.onmessage=event=>{let data;try{data={...JSON.parse(event.data),receivedAt:Date.now(),streamConnected:true};}catch{return;}for(const listener of [...entry.listeners])try{listener(data);}catch{}};
   source.onerror=()=>{entry.lastErrorAt=Date.now();};
   return true;

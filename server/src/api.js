@@ -25,6 +25,7 @@ import {normalizeErrorBody,publicMessage} from './http-errors.js';
 import {safeWrite} from './sse.js';
 import {historyCapacity,warnHistoryCapacity} from './capacity.js';
 import {createAuthorizer,MIN_TOKEN_LENGTH} from './auth.js';
+import {UserSettingsStore} from './user-settings.js';
 import {UserStore,createAccess,routeRequirement,routeProvider,can,canAny,filterForPrincipal,filterSsePayload,CAPABILITIES,CAPABILITY_GROUPS} from './entitlements.js';
 import {randomUUID,createHash} from 'node:crypto';
 import {writeCounters} from './sqlite-storage.js';
@@ -194,8 +195,9 @@ export function sseEventWire(event,payload){
   return `event: ${String(event||'message')}\ndata: ${JSON.stringify(payload??{})}\n\n`;
 }
 
-export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupervisor=null, accessMode=config.accessControl, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState=null,databetCollector=null,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
+export function createApi({ authToken=config.apiToken, userStore=null, settingsStore=null, ggbetSupervisor=null, accessMode=config.accessControl, liveCollector,crossbetService,hltvService,oddsService,pinnacleLiveState,pinnaclePrematchState,pinnacleCollector,ggbetLiveState,ggbetCollector,databetLiveState=null,databetCollector=null,liveState, prematchState, fonbetLiveState, fonbetPrematchState, prematchCollector, fonbetCollector, resultsService, startedAt }) {
   const authorizer=createAuthorizer(authToken);
+  const settings=settingsStore||new UserSettingsStore({dataDir:config.dataDir});
   const users=userStore||new UserStore(),access=createAccess({masterToken:authorizer.misconfigured?'':authToken,users,mode:accessMode});
   if(access.enforce)log.info('[api] access control: per-user capabilities enforced (API_TOKEN holder = administrator)');
   if(!authorizer.enabled)log.warn('[api] API_TOKEN is not set: write and compute endpoints are open to any client that can reach this port');
@@ -263,7 +265,12 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
   const clientIp=req=>String(req.socket?.remoteAddress||'unknown').replace(/^::ffff:/,'');
   const allowRequest=(req,limit)=>{const ip=clientIp(req),now=Date.now(),old=rateState.get(ip),row=old&&now-old.at<60000?old:{at:now,get:0,post:0};const field=req.method==='POST'?'post':'get';row[field]++;rateState.set(ip,row);return row[field]<=limit;};
   const rateTimer=setInterval(()=>{const now=Date.now();for(const [ip,row] of rateState)if(now-row.at>120000)rateState.delete(ip);},60000);rateTimer.unref?.();
-  let sseTotal=0;const acquireSse=req=>{const ip=clientIp(req),n=sseState.get(ip)||0;if(n>=config.apiSseLimitPerIp||sseTotal>=config.apiSseLimitTotal)return null;sseState.set(ip,n+1);sseTotal++;let released=false;return()=>{if(released)return;released=true;sseTotal=Math.max(0,sseTotal-1);const left=Math.max(0,(sseState.get(ip)||1)-1);if(left)sseState.set(ip,left);else sseState.delete(ip);};};
+  let sseTotal=0;
+  // Open streams per principal: an administrator's change to a user (rights, key, disable, delete) ends that user's
+  // streams after an `entitlements` event, so they reconnect under the new rights instead of the ones of the connect time.
+  const principalStreams=new Set();
+  const principalChanged=(id,reason)=>{let n=0;for(const s of [...principalStreams])if(s.id===String(id)){safeWrite(s.res,sseEventWire('entitlements',{reason,at:Date.now()}));try{s.res.end();}catch{}principalStreams.delete(s);n++;}return n;};
+  const acquireSse=(req,res=null)=>{const ip=clientIp(req),n=sseState.get(ip)||0;if(n>=config.apiSseLimitPerIp||sseTotal>=config.apiSseLimitTotal)return null;sseState.set(ip,n+1);sseTotal++;let released=false;const entry=res&&req.principal?{id:String(req.principal.id),res}:null;if(entry)principalStreams.add(entry);return()=>{if(released)return;released=true;if(entry)principalStreams.delete(entry);sseTotal=Math.max(0,sseTotal-1);const left=Math.max(0,(sseState.get(ip)||1)-1);if(left)sseState.set(ip,left);else sseState.delete(ip);};};
   const oddsWatch=(()=>{const TTL=45000,MAX_CLIENTS=64,rows=new Map();
     const prune=now=>{for(const [ip,row] of rows)if(now-row.at>TTL)rows.delete(ip);};
     return {
@@ -422,7 +429,21 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
     else if(req.principal.anonymous&&routeRequirement(req.method,url.pathname,url.searchParams)){res.setHeader('WWW-Authenticate','Bearer realm="esports-monitor"');return sendJson(req,res,401,{ok:false,error:'Нужен ключ доступа. Укажите его в настройках подключения.',code:'unauthorized'});}
     {const need=routeRequirement(req.method,url.pathname,url.searchParams),provider=routeProvider(url.pathname);
      if((need&&!canAny(req.principal,need))||(provider&&!can(req.principal,'provider.'+provider)))return sendJson(req,res,403,{ok:false,error:'Нет доступа к этому разделу.',code:'forbidden'});}
-    if(url.pathname==='/api/me')return sendJson(req,res,200,{ok:true,serverVersion:config.version,access:access.mode,principal:{id:req.principal.id,name:req.principal.name,role:req.principal.role,anonymous:req.principal.anonymous},capabilities:[...req.principal.caps].sort()});
+    if(url.pathname==='/api/me')return sendJson(req,res,200,{ok:true,serverVersion:config.version,access:access.mode,principal:{id:req.principal.id,name:req.principal.name,role:req.principal.role,anonymous:req.principal.anonymous},keyId:req.principal.keyId||'',entitlementsRevision:req.principal.rev||0,capabilities:[...req.principal.caps].sort(),features:{settingsSync:1,timeline:1,marketSemantics:2}});
+    if(url.pathname==='/api/me/settings'){
+      // Personal settings: user + key from the request's own key. Only the server token (the web gateway's service
+      // account) may name another user, because the gateway authenticates its users itself.
+      try{
+        const onBehalf=req.principal.builtin&&String(req.headers['x-esm-on-behalf-user']||'');
+        const identity=onBehalf?{userId:onBehalf,keyId:String(req.headers['x-esm-on-behalf-key']||'')}:{userId:req.principal.anonymous?'':req.principal.id,keyId:req.principal.keyId||'',anonymous:req.principal.anonymous};
+        if(identity.anonymous&&access.enforce){res.setHeader('WWW-Authenticate','Bearer realm="esports-monitor"');return sendJson(req,res,401,{ok:false,error:'Нужен ключ доступа.',code:'unauthorized'});}
+        const namespace=String(url.searchParams.get('ns')||'ui');
+        if(req.method==='GET')return sendJson(req,res,200,{ok:true,...settings.get(identity,namespace)});
+        if(req.method!=='POST')return sendJson(req,res,405,{error:'Метод не поддерживается'});
+        const body=await readBody(req,96*1024);
+        return sendJson(req,res,200,{ok:true,...settings.put(identity,body?.namespace||namespace,{baseVersion:body?.baseVersion,payload:body?.payload})});
+      }catch(error){return sendJson(req,res,error.status||500,{ok:false,error:error.message,code:error.code,...(error.current?{current:error.current}:{})});}
+    }
     if(url.pathname==='/api/admin/capabilities')return sendJson(req,res,200,{capabilities:CAPABILITIES,groups:CAPABILITY_GROUPS});
     if(url.pathname==='/api/admin/users'||url.pathname.startsWith('/api/admin/users/')){
       // Administrators manage users; nobody can lock themselves out (no self-disable, self-demote or self-delete).
@@ -433,10 +454,10 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
         const body=await readBody(req,65536)||{};
         if(!id){const created=await users.create({name:body.name,role:body.role==='admin'?'admin':'user'});if(Array.isArray(body.capabilities))created.user=await users.update(created.user.id,{capabilities:body.capabilities});return sendJson(req,res,200,{ok:true,...created});}
         const self=req.principal.id===id;
-        if(action==='token')return sendJson(req,res,200,{ok:true,...await users.rotateToken(id)});
-        if(action==='delete'){if(self)return sendJson(req,res,409,{error:'Нельзя удалить свою учётную запись'});await users.remove(id);return sendJson(req,res,200,{ok:true});}
+        if(action==='token'){const rotated=await users.rotateToken(id);principalChanged(id,'key-rotated');return sendJson(req,res,200,{ok:true,...rotated});}
+        if(action==='delete'){if(self)return sendJson(req,res,409,{error:'Нельзя удалить свою учётную запись'});await users.remove(id);principalChanged(id,'deleted');return sendJson(req,res,200,{ok:true});}
         if(self&&(body.disabled===true||body.role==='user'||(Array.isArray(body.capabilities)&&!['admin.panel','admin.users'].every(k=>body.capabilities.includes(k))&&users.get(id)?.role!=='admin')))return sendJson(req,res,409,{error:'Нельзя отключить себе доступ к управлению пользователями'});
-        return sendJson(req,res,200,{ok:true,user:await users.update(id,{name:body.name,capabilities:body.capabilities,disabled:body.disabled,role:body.role})});
+        const updated=await users.update(id,{name:body.name,capabilities:body.capabilities,disabled:body.disabled,role:body.role});principalChanged(id,updated.disabled?'disabled':'rights');return sendJson(req,res,200,{ok:true,user:updated});
       }catch(error){return sendJson(req,res,error.status||400,{error:error.message});}
     }
     if(req.method==='POST'&&url.pathname==='/api/league-links')return sendJson(req,res,410,{error:'Прямое редактирование отключено. Обновите расширение и используйте защищённую публикацию.'});
@@ -575,7 +596,7 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
     if(url.pathname==='/api/feed-stream'){
       let streamProvider;try{streamProvider=liveProvider(url);}catch(error){return sendJson(req,res,error.status||400,{error:error.message});}
       touchVariant(streamProvider);
-      const releaseSse=acquireSse(req);if(!releaseSse)return sendJson(req,res,429,{error:'Слишком много потоковых соединений'});
+      const releaseSse=acquireSse(req,res);if(!releaseSse)return sendJson(req,res,429,{error:'Слишком много потоковых соединений'});
       const allowed=new Set(['live','prematch','results','history','leagues']);
       const modeCap={live:['live.view'],prematch:['prematch.view'],results:['results.view'],history:['history.view'],leagues:['live.view','prematch.view','results.view','compare.view','history.view']};
       const requested=new Set(String(url.searchParams.get('modes')||'live,prematch,results,history,leagues').split(',').filter(x=>allowed.has(x)&&canAny(req.principal,modeCap[x])));if(!requested.size){releaseSse();return sendJson(req,res,403,{error:'Нет доступа к этому разделу.',code:'forbidden'});}
@@ -597,7 +618,7 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
       if(!pinnacleCollector)return sendJson(req,res,503,{error:'Pinnacle ещё не запущен'});
       const id=url.searchParams.get('id')||'';
       if(!/^\d{5,20}$/.test(String(id).replace(/^pinnacle-/,'')))return sendJson(req,res,400,{error:'Pinnacle: неверный ID матча'});
-      const releaseSse=acquireSse(req);if(!releaseSse)return sendJson(req,res,429,{error:'Слишком много потоковых соединений'});
+      const releaseSse=acquireSse(req,res);if(!releaseSse)return sendJson(req,res,429,{error:'Слишком много потоковых соединений'});
       res.statusCode=200;
       res.setHeader('Content-Type','text/event-stream; charset=utf-8');
       res.setHeader('Cache-Control','no-cache, no-transform');
@@ -629,7 +650,7 @@ export function createApi({ authToken=config.apiToken, userStore=null, ggbetSupe
     if(req.method==='GET'&&['/api/statistics/match','/api/statistics/stream'].includes(url.pathname)){
       const id=url.searchParams.get('id'),value=await statistics.store.get(id);if(!value)return sendJson(req,res,404,{matched:false,error:'Статистика ещё не сохранена'});
       if(url.pathname.endsWith('/match'))return sendJson(req,res,200,value);
-      const releaseSse=acquireSse(req);if(!releaseSse)return sendJson(req,res,429,{error:'Слишком много потоковых соединений'});
+      const releaseSse=acquireSse(req,res);if(!releaseSse)return sendJson(req,res,429,{error:'Слишком много потоковых соединений'});
       res.statusCode=200;res.setHeader('Content-Type','text/event-stream');res.setHeader('Cache-Control','no-cache');res.setHeader('Connection','keep-alive');res.setHeader('X-Accel-Buffering','no');applyCommonHeaders(req,res);res.flushHeaders?.();
       const send=d=>{safeWrite(res,'data: '+JSON.stringify({...d,serverNow:Date.now()})+'\n\n');};send(value);
       statistics.store.on(statistics.store.channel(id),send);const heartbeat=setInterval(()=>{safeWrite(res,': keep-alive\n\n');},20000);heartbeat.unref();

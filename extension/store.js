@@ -22,7 +22,7 @@
   async function run(url,timeout,init={}){
    const response=await fetchImpl(base()+url,{cache:'no-store',...init,headers:{...headers(),...(init.headers||{})},signal:init.signal});
    let data=null;try{data=await response.json();}catch{if(response.ok)throw new Error('Ответ сервера не является JSON');}
-   if(!response.ok){const error=new Error(data?.error||`HTTP ${response.status}`);error.status=response.status;throw error;}
+   if(!response.ok){const error=new Error(data?.error||`HTTP ${response.status}`);error.status=response.status;error.code=data?.code||'';if(data?.current)error.current=data.current;throw error;}
    return data;
   }
   function get(url,{signal=null,timeout=timeoutFor(url)}={}){

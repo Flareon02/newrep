@@ -7,7 +7,7 @@ const ServerConfig=(()=>{
   const base=globalThis.Platform?.apiBase||'';
   function errorText(error){const name=error?.name,text=error?.message||String(error);if(name==='TimeoutError'||name==='AbortError'||/timed out|aborted/i.test(text))return 'сервер не ответил вовремя';if(/failed to fetch|networkerror|network error|load failed/i.test(text))return 'сервер недоступен';return text;}
   return {
-    DEFAULT_BASE:base,ready:Promise.resolve(false),errorText,
+    DEFAULT_BASE:base,ready:Promise.resolve(false),errorText,streamUrl:path=>base+path,
     normalize:value=>String(value||''),permissionPattern:()=>'',
     get base(){return base;},
     get token(){return '';},

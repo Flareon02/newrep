@@ -55,7 +55,7 @@ export class KeyDirectory {
     const stored = new Map(this.stmt.all.all().map((r) => [r.id, r]));
     for (const u of list) {
       if (!u || typeof u.id !== 'string') continue;
-      const user = { id: u.id, name: String(u.name || ''), role: u.role === 'admin' ? 'admin' : 'user', disabled: !!u.disabled, capabilities: Array.isArray(u.capabilities) ? u.capabilities : [], tokenUpdatedAt: Number(u.tokenUpdatedAt) || null };
+      const user = { id: u.id, name: String(u.name || ''), role: u.role === 'admin' ? 'admin' : 'user', disabled: !!u.disabled, capabilities: Array.isArray(u.capabilities) ? u.capabilities : [], tokenUpdatedAt: Number(u.tokenUpdatedAt) || null, keyId: String(u.keyId || ''), updatedAt: Number(u.updatedAt) || 0 };
       next.set(user.id, user); seen.add(user.id);
       const row = stored.get(user.id);
       if (!row) { this.stmt.insert.run(user.id, user.name, user.role, user.disabled ? 0 : 1, user.tokenUpdatedAt, now); continue; }

@@ -15,7 +15,7 @@ const ScoreDialog=(()=>{
    $('scoreStatus').textContent=error|| (loading?'Обновляем журнал…':updatedAt?'Обновлено '+stamp(updatedAt,false,true):'Загружаем журнал…');$('scoreStatus').className=error?'bad':'muted';$('scoreRefresh').disabled=loading;$('scoreMore').hidden=!hasMore;$('scoreMore').disabled=loading;
   }
   function combine(rows){entries=[...new Map([...entries,...rows].map(r=>[[r.key||r.source+':'+r.sourceEventId,r.at,r.event||'',r.scoreText||''].join('|'),r])).values()];}
-  async function load(before){if(loading)return;loading=true;error='';render();try{const data=await ScoreCache.load(ids,{before});if(!active())return;combine(data.entries||[]);if(before||!nextBefore){hasMore=data.hasMore;nextBefore=data.nextBefore;}updatedAt=Date.now();}catch(e){error=e.message;}finally{loading=false;render();}}
+  async function load(before){if(loading)return;loading=true;error='';render();try{const data=await ScoreCache.load(ids,{before});if(!active())return;combine(data.entries||[]);if(before||!nextBefore){hasMore=data.hasMore;nextBefore=data.nextBefore;}updatedAt=Date.now();}catch(e){error=e.message;if(e.status===401||e.status===403)clearInterval(timer);}finally{loading=false;render();}}
   $('scoreRefresh').onclick=()=>load();$('scoreMore').onclick=()=>load(nextBefore);
   const timer=setInterval(()=>{if(!active()){clearInterval(timer);return;}load();},10000);
   render();ScoreCache.read(ids).then(data=>{if(!active())return;if(data){combine(data.entries||[]);hasMore=data.hasMore;nextBefore=data.nextBefore;updatedAt=data.cachedAt;render();}load();}).catch(()=>load());

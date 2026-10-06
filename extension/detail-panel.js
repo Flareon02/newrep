@@ -227,7 +227,7 @@ const DetailPanel=(()=>{
   const r=books().find(x=>x.source==='pinnacle'),id=sourceId(r),live=!!(st.view==='live'||r?.inLive||r?.enteredLiveAt);
   if(!id||!live){closeStream();return;}
   if(stream&&streamKey===id)return;
-  closeStream();const token=streamToken,eventId=st.id;streamKey=id;stream=new EventSource(`${ctx.base()}/api/pinnacle/live-stream?id=${encodeURIComponent(id)}`);
+  closeStream();const token=streamToken,eventId=st.id;streamKey=id;stream=new EventSource(ServerConfig.streamUrl(`/api/pinnacle/live-stream?id=${encodeURIComponent(id)}`));
   stream.onmessage=ev=>{if(!st||st.id!==eventId||token!==streamToken)return;try{const data=JSON.parse(ev.data);if(data.event){st.liveRef={...data.event,source:'pinnacle'};st.liveAt=Date.now();render();}}catch{}};
  }
 

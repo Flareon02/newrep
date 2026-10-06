@@ -73,6 +73,8 @@ export function createApiProxy({ upstream, hub, registry, keys, log = console, c
     const clientGzip = /\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''));
     const headers = { accept: String(req.headers.accept || 'application/json'), 'accept-encoding': pass && clientGzip ? 'gzip' : 'identity' };
     if (req.headers['content-type']) headers['content-type'] = String(req.headers['content-type']);
+    // Personal settings belong to the signed-in user and key; the server accepts the user only from its service token.
+    if (path === '/api/me/settings') { headers['x-esm-on-behalf-user'] = String(principal.id); headers['x-esm-on-behalf-key'] = String(principal.keyId || ''); }
     const inm = unscopeEtag(req.headers['if-none-match'], principal);
     if (inm) headers['if-none-match'] = inm;
 

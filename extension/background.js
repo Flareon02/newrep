@@ -121,11 +121,21 @@ function applyProviderPatches(kind,patches,meta){
  else for(const port of ports)try{port.postMessage({kind:'freshness',feed:kind,freshness:{...meta,receivedAt:now,pushAt:now}});}catch{}
  return result.ok;
 }
+let entitlementsChanged=false,refetchAfterEntitlements=false;
 async function handleStreamEvent(type,data){
  streamLastAt=Date.now();
+ // An administrator changed this key's rights (or rotated/disabled it): the server ends the stream right after this
+ // event. Pages reload /api/me at once; the stream reconnects without backoff and both feeds are fetched again, since
+ // the same revision now means different (filtered) content for this key.
+ if(type==='entitlements'){
+  entitlementsChanged=true;
+  for(const port of ports)try{port.postMessage({kind:'entitlements',reason:String(data?.reason||''),at:Number(data?.at)||Date.now()});}catch{}
+  return;
+ }
  if(type==='hello'){
   streamHealthy=true;streamFailures=0;
-  for(const kind of ['live','prematch']){const meta=data?.feeds?.[kind],current=cache[kind];if(meta&&(!current||String(current.revision||'')!==String(meta.revision||'')))poll(kind,true);}
+  const refetch=refetchAfterEntitlements;refetchAfterEntitlements=false;
+  for(const kind of ['live','prematch']){const meta=data?.feeds?.[kind],current=cache[kind];if(refetch||(meta&&(!current||String(current.revision||'')!==String(meta.revision||''))))poll(kind,true);}
   for(const port of ports)try{port.postMessage({kind:'ui-stream',hello:data?.ui||{},serverVersion:data?.serverVersion||''});}catch{}
   return;
  }
@@ -161,7 +171,7 @@ async function streamLoop(){
   const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';streamHealthy=true;streamFailures=0;
   lastByteAt=Date.now();
   while(ports.size&&!controller.signal.aborted){const {value,done}=await reader.read();lastByteAt=Date.now();if(done)throw Error('Поток закрыт сервером');buffer+=decoder.decode(value,{stream:true});let index;while((index=buffer.search(/\r?\n\r?\n/))>=0){const block=buffer.slice(0,index),sep=buffer.match(/\r?\n\r?\n/)?.[0]?.length||2;buffer=buffer.slice(index+sep);const event=FeedPush.parseSseBlock(block);if(event)await handleStreamEvent(event.type,event.data);}}
- }catch(error){if(!controller.signal.aborted||stalled){streamHealthy=false;streamFailures++;}}
+ }catch(error){if(entitlementsChanged){streamHealthy=false;}else if(!controller.signal.aborted||stalled){streamHealthy=false;streamFailures++;}}
  finally{
   clearInterval(stallTimer);
   if(streamAbort===controller)streamAbort=null;streamRunning=false;
@@ -169,7 +179,7 @@ async function streamLoop(){
    // Do not wait for the long reconciliation interval after a stream loss.
    // Resume normal polling immediately while SSE reconnects independently.
    scheduleFeeds(0);
-   const delay=Math.min(30000,1000*Math.pow(2,Math.min(5,streamFailures)))+Math.floor(Math.random()*500);streamRetryTimer=setTimeout(streamLoop,delay);
+   const delay=entitlementsChanged?250:Math.min(30000,1000*Math.pow(2,Math.min(5,streamFailures)))+Math.floor(Math.random()*500);if(entitlementsChanged){entitlementsChanged=false;refetchAfterEntitlements=true;}streamRetryTimer=setTimeout(streamLoop,delay);
   }
  }
 }

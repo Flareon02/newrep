@@ -28,8 +28,11 @@ const ServerConfig=(()=>{
   try{chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes[KEY]){current=sanitize(changes[KEY].newValue);writeMirror(current);}});}catch{}
   // Network failures reach the UI as plain Russian text instead of the browser's English wording ("signal timed out", "Failed to fetch").
   function errorText(error){const name=error?.name,text=error?.message||String(error);if(name==='TimeoutError'||name==='AbortError'||/timed out|aborted/i.test(text))return 'сервер не ответил вовремя';if(/failed to fetch|networkerror|network error|load failed/i.test(text))return 'сервер недоступен';return text;}
+  // EventSource cannot send an Authorization header: stream routes (feed, statistics, Pinnacle live) accept the key as
+  // `access_token` (server/src/entitlements.js extractRequestToken). Without it every stream got HTTP 401.
+  function streamUrl(path){const url=current.base+path;return current.token?url+(url.includes('?')?'&':'?')+'access_token='+encodeURIComponent(current.token):url;}
   return {
-    DEFAULT_BASE,ready,errorText,normalize,permissionPattern,
+    DEFAULT_BASE,ready,errorText,normalize,permissionPattern,streamUrl,
     get base(){return current.base;},
     get token(){return current.token;},
     headers(extra={}){return current.token?{Authorization:'Bearer '+current.token,...extra}:{...extra};},
