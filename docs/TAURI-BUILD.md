@@ -95,7 +95,18 @@ code-signing certificate, or Azure Trusted Signing, applied in CI to `EsportsDat
 
 ## Release record
 
-See the table at the end of this file (filled by each release).
-
 | Version | Commit | CI run | Portable ZIP SHA256 | Installer SHA256 |
 |---|---|---|---|---|
+| 1.0.0 | `73d1d14446` | [37403037546](https://github.com/Flareon02/newrep/actions/runs/37403037546) | `02ac6cd9153d2d64aadda220cdd3af60209d352fd15ff517e2d2361ca31fafac` (3,369,056 B) | `bbd4a65268917ccc0ccace42255930ac66b632e4a58bb3c7bf421fe9884c6d9f` (2,957,159 B) |
+
+1.0.0 verification: smoke 4/4 on `windows-latest` (window up, gate rendered via UI Automation, no monitor before
+sign-in, still running); release scan and bundle scan passed; on the server the published files were re-checked against
+SHA256SUMS, the installer's updater signature verified with the public key (a 1-bit change is rejected), and every
+file scanned for the real API token, admin key, GitHub token and updater private key/password: none present.
+Published: GitHub release `desktop-v1.0.0`, channel `desktop-stable`, and `/downloads/desktop/` on the gateway
+(`web/deploy/fetch-desktop-release.sh 1.0.0`). WebView2 v153 (system) on the runner. Cargo.lock from this build is
+committed (`desktop/src-tauri/Cargo.lock`, tauri 2.12.1).
+
+Note: the runner's WebView2 did not open a remote-debugging port for the app (Tauri passes its own browser
+arguments), so the CDP part of the smoke test is reported as unavailable; the facts it would check are verified on
+the embedded files by `check-bundle.mjs`.

@@ -27,7 +27,7 @@ async function check(name, fn) {
 const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
 
 const mock = await startMockServer({ historyLatencyMs: 300 });
-const stack = await startStack({ backend: { fallback: mock.url }, config: { staticDir: path.join(root, 'dist', 'web'), sweepMs: 1000 } });
+const stack = await startStack({ backend: { fallback: mock.url }, config: { staticDir: path.join(root, 'dist', 'web'), sweepMs: 1000, downloadsDir: process.env.EDS_DOWNLOADS_DIR || '' } });
 stack.config.publicOrigin = stack.base; // the browser's origin in this test
 const customer = stack.backend.addUser({ name: 'Клиент Тест' });
 const admin = stack.backend.addUser({ name: 'Администратор', role: 'admin' });
@@ -157,6 +157,13 @@ await check('SETTINGS → Аккаунт shows the session and the desktop downl
   const text = await A.page.textContent('#settingsBody');
   assert(text.includes('Клиент Тест') && text.includes('активна') && text.includes('Веб-версия'), text.slice(0, 300));
   assert(text.includes('Приложение для Windows'), 'desktop block present');
+  if (process.env.EDS_DOWNLOADS_DIR) {
+    const m = JSON.parse(fs.readFileSync(path.join(process.env.EDS_DOWNLOADS_DIR, 'desktop', 'manifest.json'), 'utf8'));
+    assert(text.includes(m.version) && text.includes(m.sha256), 'desktop version and SHA-256 shown');
+    const href = await A.page.getAttribute('#desktopDownload', 'href');
+    const size = await A.page.evaluate(async (u) => (await fetch(u)).headers.get('content-length'), href);
+    assert(Number(size) === m.size, `download ${href} size ${size}`);
+  }
   const sections = await A.page.$$eval('[data-settings-section]', (b) => b.map((x) => x.textContent));
   assert(!sections.includes('Подключение') && !sections.includes('Сессии'), sections.join(','));
   await snap(A.page, '05-settings-account');

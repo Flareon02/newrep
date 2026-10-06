@@ -41,9 +41,9 @@ No change on the server is needed; cloudflared picks the new rule up live.
 
 ## Desktop release files
 
-Download `manifest.json`, `latest.json`, `EsportsData-Desktop-Windows-x64.zip`, `…-setup.exe(.sig)` from the GitHub
-release `desktop-v<version>` into `/var/lib/esportsdata-web/downloads/desktop/` (owner esportsdata-web), verify
-`SHA256SUMS.txt`. Settings → Аккаунт then shows the download (version, date, size, SHA-256). See TAURI-BUILD.md.
+`web/deploy/fetch-desktop-release.sh <version>` downloads the GitHub release `desktop-v<version>`, verifies
+`SHA256SUMS.txt` and the manifests, and installs the files into `/var/lib/esportsdata-web/downloads/desktop/`
+(latest.json last, so the updater never sees a manifest before its installer). Settings → Аккаунт then shows the download (version, date, size, SHA-256). See TAURI-BUILD.md.
 
 ## Checks
 
