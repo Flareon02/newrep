@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { startStack, readSse, ORIGIN } from './helpers/gateway.mjs';
 import { ALL_USER_CAPS } from './helpers/fake-backend.mjs';
-import { DatabaseSync } from 'node:sqlite';
 
 const activeCount = (stack, keyId) => stack.gateway.db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE access_key_id = ? AND revoked_at IS NULL').get(keyId).n;
 

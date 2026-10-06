@@ -18,7 +18,7 @@ const legacyRules = {
 };
 
 export default [
-  { ignores: ['**/node_modules/**', 'dist/**', 'extension/assets/**'] },
+  { ignores: ['**/node_modules/**', 'dist/**', 'extension/assets/**', 'web/gateway/src/vendor/**', 'desktop/src-tauri/target/**'] },
   js.configs.recommended,
   {
     files: ['server/**/*.js', 'tools/**/*.mjs', 'extension/test/**/*.mjs', 'server/test/**/*.js'],
@@ -32,5 +32,10 @@ export default [
     languageOptions: { ecmaVersion: 2024, sourceType: 'script', globals: { ...globals.browser, ...globals.serviceworker, chrome: 'readonly' } },
     rules: { 'no-undef': 'off', 'no-redeclare': 'off', 'no-global-assign': 'off', 'no-unassigned-vars': 'off' },
   },
+  // Web gateway, build and test tools (Node modules).
+  { files: ['web/**/*.mjs', 'web/gateway/**/*.js'], languageOptions: { ecmaVersion: 2024, sourceType: 'module', globals: { ...globals.node } } },
+  { files: ['web/test/web-e2e.mjs', 'web/test/prod-acceptance.mjs', 'web/scripts/desktop-smoke.mjs'], languageOptions: { globals: { ...globals.browser, chrome: 'readonly' } } },
+  // Web/desktop platform layer: classic browser scripts sharing globals with the extension UI.
+  { files: ['web/platform/*.js'], languageOptions: { ecmaVersion: 2024, sourceType: 'script', globals: { ...globals.browser, Platform: 'writable', ServerConfig: 'writable' } }, rules: { 'no-redeclare': 'off' } },
   { rules: legacyRules },
 ];

@@ -16,7 +16,7 @@ export const INVALID_KEY = 'Неверный или просроченный к�
 const INVALID = { ok: false, error: INVALID_KEY, code: 'invalid_key' };
 // Keys are printable tokens (emu_ + hex today). Whitespace and invisible characters from copy/paste are removed.
 export function normalizeKey(raw) {
-  const value = String(raw ?? '').normalize('NFKC').replace(/[\s​-‍⁠﻿]+/g, '');
+  const value = String(raw ?? '').normalize('NFKC').replace(/[\s\u200B-\u200D\u2060\uFEFF]+/g, '');
   return /^[A-Za-z0-9_\-.~+/=]{16,256}$/.test(value) ? value : '';
 }
 
