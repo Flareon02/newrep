@@ -1,8 +1,8 @@
 {
   "name": "esportsdata-desktop",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "Esports Data desktop app (Tauri 2) - the shared 9.3.0 UI bundled locally (dist/tauri, built by web/build.mjs).",
+  "description": "Esports Data desktop app (Tauri 2) - the shared UI (extension 9.4.0 codebase) bundled locally (dist/tauri, built by web/build.mjs).",
   "scripts": {
     "tauri": "tauri"
   },

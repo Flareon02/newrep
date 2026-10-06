@@ -48,7 +48,7 @@ const DetailPanel=(()=>{
    closeStats();
    const tabs=tabsFor(event,view),wanted=ctx.prefs().detailTab;
    const preferred=source||ctx.prefs().detailBook||'';
-   st={folds:new Set(),oddsMode:ctx.prefs().detailOddsMode==='book'?'book':'compare',timelineMarket:'',event,view,id:String(event.id),tab:tabs.some(t=>t[0]===wanted)?wanted:tabs[0][0],source:preferred,providerTab:'all',scope:'all',category:'all',query:'',detail:null,detailAt:0,loading:false,error:'',liveRef:null,liveAt:0};
+   st={folds:new Set(),oddsMode:['book','compare'].includes(ctx.prefs().detailOddsMode)?ctx.prefs().detailOddsMode:(globalThis.Platform?.hosted?'book':'compare'),timelineMarket:'',event,view,id:String(event.id),tab:tabs.some(t=>t[0]===wanted)?wanted:tabs[0][0],source:preferred,providerTab:'all',scope:'all',category:'all',query:'',detail:null,detailAt:0,loading:false,error:'',liveRef:null,liveAt:0};
    root.hidden=false;root.scrollTop=0;
    renderShell();
   }else{st.event=event;if(source&&source!==st.source){st.source=source;resetMarketFilters();}}

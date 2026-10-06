@@ -71,7 +71,7 @@
       let remote;
       try { remote = await client.get('/api/me/settings?ns=ui'); }
       catch (error) {
-        if (error?.status === 404 || error?.status === 405) { available = false; status.state = 'unsupported'; return; }
+        if (error?.status === 403 || error?.status === 404 || error?.status === 405) { available = false; status.state = 'unsupported'; return; }
         status.state = 'error'; status.error = error?.message || String(error); return;
       }
       if (mine !== id) return;
@@ -128,7 +128,7 @@
               use({ ...(current.payload || {}), ...pick(personal(getPrefs()), profile.dirtyKeys) });
               continue;
             }
-            if (error?.status === 404 || error?.status === 405) { available = false; status.state = 'unsupported'; return; }
+            if (error?.status === 403 || error?.status === 404 || error?.status === 405) { available = false; status.state = 'unsupported'; return; }
             status.state = 'error'; status.error = error?.message || String(error);
             return;
           }
