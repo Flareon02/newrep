@@ -1,0 +1,171 @@
+# Windows x64 build of the Esports Data desktop app (Tauri 2) from the shared 9.3.0 frontend.
+# Produces: EsportsData-Desktop-Windows-x64.zip (portable), the signed per-user NSIS installer (update channel),
+# SHA256SUMS.txt, manifest.json (release manifest) and latest.json (updater manifest). See TAURI-BUILD.md.
+#
+# Secrets (repository → Settings → Secrets → Actions): TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# (updater signing key; the public half is in desktop/src-tauri/tauri.conf.json). They are only exposed to the build
+# step and never printed.
+name: tauri-windows
+
+on:
+  push:
+    branches: [web-tauri-app]
+    paths:
+      - 'extension/**'
+      - 'web/platform/**'
+      - 'web/build.mjs'
+      - 'web/scripts/**'
+      - 'web/version.json'
+      - 'desktop/**'
+      - '.github/workflows/tauri-windows.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish GitHub release desktop-v<version> and move the stable update channel to it'
+        type: boolean
+        default: false
+
+concurrency:
+  group: tauri-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      EDS_API_BASE: https://esportsdata.online
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Rust stable (x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Version and commit
+        id: meta
+        shell: pwsh
+        run: |
+          $v = (Get-Content web/version.json | ConvertFrom-Json).version
+          $d = (Get-Content desktop/package.json | ConvertFrom-Json).version
+          $c = (Select-String -Path desktop/src-tauri/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          if ($v -ne $d -or $v -ne $c) { throw "version mismatch: web $v, desktop $d, cargo $c" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "EDS_VERSION=$v" >> $env:GITHUB_ENV
+          "EDS_COMMIT=$("${{ github.sha }}".Substring(0,10))" >> $env:GITHUB_ENV
+          rustc --version; cargo --version; node --version
+
+      - name: Tauri CLI
+        run: npm ci --prefix desktop --no-audit --no-fund
+
+      - name: Frontend (dist/tauri)
+        run: node web/build.mjs --target tauri
+
+      - name: Frontend security check
+        run: node web/scripts/check-bundle.mjs dist/tauri --target tauri --api-base https://esportsdata.online
+
+      - name: Build (tauri build, NSIS per-user + signed updater artifacts)
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --ci --target x86_64-pc-windows-msvc
+
+      - name: Package portable ZIP and installer
+        shell: pwsh
+        run: |
+          $rel = "desktop/src-tauri/target/x86_64-pc-windows-msvc/release"
+          New-Item -ItemType Directory -Force out, portable | Out-Null
+          Copy-Item "$rel/EsportsData.exe" portable/EsportsData.exe
+          @"
+          Esports Data Desktop $env:EDS_VERSION ($env:EDS_COMMIT)
+
+          Portable: unzip anywhere you can write (for example Downloads or Desktop) and run EsportsData.exe.
+          No installer and no administrator rights are needed. Requires Microsoft Edge WebView2 Runtime
+          (preinstalled on Windows 10/11).
+
+          Sign in with your Access Key once; the session is kept for this Windows user.
+          One Access Key = one active session: signing in elsewhere ends the session here.
+
+          Updates: the app checks for signed updates. Installing one switches to the per-user installed
+          version in %LOCALAPPDATA% (still no administrator rights); your session is kept.
+          Server: https://esportsdata.online
+          "@ -replace '(?m)^          ', '' | Set-Content -Encoding utf8 portable/README.txt
+          Compress-Archive -Path portable/* -DestinationPath out/EsportsData-Desktop-Windows-x64.zip -CompressionLevel Optimal
+          $setup = Get-ChildItem "$rel/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          Copy-Item $setup.FullName out/EsportsData-Desktop-Windows-x64-setup.exe
+          Copy-Item "$($setup.FullName).sig" out/EsportsData-Desktop-Windows-x64-setup.exe.sig
+          Copy-Item desktop/src-tauri/Cargo.lock out/Cargo.lock -ErrorAction SilentlyContinue
+          node web/scripts/desktop-release.mjs out --version $env:EDS_VERSION --commit "${{ github.sha }}"
+          Get-ChildItem out | Format-Table Name, Length
+
+      - name: Release security check
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force unzipped | Out-Null
+          Expand-Archive out/EsportsData-Desktop-Windows-x64.zip -DestinationPath unzipped
+          node web/scripts/check-release.mjs out unzipped
+
+      - name: Smoke test (start the portable app, inspect the bundled frontend over CDP)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          npm install --prefix smoke --no-save --no-audit --no-fund playwright-core@1.63.0 | Out-Null
+          $env:PLAYWRIGHT_CORE_DIR = "$PWD/smoke/node_modules/playwright-core"
+          $env:SMOKE_SCREENSHOT = "$PWD/out/smoke-first-launch.png"
+          node web/scripts/desktop-smoke.mjs unzipped/EsportsData.exe --report out/smoke.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: EsportsData-Desktop-Windows-x64-${{ steps.meta.outputs.version }}-${{ github.sha }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: EsportsData-Desktop-Windows-x64-${{ needs.build.outputs.version }}-${{ github.sha }}
+          path: out
+      - name: Release desktop-v${{ needs.build.outputs.version }} and move the stable channel
+        run: |
+          set -euo pipefail
+          cd out
+          files="EsportsData-Desktop-Windows-x64.zip EsportsData-Desktop-Windows-x64-setup.exe EsportsData-Desktop-Windows-x64-setup.exe.sig SHA256SUMS.txt manifest.json latest.json"
+          if gh release view "desktop-v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "desktop-v$VERSION already exists; releases are immutable - bump web/version.json"; exit 1
+          fi
+          gh release create "desktop-v$VERSION" $files -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+            --title "Esports Data Desktop $VERSION" --notes "Windows x64. Portable ZIP and per-user installer (no administrator rights). SHA256 in SHA256SUMS.txt."
+          gh release view desktop-stable -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create desktop-stable -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false --prerelease \
+              --title "Desktop update channel (stable)" --notes "Updater manifest only. Points at the current desktop-v* release."
+          gh release upload desktop-stable latest.json manifest.json -R "$GITHUB_REPOSITORY" --clobber

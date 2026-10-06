@@ -150,3 +150,30 @@ test('security headers: CSP, frame denial, no referrer, nosniff on pages and API
     assert.equal(ok.status, 204); assert.equal(ok.headers.get('access-control-allow-credentials'), null);
   } finally { await stack.stop(); }
 });
+
+test('desktop release files are public (updater has no session); other downloads need a session', async () => {
+  const fs = await import('node:fs'), path = await import('node:path');
+  const stack = await startStack({ config: { downloadsDir: '' } });
+  try {
+    const dir = path.join(stack.dir, 'downloads');
+    fs.mkdirSync(path.join(dir, 'desktop'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'desktop', 'latest.json'), '{"version":"1.0.0"}');
+    fs.writeFileSync(path.join(dir, 'private.txt'), 'x');
+    stack.config.downloadsDir = dir;
+    const anon = stack.profile('anon');
+    const r = await anon.fetch('/downloads/desktop/latest.json');
+    assert.equal(r.status, 200); assert.deepEqual(await r.json(), { version: '1.0.0' });
+    assert.equal((await anon.fetch('/downloads/private.txt')).status, 401);
+    assert.equal((await anon.fetch('/downloads/desktop/../private.txt')).status, 401);
+    assert.equal((await anon.fetch('/downloads/desktop/%2e%2e/private.txt')).status, 401, 'normalized out of desktop/: needs a session');
+  } finally { await stack.stop(); }
+});
+
+test('session check reports the client protocol', async () => {
+  const stack = await startStack();
+  try {
+    const u = stack.backend.addUser({ name: 'Customer' });
+    const p = stack.profile('u'); await p.login(u.token);
+    assert.deepEqual((await p.json('/auth/session')).data.protocol, { version: 1, minClient: 1 });
+  } finally { await stack.stop(); }
+});

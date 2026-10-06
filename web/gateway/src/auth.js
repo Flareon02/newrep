@@ -8,6 +8,10 @@ import { SessionStore, publicReason } from './sessions.js';
 import { clearCookie, clientAddress, countryOf, describeClient, isAppOrigin, networkOf, readCookie, sameSiteWrite, sessionCookie, SlidingCounter } from './security.js';
 import { readBody } from './proxy.js';
 
+// Client protocol: bumped only when this API changes incompatibly. A desktop build older than minClient is asked to
+// update; web/backend-only releases keep it, so they never force a desktop update.
+export const PROTOCOL = Object.freeze({ version: 1, minClient: 1 });
+
 export const INVALID_KEY = 'Неверный или просроченный ключ доступа';
 const INVALID = { ok: false, error: INVALID_KEY, code: 'invalid_key' };
 // Keys are printable tokens (emu_ + hex today). Whitespace and invisible characters from copy/paste are removed.
@@ -110,7 +114,7 @@ export function createAuth({ config, sessions, keys, upstream, registry, log = c
 
   async function session(req, res) {
     const r = await resolve(req);
-    if (r.status === 'active') return json(res, 200, { authenticated: true, session: sessionView(r.session, r.principal) });
+    if (r.status === 'active') return json(res, 200, { authenticated: true, protocol: PROTOCOL, session: sessionView(r.session, r.principal) });
     if (r.status === 'unavailable') return json(res, 503, { authenticated: false, error: 'Сервис временно недоступен', code: 'unavailable' });
     const headers = readCookie(req, config.cookieName) ? { 'set-cookie': clearCookie(config) } : {};
     return json(res, 401, { authenticated: false, reason: r.reason || 'none', code: 'session_' + (r.reason || 'none') }, headers);

@@ -25,6 +25,7 @@ import { createLogger } from './log.js';
 import { can } from './vendor/entitlements.js';
 
 export const GATEWAY_VERSION = '1.0.0';
+export { PROTOCOL } from './auth.js';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json', '.exe': 'application/vnd.microsoft.portable-executable', '.zip': 'application/zip', '.sha256': 'text/plain; charset=utf-8' };
 const COMPRESSIBLE = /^(text\/|application\/(json|manifest\+json)|image\/svg)/;
 
@@ -105,6 +106,13 @@ export function createGateway(config, { clock = Date.now, log = createLogger(), 
     if (p === '/auth/session') return auth.session(req, res);
     if (p === '/auth/logout') return auth.logout(req, res);
 
+    // Desktop releases are public: the desktop updater fetches latest.json and the signed installer without a session,
+    // and the files contain no secrets (the update signature, not access control, protects them).
+    if (p.startsWith('/downloads/desktop/') && (req.method === 'GET' || req.method === 'HEAD')) {
+      if (!config.downloadsDir) return notFound(res);
+      const entry = staticFile(config.downloadsDir, p.slice('/downloads/'.length));
+      return entry ? sendFile(req, res, entry, { download: !p.endsWith('.json') }) : notFound(res);
+    }
     if (p.startsWith('/auth/admin/') || p.startsWith('/api/') || p === '/health' || p.startsWith('/downloads/')) {
       // Team logos are public on the monitor server as well (images only); the desktop app loads them as <img>.
       if (p.startsWith('/api/team-logos/') && (req.method === 'GET' || req.method === 'HEAD')) {

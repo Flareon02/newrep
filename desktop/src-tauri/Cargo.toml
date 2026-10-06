@@ -1,0 +1,29 @@
+[package]
+name = "esportsdata-desktop"
+version = "1.0.0"
+description = "Esports Data desktop app (Tauri 2)"
+edition = "2021"
+publish = false
+
+[lib]
+name = "esportsdata_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+tauri-plugin-opener = "2.7"
+tauri-plugin-notification = "2.5"
+tauri-plugin-process = "2.4"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2.13"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

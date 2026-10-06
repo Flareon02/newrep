@@ -31,3 +31,5 @@
 .data-table .row-actions{display:flex;flex-wrap:wrap;gap:6px}
 .data-table input[type=date].input{height:28px;font-size:var(--fs-xs)}
 .settings-body:has(.admin-sessions) .setting-card{max-width:none}
+.eds-update{position:fixed;right:var(--s4);bottom:var(--s4);z-index:50;display:flex;align-items:center;gap:var(--s2);max-width:min(520px,calc(100vw - 32px));padding:10px 12px;border:1px solid var(--accent-line);border-radius:var(--radius);background:var(--raised);color:var(--text);box-shadow:var(--shadow);font-size:var(--fs-s)}
+.eds-update span{flex:1}

@@ -203,6 +203,7 @@
   document.documentElement.classList.add('signed-in');
   for(const src of build.scripts){const s=document.createElement('script');s.src=src;s.async=false;document.body.appendChild(s);}
   setInterval(()=>{if(!document.hidden)checkSession();},60000);
+  scheduleUpdateChecks();
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkSession();});
   // A notification switch turned on asks for the browser permission while the click still counts as a user action.
   document.addEventListener('change',e=>{const t=e.target;if(!t?.matches?.('[data-notify]')||!t.checked)return;const n=tauri()?.notification;if(desktop&&n?.requestPermission)n.requestPermission().catch(()=>{});else if(typeof Notification==='function'&&Notification.permission==='default')Notification.requestPermission().catch(()=>{});},true);
@@ -245,7 +246,7 @@
   if(desktop&&!token){showGate('none');return;}
   try{
    const {status,data}=await sessionInfo();
-   if(status===200&&data?.authenticated){ls.set(SIGNED_IN,'1');await storageReady;loadApp();return;}
+   if(status===200&&data?.authenticated){ls.set(SIGNED_IN,'1');await storageReady;loadApp();protocolCheck(data.protocol);return;}
    if(status===401){await forgetAccount();showGate(data?.reason==='none'?'none':data?.reason);return;}
    throw new Error('HTTP '+status);
   }catch{
@@ -254,6 +255,46 @@
    if(ls.get(SIGNED_IN)==='1'){await storageReady;loadApp();return;}
    showGate('none');$('gateError').textContent='Нет связи с сервером. Проверьте подключение к интернету.';
   }
+ }
+
+ // ------------------------------------------------------------------------------------------------ desktop updates
+ // Signed updates through the Tauri updater plugin: latest.json (esportsdata.online, GitHub release as fallback) →
+ // the per-user NSIS installer, whose signature the plugin verifies against the public key compiled into the app
+ // before anything runs. Nothing is installed without the user's click; the session (WebView2 profile of this Windows
+ // user) survives the update. Web and server releases do not touch latest.json, so they never trigger an update.
+ const UPDATE_CHECKED='eds-update-checked',UPDATE_EVERY=6*3600000;
+ const updater={pending:null,state:'idle',error:'',progress:0};
+ async function checkForUpdate({manual=false}={}){
+  const u=tauri()?.updater;if(!desktop||!u?.check)return null;
+  updater.state='checking';updater.error='';
+  try{const update=await u.check();updater.pending=update||null;updater.state=update?'available':'current';ls.set(UPDATE_CHECKED,String(Date.now()));if(update)showUpdateBar(update);return update;}
+  catch(e){updater.state='error';updater.error=String(e?.message||e);if(manual)throw e;return null;}
+ }
+ async function installUpdate(){
+  const update=updater.pending;if(!update)return;
+  updater.state='downloading';updater.progress=0;let total=0,got=0;renderUpdateBar();
+  await update.downloadAndInstall(ev=>{if(ev?.event==='Started')total=Number(ev.data?.contentLength)||0;else if(ev?.event==='Progress'){got+=Number(ev.data?.chunkLength)||0;updater.progress=total?Math.round(got*100/total):0;renderUpdateBar();}else if(ev?.event==='Finished'){updater.state='installing';renderUpdateBar();}});
+  // On Windows the installer closes the app itself; relaunch covers the other platforms.
+  await tauri()?.process?.relaunch?.();
+ }
+ let updateBar=null,updateRequired=false;
+ function renderUpdateBar(){
+  if(!updateBar)return;
+  const u=updater.pending,busy=updater.state==='downloading'||updater.state==='installing';
+  updateBar.innerHTML=`<span>${updateRequired?'Нужна новая версия приложения':'Доступна новая версия'} <b>${escText(u?.version||'')}</b>${busy?` · ${updater.state==='installing'?'установка…':`загрузка ${updater.progress}%`}`:''}</span>${busy?'':`<button type="button" class="btn primary" data-update="install">Обновить</button>${updateRequired?'':'<button type="button" class="btn ghost" data-update="later">Позже</button>'}`}`;
+  updateBar.querySelector('[data-update="install"]')?.addEventListener('click',()=>installUpdate().catch(e=>{updater.state='error';updater.error=String(e?.message||e);updateBar.querySelector('span').textContent='Обновление не установлено: '+updater.error;}));
+  updateBar.querySelector('[data-update="later"]')?.addEventListener('click',()=>{updateBar.remove();updateBar=null;});
+ }
+ function showUpdateBar(){if(!updateBar){updateBar=document.createElement('div');updateBar.className='eds-update';updateBar.setAttribute('role','status');document.body.appendChild(updateBar);}renderUpdateBar();}
+ function scheduleUpdateChecks(){
+  if(!desktop||!tauri()?.updater)return;
+  const due=()=>Date.now()-Number(ls.get(UPDATE_CHECKED)||0)>=UPDATE_EVERY;
+  setTimeout(()=>{if(due())checkForUpdate();},15000);
+  setInterval(()=>{if(due())checkForUpdate();},3600000);
+ }
+ function protocolCheck(protocol){
+  if(!desktop||!protocol)return;
+  if(Number(protocol.minClient)>Number(build.protocol||1)){updateRequired=true;checkForUpdate().then(u=>{if(!u){updater.pending={version:''};showUpdateBar();}});}
  }
 
  // ------------------------------------------------------------------------------------------------ settings UI ---
@@ -278,12 +319,14 @@
    <div class="row-actions"><button type="button" class="btn" id="accountLogout">Выйти</button></div></section>`
    :`<section class="setting-card"><p>Не удалось получить данные сессии.</p><div class="row-actions"><button type="button" class="btn" id="accountLogout">Выйти</button></div></section>`;
   let desktopCard='';
-  if(desktop)desktopCard=`<section class="setting-card"><h3>Приложение</h3><dl class="kv"><dt>Версия</dt><dd>Esports Data Desktop ${escText(build.version)}</dd><dt>Сборка</dt><dd><code>${escText(build.commit||'—')}</code></dd><dt>Сервер</dt><dd>${escText(apiBase)}</dd></dl></section>`;
+  if(desktop)desktopCard=`<section class="setting-card"><h3>Приложение</h3><dl class="kv"><dt>Версия</dt><dd>Esports Data Desktop ${escText(build.version)}</dd><dt>Сборка</dt><dd><code>${escText(build.commit||'—')}</code></dd><dt>Сервер</dt><dd>${escText(apiBase)}</dd><dt>Обновления</dt><dd id="updateState">${updater.state==='available'?'доступна версия '+escText(updater.pending?.version||''):updater.state==='current'?'установлена последняя версия':updater.state==='error'?'проверка не удалась':'проверяются автоматически'}${ls.get(UPDATE_CHECKED)?` <small class="muted">· проверено ${fmt(Number(ls.get(UPDATE_CHECKED)))}</small>`:''}</dd></dl><p class="muted">Обновления подписаны: приложение проверяет подпись перед установкой. Установка не требует прав администратора.</p><div class="row-actions"><button type="button" class="btn" id="updateCheck">Проверить обновления</button>${updater.pending?.version?'<button type="button" class="btn primary" id="updateInstall">Обновить</button>':''}</div></section>`;
   else if(manifest?.url)desktopCard=`<section class="setting-card"><h3>Приложение для Windows</h3><p>Та же программа отдельным окном, без установки и прав администратора: скачайте архив, распакуйте и запустите <code>${escText(manifest.executable||'EsportsData.exe')}</code>. Нужен Microsoft Edge WebView2 (есть в Windows 10/11).</p>
     <dl class="kv"><dt>Версия</dt><dd>${escText(manifest.version)}</dd><dt>Дата выпуска</dt><dd>${fmt(Date.parse(manifest.releasedAt))}</dd><dt>Размер</dt><dd>${manifest.size?(manifest.size/1048576).toFixed(1)+' МБ':'—'}</dd><dt>SHA-256</dt><dd><code class="sha">${escText(manifest.sha256)}</code></dd></dl>
     <div class="row-actions"><a class="btn primary" id="desktopDownload" href="${escText(new URL(manifest.url,location.href).pathname)}" download>Скачать для Windows (portable)</a></div></section>`;
   else desktopCard=`<section class="setting-card"><h3>Приложение для Windows</h3><p class="muted">Сборка готовится и появится здесь.</p></section>`;
   body.innerHTML=`<h2>Аккаунт</h2><p class="lead">Доступ по ключу и текущая сессия.</p>${sessionCard}${desktopCard}`;
+  body.querySelector('#updateCheck')?.addEventListener('click',async()=>{const b=body.querySelector('#updateCheck');b.disabled=true;try{const u=await checkForUpdate({manual:true});toast?.(u?'Доступна версия '+u.version:'Установлена последняя версия');}catch(e){toast?.('Не удалось проверить обновления');}renderAccount(body,{toast});});
+  body.querySelector('#updateInstall')?.addEventListener('click',()=>installUpdate().catch(()=>toast?.('Обновление не установлено')));
   const out=body.querySelector('#accountLogout');
   if(out)out.onclick=()=>{if(out.dataset.armed!=='1'){out.dataset.armed='1';out.textContent='Нажмите ещё раз, чтобы выйти';toast?.('Сессия будет завершена на этом устройстве');return;}out.disabled=true;logout();};
  }
