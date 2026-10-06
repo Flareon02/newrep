@@ -9,8 +9,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = path.resolve(new URL('..', import.meta.url).pathname);
+const root = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const ext = path.join(root, 'extension'), platform = path.join(root, 'web', 'platform');
 const VERSION = JSON.parse(fs.readFileSync(path.join(root, 'web', 'version.json'), 'utf8')).version;
 
@@ -98,7 +99,7 @@ function gitCommit() {
   } catch { return 'unknown'; }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const i = process.argv.indexOf('--target'), target = i > 0 ? process.argv[i + 1] : 'web';
   const out = process.argv.includes('--out') ? path.resolve(process.argv[process.argv.indexOf('--out') + 1]) : undefined;
   const result = build({ target, ...(out ? { outDir: out } : {}) });

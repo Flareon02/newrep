@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { startMockServer } from '../../tools/ux/mock-server.mjs';
 import { startStack } from './helpers/gateway.mjs';
@@ -15,7 +16,7 @@ const { chromium } = require('playwright');
 const arg = (n) => { const i = process.argv.indexOf('--' + n); return i > 0 ? process.argv[i + 1] : ''; };
 const shots = arg('shots');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const root = path.resolve(new URL('../..', import.meta.url).pathname);
+const root = fileURLToPath(new URL('../..', import.meta.url));
 
 const results = [];
 async function check(name, fn) {

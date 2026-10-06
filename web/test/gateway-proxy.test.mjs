@@ -2,13 +2,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { startStack, readSse } from './helpers/gateway.mjs';
 import { ALL_USER_CAPS } from './helpers/fake-backend.mjs';
 
 const NO_PINNACLE = ALL_USER_CAPS.filter((k) => k !== 'provider.pinnacle' && k !== 'odds.fullMarkets');
 
 test('vendored entitlements are identical to the server source (no drift)', () => {
-  execFileSync(process.execPath, [new URL('../gateway/scripts/vendor-entitlements.mjs', import.meta.url).pathname, '--check']);
+  execFileSync(process.execPath, [fileURLToPath(new URL('../gateway/scripts/vendor-entitlements.mjs', import.meta.url)), '--check']);
 });
 
 test('restricted users get exactly what the server would give them; diagnostics never leak', async () => {

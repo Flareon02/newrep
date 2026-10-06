@@ -7,6 +7,8 @@
 //   node web/gateway/scripts/vendor-entitlements.mjs           write src/vendor/entitlements.js
 //   node web/gateway/scripts/vendor-entitlements.mjs --check   exit 1 when the vendored copy is out of date
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const source = new URL('../../../server/src/entitlements.js', import.meta.url);
 const target = new URL('../src/vendor/entitlements.js', import.meta.url);
@@ -21,7 +23,7 @@ export function vendored() {
   return text.replace(IMPORT, STUB);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const expected = vendored();
   if (process.argv.includes('--check')) {
     const actual = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
@@ -29,6 +31,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log('vendored entitlements up to date');
   } else {
     fs.writeFileSync(target, expected);
-    console.log('wrote', target.pathname);
+    console.log('wrote', fileURLToPath(target));
   }
 }

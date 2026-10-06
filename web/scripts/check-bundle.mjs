@@ -9,6 +9,7 @@
 //   node web/scripts/check-bundle.mjs dist/tauri --target tauri [--api-base https://esportsdata.online]
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 export function checkBundle(dir, { target = 'web', apiBase = 'https://esportsdata.online', secrets = [] } = {}) {
   const problems = [];
@@ -52,7 +53,7 @@ export function checkBundle(dir, { target = 'web', apiBase = 'https://esportsdat
 
 function walk(dir) { return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)])); }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const args = process.argv.slice(2), opt = (n, d = '') => { const i = args.indexOf('--' + n); return i >= 0 ? args[i + 1] : d; };
   const dir = args.find((a, i) => !a.startsWith('--') && !args[i - 1]?.startsWith('--'));
   const secrets = args.flatMap((a, i) => (a === '--secret-file' ? [fs.readFileSync(args[i + 1], 'utf8').trim()] : []));

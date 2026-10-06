@@ -43,6 +43,9 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
+      - name: Keep LF line endings (frontend files byte-identical to the Linux build)
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v4
         with:
           persist-credentials: false

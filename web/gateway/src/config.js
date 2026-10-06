@@ -2,6 +2,7 @@
 // the monitor server's API token comes from a file (systemd LoadCredential= or UPSTREAM_TOKEN_FILE).
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const DAY = 86_400_000;
 
@@ -28,7 +29,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     host: env.GATEWAY_HOST || '127.0.0.1',
     port: int(env, 'GATEWAY_PORT', 8090),
     dataDir: env.DATA_DIR || '/var/lib/esportsdata-web',
-    staticDir: env.STATIC_DIR || path.resolve(new URL('../../../dist/web', import.meta.url).pathname),
+    staticDir: env.STATIC_DIR || fileURLToPath(new URL('../../../dist/web', import.meta.url)),
     downloadsDir: env.DOWNLOADS_DIR || '',
     upstreamBase: String(env.UPSTREAM_BASE || 'http://127.0.0.1:80').replace(/\/+$/, ''),
     upstreamToken: tokenFile ? readSecret(tokenFile) : '',
