@@ -59,6 +59,9 @@ try {
   if (process.env.SMOKE_SCREENSHOT) await page.screenshot({ path: process.env.SMOKE_SCREENSHOT }).catch(() => {});
 } catch (error) {
   check('smoke run completed', false, error.message);
+  // Diagnostics for a failed start: is WebView2 running, what does the window say.
+  try { console.log(execSync('powershell -NoProfile -Command "Get-Process EsportsData,msedgewebview2 -ErrorAction SilentlyContinue | Select-Object Name,Id,MainWindowTitle,SessionId | Format-Table -AutoSize | Out-String -Width 200"', { encoding: 'utf8' })); } catch {}
+  try { console.log(execSync('reg query "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv', { encoding: 'utf8' })); } catch { console.log('WebView2 runtime registry key not found'); }
 } finally {
   try { await browser?.close(); } catch {}
   try { execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' }); } catch { child.kill(); }

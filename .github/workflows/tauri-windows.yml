@@ -132,6 +132,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force smoke | Out-Null
           npm install --prefix smoke --no-save --no-audit --no-fund playwright-core@1.63.0 | Out-Null
+          # Runner-only: WebView2 reads extra browser arguments per executable from this HKCU policy (the app passes its
+          # own arguments, so the environment variable alone is not used). Nothing of this is in the build.
+          $k = 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $k -Force | Out-Null
+          New-ItemProperty -Path $k -Name 'EsportsData.exe' -Value '--remote-debugging-port=9333' -PropertyType String -Force | Out-Null
           $env:PLAYWRIGHT_CORE_DIR = "$PWD/smoke/node_modules/playwright-core"
           $env:SMOKE_SCREENSHOT = "$PWD/out/smoke-first-launch.png"
           node web/scripts/desktop-smoke.mjs unzipped/EsportsData.exe --report out/smoke.json
