@@ -1,6 +1,6 @@
 {
   "name": "astek-monitor-server",
-  "version": "4.15.1",
+  "version": "4.16.0",
   "private": true,
   "type": "module",
   "scripts": {

@@ -37,7 +37,7 @@ const DetailPanel=(()=>{
   if(ctx.statsAvailable(event,view))tabs.push(['stats','Статистика']);
   tabs.push(['info','Матч']);
   // One history of the match: score, maps, rounds and every bookmaker's markets, with a replay scrubber.
-  if(ctx.can('odds.history')||ctx.can('scores.history'))tabs.push(['timeline','Таймлайн']);
+  if((ctx.can('odds.history')||ctx.can('scores.history'))&&ctx.timelineAvailable?.())tabs.push(['timeline','Таймлайн']);
   return tabs;
  }
 

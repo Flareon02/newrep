@@ -38,11 +38,14 @@ const T1 = (t) => t.team1 || 'команда 1', T2 = (t) => t.team2 || 'ком�
 const sideName = (p, t) => (p.side === 'home' ? T1(t) : p.side === 'away' ? T2(t) : 'команда');
 const where = (p) => [p.map ? `Карта ${p.map}` : '', p.half ? `половина ${p.half}` : '', p.round ? `раунд ${p.round}` : ''].filter(Boolean).join(' · ');
 const pre = (p) => { const w = where(p); return w ? w + ' — ' : ''; };
-const otText = (p) => (p.ot === 'included' ? ' (с овертаймом)' : p.ot === 'excluded' ? ' (без овертайма)' : p.ot === 'unspecified' ? ' (овертайм: не указан)' : '');
+// `short` titles (single-bookmaker views, semantics v1 `title`) omit the «overtime not stated» note; the full label used by
+// the comparison grid keeps it, because there it is what separates two rows that must not be merged.
+let SHORT_TITLE = false;
+const otText = (p) => (p.ot === 'included' ? ' (с овертаймом)' : p.ot === 'excluded' ? ' (без овертайма)' : p.ot === 'unspecified' && !SHORT_TITLE ? ' (овертайм: не указан)' : '');
 const unitText = { maps: 'карт', rounds: 'раундов', kills: 'фрагов' };
 export const FAMILIES = Object.freeze({
-  match_winner: { cat: 'winners', title: () => 'Победитель матча' },
-  match_1x2: { cat: 'winners', title: () => 'Исход матча 1X2' },
+  match_winner: { cat: 'winners', title: () => 'Победитель' },
+  match_1x2: { cat: 'winners', title: () => 'Исход 1X2' },
   double_chance: { cat: 'winners', title: (p) => pre(p) + 'двойной шанс' },
   map_winner: { cat: 'winners', title: (p) => `Карта ${p.map} — победитель${p.ot === 'included' ? ' (с овертаймом)' : ''}` },
   map_1x2: { cat: 'winners', ot: true, title: (p) => `Карта ${p.map} — исход 1X2${otText(p)}` },
@@ -559,7 +562,7 @@ export function describeMarket(provider, m = {}, ctx = {}, { record = true } = {
   const raw = rawIdentity(src, m);
   return {
     v: MARKET_SEMANTICS_VERSION, id, eventKey: canonicalId(hit.family, oriented), family: hit.family, params, eventParams: oriented,
-    title: def.title(oriented, teams), category: def.cat, confidence: hit.confidence, rule: hit.rule, unknown: false,
+    title: def.title(oriented, teams), shortTitle: (() => { SHORT_TITLE = true; try { return def.title(oriented, teams); } finally { SHORT_TITLE = false; } })(), category: def.cat, confidence: hit.confidence, rule: hit.rule, unknown: false,
     raw: { rawType: raw.rawType, semanticGroup: raw.semanticGroup, title: raw.title, period: raw.period, specifiers: raw.specifiers },
     outcomes,
   };
@@ -580,9 +583,9 @@ export function canonicalMarket(provider, m = {}, ctx = {}, opts) {
     map: p.map || null, half: p.half || null, round: p.round || (d.family === 'race_to_rounds' ? Number(p.target) || null : null),
     line: typeof p.line === 'number' ? p.line : null,
     score: null, side: p.side || '', overtime: p.ot === 'included' ? 'include' : p.ot === 'excluded' ? 'exclude' : '',
-    title: d.title, unknown: d.unknown,
+    title: d.shortTitle || d.title, unknown: d.unknown,
     // semantics v2
-    v: d.v, id: d.id, eventKey: d.eventKey, market: d.family, params: d.params, eventParams: d.eventParams || d.params,
+    v: d.v, id: d.id, eventKey: d.eventKey, market: d.family, label: d.title, params: d.params, eventParams: d.eventParams || d.params,
     confidence: d.confidence, rule: d.rule, outcomes: d.outcomes, raw: d.raw,
   };
 }

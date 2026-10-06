@@ -72,7 +72,7 @@
         seen = true;
         if (c.unknown || c.market === 'unknown') { unknown.push({ source, title: c.raw?.title || m.rawTitle || m.title || 'Рынок', status: m.status || 'open', prices: (m.prices || []).map((p) => ({ label: p.rawLabel || p.label || p.designation || '', value: num(p.decimal) })), raw: c.raw }); continue; }
         let g = groups.get(c.eventKey);
-        if (!g) { g = { key: c.eventKey, family: c.market, params: c.eventParams || c.params || {}, title: c.title, category: c.category === 'specials' && c.market?.startsWith('player') ? 'players' : c.category, books: {}, outcomes: new Set() }; groups.set(c.eventKey, g); }
+        if (!g) { g = { key: c.eventKey, family: c.market, params: c.eventParams || c.params || {}, title: c.label || c.title, category: c.category === 'specials' && c.market?.startsWith('player') ? 'players' : c.category, books: {}, outcomes: new Set() }; groups.set(c.eventKey, g); }
         const prices = {};
         (m.prices || []).forEach((p, i) => {
           const o = c.outcomes?.[i]?.eventKey;

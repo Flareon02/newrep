@@ -9,7 +9,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'u
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
 
 test('manifest: least privilege — no tabs, nativeMessaging only optional, only the default host is required', () => {
-  assert.equal(manifest.version, '9.3.0');
+  assert.equal(manifest.version, '9.4.0');
   assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'notifications', 'storage', 'unlimitedStorage'].sort());
   assert.deepEqual(manifest.optional_permissions, ['nativeMessaging']);
   for (const p of ['tabs', 'clipboardWrite', 'webRequest', 'scripting', 'downloads', 'nativeMessaging', '<all_urls>', 'cookies', 'history']) assert.ok(!manifest.permissions.includes(p), p);

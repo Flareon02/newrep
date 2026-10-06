@@ -9,7 +9,7 @@
  const VIEW_KEY=Object.freeze({live:'live.view',prematch:'prematch.view',results:'results.view',compare:'compare.view',history:'history.view'});
  function normalize(me){
   if(!me||typeof me!=='object'||!Array.isArray(me.capabilities))return null;
-  return {capabilities:me.capabilities.filter(k=>KEYS.includes(k)),role:String(me.principal?.role||'user'),name:String(me.principal?.name||''),anonymous:!!me.principal?.anonymous,access:String(me.access||'open'),at:Number(me.at)||Date.now()};
+  return {capabilities:me.capabilities.filter(k=>KEYS.includes(k)),role:String(me.principal?.role||'user'),name:String(me.principal?.name||''),anonymous:!!me.principal?.anonymous,access:String(me.access||'open'),at:Number(me.at)||Date.now(),features:me.features&&typeof me.features==='object'?{...me.features}:{}};
  }
  function create(initial=null){
   let state=normalize(initial),caps=new Set(state?state.capabilities:LEGACY);
@@ -18,6 +18,8 @@
    legacy(){state=null;const before=[...caps].sort().join(',');caps=new Set(LEGACY);return before!==LEGACY.join(',');},
    can:key=>caps.has(key),
    canView:view=>caps.has(VIEW_KEY[view]),
+   // server features announced by /api/me (4.16+: timeline, settingsSync, marketSemantics)
+   feature:name=>!!state?.features?.[name],
    canProvider:source=>caps.has('provider.'+source),
    oddsFor:view=>caps.has(view==='prematch'?'odds.prematch':'odds.live'),
    isAdmin:()=>caps.has('admin.panel')||state?.role==='admin',

@@ -21,7 +21,8 @@ export async function startMockServer({ port = 0, historyLatencyMs = 450, invali
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'Content-Type, Authorization, If-None-Match, X-API-Token', 'access-control-max-age': '86400' }); return res.end(); }
     let body = ''; for await (const chunk of req) body += chunk;
     const done = (bytes, status = 200) => log.push({ at: started, path: p, query: url.search, status, bytes, ms: Date.now() - started });
-    if (p === '/api/me') return done(send(res, 404, { error: 'not found' }), 404);
+    // With a real (journal-backed) event the mock is a 4.16 server: open access, every non-admin capability, features.
+    if (p === '/api/me') return real ? done(send(res, 200, { ok: true, access: 'open', principal: { id: 'anonymous', name: '', role: 'anonymous', anonymous: true }, capabilities: ['live.view', 'prematch.view', 'results.view', 'compare.view', 'history.view', 'provider.astek', 'provider.fonbet', 'provider.pinnacle', 'provider.ggbet', 'odds.live', 'odds.prematch', 'odds.fullMarkets', 'odds.history', 'scores.history', 'statistics.view', 'favorites', 'notifications', 'leagues.manage'], features: { timeline: 1, settingsSync: 1, marketSemantics: 2 } })) : done(send(res, 404, { error: 'not found' }), 404);
     if (p === '/api/ui/live' || p === '/api/ui/prematch') {
       const kind = p.endsWith('live') ? 'live' : 'prematch', m = meta(kind);
       if (url.searchParams.get('meta') === '1') return done(send(res, 200, m));
